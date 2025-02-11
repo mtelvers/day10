@@ -6,7 +6,7 @@ module Role_map = Output.RoleMap
 
 let constraints = OpamPackage.Name.Map.of_list [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")) ]
 
-let _ =
+let solve pkg =
   let root = OpamStateConfig.opamroot () in
   OpamFormatConfig.init ();
   ignore (OpamStateConfig.load_defaults root);
@@ -15,7 +15,7 @@ let _ =
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
   OpamSwitchState.with_ `Lock_none gt @@ fun st ->
   let context = Opam_0install.Switch_context.create ~constraints st in
-  let r = Solver.solve context [ OpamPackage.Name.of_string "obuilder" ] in
+  let r = Solver.solve context [ OpamPackage.Name.of_string pkg ] in
   match r with
   | Ok out ->
       let sels = Output.to_map out in
@@ -42,20 +42,32 @@ let _ =
              | `Opam dep -> [ dep ]
              | `Virtual _ as role -> expand role)
       in
-      let pkgs = Solver.packages_of_result out in
-      let pkgnames = pkgs |> List.map OpamPackage.name |> OpamPackage.Name.Set.of_list in
-      let () =
-        List.iter
-          (fun pkg ->
-            let depopts = OpamFile.OPAM.depopts (OpamSwitchState.opam st pkg) |> OpamFormula.all_names in
-            let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
-            let name = OpamPackage.name pkg in
-            let deps = expand (`Opam name) @ depopts in
-            List.iter (fun p -> Printf.printf "%s -> %s\n" (OpamPackage.to_string pkg) (OpamPackage.Name.to_string p)) deps)
-          pkgs
-      in
-      ()
+      let pkgs = Solver.packages_of_result out |> OpamPackage.Set.of_list in
+      let pkgnames = OpamPackage.names_of_packages pkgs in
+      OpamPackage.Set.fold
+        (fun pkg acc ->
+          let depopts = OpamFile.OPAM.depopts (OpamSwitchState.opam st pkg) |> OpamFormula.all_names in
+          let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
+          let name = OpamPackage.name pkg in
+          let deps = expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> OpamPackage.packages_of_names pkgs in
+          let () = OpamPackage.Set.iter (fun p -> Printf.printf "%s -> %s\n" (OpamPackage.to_string pkg) (OpamPackage.to_string p)) deps in
+          OpamPackage.Map.add pkg deps acc)
+        pkgs OpamPackage.Map.empty
   | Error problem ->
       OpamConsole.error "No solution";
       print_endline (Solver.diagnostics problem);
-      ()
+      OpamPackage.Map.empty
+
+let ocaml = solve "ocaml"
+
+let obuilder =
+  solve "obuilder"
+  |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
+  |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
+
+let () =
+  OpamPackage.Map.iter
+    (fun k v ->
+      Printf.printf "Pkg %s\n" (OpamPackage.to_string k);
+      OpamPackage.Set.iter (fun p -> Printf.printf "- %s\n" (OpamPackage.to_string p)) v)
+    obuilder
