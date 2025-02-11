@@ -6,11 +6,6 @@ module Role_map = Output.RoleMap
 
 let constraints = OpamPackage.Name.Map.of_list [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")) ]
 
-let classify_role x =
-  match Solver.package_name x with
-  | Some pkg -> `Opam pkg
-  | None -> `Virtual x
-
 let _ =
   let root = OpamStateConfig.opamroot () in
   OpamFormatConfig.init ();
@@ -22,34 +17,44 @@ let _ =
   let context = Opam_0install.Switch_context.create ~constraints st in
   let r = Solver.solve context [ OpamPackage.Name.of_string "obuilder" ] in
   match r with
-  | Ok sels ->
-      let sels = Output.to_map sels in
-      Role_map.iter
-        (fun role sel ->
-          (*
-        let _ = match Solver.package_name role with
-          | Some pkg -> Printf.printf "opam %s\n" (OpamPackage.Name.to_string pkg)
-          | None -> Printf.printf "virtual\n" in
-           *)
-          let impl = Output.unwrap sel in
-          Solver.version impl
-          |> Option.iter (fun pkg ->
-                 Printf.printf "pkg %s.%s\n" (OpamPackage.name_to_string pkg) (OpamPackage.version_to_string pkg);
-                 let name =
-                   OpamFile.OPAM.depopts (OpamSwitchState.opam st pkg)
-                   |> OpamFormula.all_names |> OpamPackage.Name.Set.to_list |> List.map OpamPackage.Name.to_string
-                 in
-                 List.iter (Printf.printf "depopt > %s\n") name);
-          let pkg = classify_role role in
-          let deps, _ = Solver.Input.requires role impl in
-          List.iter
-            (fun dep ->
-              let dep = Input.dep_info dep in
-              let dep_role = dep.dep_role in
-              if dep.dep_importance <> `Restricts then
-                Printf.printf "dep > %s\n" (Solver.package_name dep_role |> Option.map OpamPackage.Name.to_string |> Option.value ~default:"None"))
-            deps)
-        sels
+  | Ok out ->
+      let sels = Output.to_map out in
+      let depends = Hashtbl.create 100 in
+      let classify x =
+        match Solver.package_name x with
+        | Some pkg -> `Opam pkg
+        | None -> `Virtual x
+      in
+      let () =
+        Role_map.iter
+          (fun role sel ->
+            let impl = Output.unwrap sel in
+            Solver.Input.requires role impl |> fst
+            |> List.iter (fun dep ->
+                   let dep = Input.dep_info dep in
+                   let dep_role = dep.dep_role in
+                   if dep.dep_importance <> `Restricts then Hashtbl.add depends (classify role) (classify dep_role)))
+          sels
+      in
+      let rec expand role =
+        Hashtbl.find_all depends role
+        |> List.concat_map (function
+             | `Opam dep -> [ dep ]
+             | `Virtual _ as role -> expand role)
+      in
+      let pkgs = Solver.packages_of_result out in
+      let pkgnames = pkgs |> List.map OpamPackage.name |> OpamPackage.Name.Set.of_list in
+      let () =
+        List.iter
+          (fun pkg ->
+            let depopts = OpamFile.OPAM.depopts (OpamSwitchState.opam st pkg) |> OpamFormula.all_names in
+            let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
+            let name = OpamPackage.name pkg in
+            let deps = expand (`Opam name) @ depopts in
+            List.iter (fun p -> Printf.printf "%s -> %s\n" (OpamPackage.to_string pkg) (OpamPackage.Name.to_string p)) deps)
+          pkgs
+      in
+      ()
   | Error problem ->
       OpamConsole.error "No solution";
       print_endline (Solver.diagnostics problem);
