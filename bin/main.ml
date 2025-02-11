@@ -50,7 +50,6 @@ let solve pkg =
           let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
           let name = OpamPackage.name pkg in
           let deps = expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> OpamPackage.packages_of_names pkgs in
-          let () = OpamPackage.Set.iter (fun p -> Printf.printf "%s -> %s\n" (OpamPackage.to_string pkg) (OpamPackage.to_string p)) deps in
           OpamPackage.Map.add pkg deps acc)
         pkgs OpamPackage.Map.empty
   | Error problem ->
@@ -71,3 +70,16 @@ let () =
       Printf.printf "Pkg %s\n" (OpamPackage.to_string k);
       OpamPackage.Set.iter (fun p -> Printf.printf "- %s\n" (OpamPackage.to_string p)) v)
     obuilder
+
+let rec topological_sort pkgs =
+  match OpamPackage.Map.is_empty pkgs with
+  | true -> []
+  | false ->
+    (* Find any package which can be installed - could sort by frequency *)
+    let i = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs |> OpamPackage.Map.choose |> fun (i, _) -> i in
+    (* Remove package i and remove the dependency on i from all other packages *)
+    let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
+    i :: topological_sort pkgs
+
+let ordered_installation = topological_sort obuilder
+let () = List.iter (fun pkg -> Printf.printf "%s\n" (OpamPackage.to_string pkg)) ordered_installation
