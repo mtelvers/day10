@@ -83,8 +83,6 @@ let rec topological_sort pkgs =
 
 let ordered_installation = topological_sort obuilder
 let () = List.iter (fun pkg -> Printf.printf "%s\n" (OpamPackage.to_string pkg)) ordered_installation
-let pkg = List.hd ordered_installation
-let deps = OpamPackage.Map.find pkg obuilder
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let config_dir = Filename.concat "/home/mtelvers/day28"
 let hostname = "builder"
@@ -99,24 +97,39 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let argv =
-  [ "/usr/bin/env"; "bash"; "-c"; "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state && opam-build " ^ OpamPackage.to_string pkg ]
-
-let lowerdir =
-  OpamPackage.Set.to_list deps |> List.map (fun d -> config_dir (OpamPackage.to_string d)) |> fun l -> String.concat ":" (l @ [ config_dir "rootfs" ])
-
-let upperdir = config_dir (OpamPackage.to_string pkg)
-let workdir = config_dir "work"
-
-let mounts =
-  [
-    { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
-    { ty = "bind"; src = config_dir "download-cache"; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
-    { ty = "bind"; src = config_dir "hosts"; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-  ]
-
-let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true
-let () = write_to_file (config_dir "config.json") (Yojson.Safe.pretty_to_string config)
-let () = write_to_file (config_dir "hosts") ("127.0.0.1 localhost " ^ hostname)
-let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir "/"; "build" ])
-let () = Printf.printf "return %i\n" r
+let _ =
+  List.fold_left
+    (fun acc pkg ->
+      let upperdir = config_dir (OpamPackage.to_string pkg) in
+      if acc = 0 && not (Sys.file_exists upperdir) then
+        let () = OpamConsole.note "Pkg %s\n%!" (OpamPackage.to_string pkg) in
+        let () = Sys.mkdir upperdir 0o755 in
+        let deps = OpamPackage.Map.find pkg obuilder in
+        let argv =
+          [ "/usr/bin/env"; "bash"; "-c"; "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build " ^ OpamPackage.to_string pkg ]
+        in
+        let rec loop deps acc =
+          OpamPackage.Set.fold (fun dep acc ->
+              loop (OpamPackage.Map.find dep obuilder) (OpamPackage.Set.add dep acc)
+            ) deps acc
+        in
+        let lowerdir =
+          loop deps OpamPackage.Set.empty |>
+          OpamPackage.Set.to_list |> List.map (fun d -> config_dir (OpamPackage.to_string d)) |> fun l -> String.concat ":" (l @ [ config_dir "rootfs" ])
+        in
+        let workdir = config_dir "work" in
+        let mounts =
+          [
+            { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
+            { ty = "bind"; src = config_dir "download-cache"; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
+            { ty = "bind"; src = config_dir "hosts"; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+          ]
+        in
+        let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
+        let () = write_to_file (config_dir "config.json") (Yojson.Safe.pretty_to_string config) in
+        let () = write_to_file (config_dir "hosts") ("127.0.0.1 localhost " ^ hostname) in
+        let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir "/"; "build" ]) in
+        let _ = if r <> 0 then Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ]) else 0 in
+        r
+      else acc)
+    0 ordered_installation
