@@ -60,16 +60,9 @@ let solve pkg =
 let ocaml = solve "ocaml"
 
 let obuilder =
-  solve "obuilder"
+  solve "ocluster"
   |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
   |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
-
-let () =
-  OpamPackage.Map.iter
-    (fun k v ->
-      Printf.printf "Pkg %s\n" (OpamPackage.to_string k);
-      OpamPackage.Set.iter (fun p -> Printf.printf "- %s\n" (OpamPackage.to_string p)) v)
-    obuilder
 
 let rec topological_sort pkgs =
   match OpamPackage.Map.is_empty pkgs with
@@ -102,21 +95,42 @@ let _ =
     (fun acc pkg ->
       let upperdir = config_dir (OpamPackage.to_string pkg) in
       if acc = 0 && not (Sys.file_exists upperdir) then
-        let () = OpamConsole.note "Pkg %s\n%!" (OpamPackage.to_string pkg) in
+        let () = OpamConsole.note "Pkg %s" (OpamPackage.to_string pkg) in
         let () = Sys.mkdir upperdir 0o755 in
         let deps = OpamPackage.Map.find pkg obuilder in
+        let () = OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",") in
         let argv =
-          [ "/usr/bin/env"; "bash"; "-c"; "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build " ^ OpamPackage.to_string pkg ]
+          [
+            "/usr/bin/env";
+            "bash";
+            "-c";
+            "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build " ^ OpamPackage.to_string pkg;
+          ]
         in
-        let rec loop deps acc =
-          OpamPackage.Set.fold (fun dep acc ->
-              loop (OpamPackage.Map.find dep obuilder) (OpamPackage.Set.add dep acc)
-            ) deps acc
+        let rec loop deps acc = OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep obuilder) (OpamPackage.Set.add dep acc)) deps acc in
+        let all_deps = loop deps OpamPackage.Set.empty |> OpamPackage.Set.to_list in
+        let dep_mounts =
+          List.concat_map
+            (fun dep ->
+              let rootfs = config_dir "rootfs" in
+              let prefix = config_dir (OpamPackage.to_string dep) in
+              let rec scan = function
+                | hd :: tl when Sys.is_directory (Filename.concat prefix hd) ->
+                  Printf.printf "directory = %s\n%!" hd;
+                    if Sys.file_exists (Filename.concat rootfs hd) then
+                      Sys.readdir (Filename.concat prefix hd) |> Array.to_list |> List.map (Filename.concat hd) |> List.append tl |> scan
+                    else { Json_config.ty = "bind"; src = Filename.concat prefix hd; dst = hd; options = [ "ro"; "rbind"; "rprivate" ] } :: scan tl
+                | hd :: tl ->
+                  Printf.printf "file = %s\n%!" hd;
+                    if Sys.file_exists (Filename.concat rootfs hd) then scan tl
+                    else { Json_config.ty = "bind"; src = Filename.concat prefix hd; dst = hd; options = [ "ro"; "rbind"; "rprivate" ] } :: scan tl
+                | [] -> []
+              in
+              scan [ "/" ])
+            all_deps
         in
-        let lowerdir =
-          loop deps OpamPackage.Set.empty |>
-          OpamPackage.Set.to_list |> List.map (fun d -> config_dir (OpamPackage.to_string d)) |> fun l -> String.concat ":" (l @ [ config_dir "rootfs" ])
-        in
+        let () = List.iter (fun { Json_config.src; dst; _ } -> Printf.printf "src = %s; dst = %s\n%!" src dst) dep_mounts in
+        let lowerdir = config_dir "rootfs" in
         let workdir = config_dir "work" in
         let mounts =
           [
@@ -124,6 +138,7 @@ let _ =
             { ty = "bind"; src = config_dir "download-cache"; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
             { ty = "bind"; src = config_dir "hosts"; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
           ]
+          @ dep_mounts
         in
         let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
         let () = write_to_file (config_dir "config.json") (Yojson.Safe.pretty_to_string config) in
