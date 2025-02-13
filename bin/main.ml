@@ -10,8 +10,7 @@ let solve pkg =
   let root = OpamStateConfig.opamroot () in
   OpamFormatConfig.init ();
   ignore (OpamStateConfig.load_defaults root);
-  OpamCoreConfig.init ();
-  OpamStateConfig.init ();
+  OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ();
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
   OpamSwitchState.with_ `Lock_none gt @@ fun st ->
   let context = Opam_0install.Switch_context.create ~constraints st in
@@ -60,7 +59,7 @@ let solve pkg =
 let ocaml = solve "ocaml"
 
 let obuilder =
-  solve "ocluster"
+  solve "merlin"
   |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
   |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
 
@@ -90,61 +89,72 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
+let () = OpamConsole.log "foo" ~level:10 "start installation"
+
 let _ =
   List.fold_left
     (fun acc pkg ->
       let upperdir = config_dir (OpamPackage.to_string pkg) in
       if acc = 0 && not (Sys.file_exists upperdir) then
         let () = OpamConsole.note "Pkg %s" (OpamPackage.to_string pkg) in
-        let () = Sys.mkdir upperdir 0o755 in
         let deps = OpamPackage.Map.find pkg obuilder in
-        let () = OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",") in
+        let () =
+          if not (OpamPackage.Set.is_empty deps) then
+            OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",")
+        in
         let argv =
           [
             "/usr/bin/env";
             "bash";
             "-c";
-            "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build " ^ OpamPackage.to_string pkg;
+            "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build -vv " ^ OpamPackage.to_string pkg;
           ]
         in
-        let rec loop deps acc = OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep obuilder) (OpamPackage.Set.add dep acc)) deps acc in
-        let all_deps = loop deps OpamPackage.Set.empty |> OpamPackage.Set.to_list in
-        let dep_mounts =
-          List.concat_map
-            (fun dep ->
-              let rootfs = config_dir "rootfs" in
-              let prefix = config_dir (OpamPackage.to_string dep) in
-              let rec scan = function
-                | hd :: tl when Sys.is_directory (Filename.concat prefix hd) ->
-                  Printf.printf "directory = %s\n%!" hd;
-                    if Sys.file_exists (Filename.concat rootfs hd) then
-                      Sys.readdir (Filename.concat prefix hd) |> Array.to_list |> List.map (Filename.concat hd) |> List.append tl |> scan
-                    else { Json_config.ty = "bind"; src = Filename.concat prefix hd; dst = hd; options = [ "ro"; "rbind"; "rprivate" ] } :: scan tl
-                | hd :: tl ->
-                  Printf.printf "file = %s\n%!" hd;
-                    if Sys.file_exists (Filename.concat rootfs hd) then scan tl
-                    else { Json_config.ty = "bind"; src = Filename.concat prefix hd; dst = hd; options = [ "ro"; "rbind"; "rprivate" ] } :: scan tl
-                | [] -> []
-              in
-              scan [ "/" ])
-            all_deps
-        in
-        let () = List.iter (fun { Json_config.src; dst; _ } -> Printf.printf "src = %s; dst = %s\n%!" src dst) dep_mounts in
-        let lowerdir = config_dir "rootfs" in
         let workdir = config_dir "work" in
+        let depsdir = config_dir "deps" in
+        let lowerdir = String.concat ":" [ depsdir; config_dir "rootfs" ] in
+        let () = Sys.mkdir depsdir 0o755 in
+        let rec loop deps acc = OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep obuilder) (OpamPackage.Set.add dep acc)) deps acc in
+        let () = OpamConsole.log "foo" ~level:10 "copy" in
+        let () =
+          loop deps OpamPackage.Set.empty
+          |> OpamPackage.Set.iter (fun dep ->
+                 ignore
+                   (Sys.command
+                      (Filename.quote_command "sudo"
+                         [
+                           "cp";
+                           "--no-clobber";
+                           "--archive";
+                           "--no-dereference";
+                           "--recursive";
+                           "--reflink=auto";
+                           "--no-target-directory";
+                           config_dir (OpamPackage.to_string dep);
+                           depsdir;
+                         ])))
+        in
+        let () = OpamConsole.log "foo" ~level:10 "create config files" in
         let mounts =
           [
             { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
             { ty = "bind"; src = config_dir "download-cache"; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
             { ty = "bind"; src = config_dir "hosts"; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
           ]
-          @ dep_mounts
         in
         let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
         let () = write_to_file (config_dir "config.json") (Yojson.Safe.pretty_to_string config) in
         let () = write_to_file (config_dir "hosts") ("127.0.0.1 localhost " ^ hostname) in
+        let () = Sys.mkdir upperdir 0o755 in
+        let chrono = OpamConsole.timer () in
         let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir "/"; "build" ]) in
-        let _ = if r <> 0 then Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ]) else 0 in
+        let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
+        let () = OpamConsole.log "foo" ~level:10 "rm -rf deps" in
+        let _ =
+          if r <> 0 then Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ])
+          else Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; Filename.concat upperdir "tmp"; depsdir ])
+        in
+        let () = OpamConsole.log "foo" ~level:10 "finished" in
         r
       else acc)
     0 ordered_installation
