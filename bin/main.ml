@@ -77,9 +77,9 @@ let rec topological_sort pkgs =
       i :: topological_sort pkgs
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
-let config_dir = Filename.concat "/home/mtelvers/day28"
+let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day28"
 let hostname = "builder"
-let () = write_to_file (config_dir "hosts") ("127.0.0.1 localhost " ^ hostname) in
+let () = write_to_file (config_dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
 
 let env =
   [
@@ -103,6 +103,7 @@ let () =
            |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
          in
          let () = OpamConsole.note "solve for %s took %.3fs" (OpamPackage.to_string package) (chrono ()) in
+         let () = if OpamPackage.Map.is_empty solution then write_to_file (config_dir [ "results"; "no-solution"; OpamPackage.to_string package ]) "" in
          let chrono = OpamConsole.timer () in
          let ordered_installation = topological_sort solution in
          let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
@@ -122,7 +123,7 @@ let () =
                   let alldeps = loop deps OpamPackage.Set.empty in
                   let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex in
                   let hash = hash_of_set (OpamPackage.Set.add pkg alldeps) in
-                  let upperdir = config_dir hash in
+                  let upperdir = config_dir [ hash ] in
                   if not (Sys.file_exists upperdir) then
                     let argv =
                       [
@@ -132,8 +133,8 @@ let () =
                         "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build -v " ^ OpamPackage.to_string pkg;
                       ]
                     in
-                    let workdir = config_dir "work" in
-                    let lowerdir = config_dir "rootfs" in
+                    let workdir = config_dir [ "work" ] in
+                    let lowerdir = config_dir [ "rootfs" ] in
                     let chrono = OpamConsole.timer () in
                     let () =
                       if OpamPackage.Set.is_empty deps then Sys.mkdir upperdir 0o755
@@ -141,7 +142,7 @@ let () =
                         OpamPackage.Set.iter
                           (fun dep ->
                             let () =
-                              OpamConsole.note "cp %s %s" (config_dir (hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty))) upperdir
+                              OpamConsole.note "cp %s %s" (config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ]) upperdir
                             in
                             ignore
                               (Sys.command
@@ -154,7 +155,7 @@ let () =
                                       "--recursive";
                                       "--reflink=auto";
                                       "--no-target-directory";
-                                      config_dir (hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty));
+                                      config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
                                       upperdir;
                                     ])))
                           deps
@@ -169,15 +170,15 @@ let () =
                           dst = "/";
                           options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ];
                         };
-                        { ty = "bind"; src = config_dir "download-cache"; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
-                        { ty = "bind"; src = config_dir "hosts"; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+                        { ty = "bind"; src = config_dir [ "download-cache" ]; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
+                        { ty = "bind"; src = config_dir [ "hosts" ]; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
                       ]
                     in
                     let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
-                    let () = write_to_file (config_dir "config.json") (Yojson.Safe.pretty_to_string config) in
+                    let () = write_to_file (config_dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
                     let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                     let chrono = OpamConsole.timer () in
-                    let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir "/"; "build" ]) in
+                    let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir []; "build" ]) in
                     let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                     let chrono = OpamConsole.timer () in
                     let _ =
