@@ -10,9 +10,7 @@ let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let constraints = OpamPackage.Name.Map.of_list [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")) ]
 
-let solve pkg =
-  OpamGlobalState.with_ `Lock_none @@ fun gt ->
-  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
+let solve pkg st =
   let context = Opam_0install.Switch_context.create ~constraints st in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
@@ -77,6 +75,7 @@ let rec topological_sort pkgs =
       i :: topological_sort pkgs
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
+let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
 let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day28"
 let hostname = "builder"
 let () = write_to_file (config_dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
@@ -91,16 +90,23 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
+let ocaml =
+  OpamGlobalState.with_ `Lock_none @@ fun gt ->
+  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
+  solve (OpamPackage.of_string "ocaml.5.3.0") st
 
 let () =
+  OpamGlobalState.with_ `Lock_none @@ fun gt ->
+  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
   latest
   |> OpamPackage.Set.iter (fun package ->
          let chrono = OpamConsole.timer () in
          let solution =
-           solve package
-           |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
-           |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
+           if not (Sys.file_exists (config_dir [ "results"; "no-solution"; OpamPackage.to_string package ])) then
+             solve package st
+             |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
+             |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
+           else OpamPackage.Map.empty
          in
          let () = OpamConsole.note "solve for %s took %.3fs" (OpamPackage.to_string package) (chrono ()) in
          let () = if OpamPackage.Map.is_empty solution then write_to_file (config_dir [ "results"; "no-solution"; OpamPackage.to_string package ]) "" in
@@ -108,9 +114,9 @@ let () =
          let ordered_installation = topological_sort solution in
          let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
          ignore
-         @@ List.fold_left
+           (List.fold_left
               (fun acc pkg ->
-                if acc = 0 then
+                if acc = 0 && not (Sys.file_exists (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ])) then
                   let () = OpamConsole.note "Pkg %s" (OpamPackage.to_string pkg) in
                   let deps = OpamPackage.Map.find pkg solution in
                   let () =
@@ -182,8 +188,12 @@ let () =
                     let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                     let chrono = OpamConsole.timer () in
                     let _ =
-                      if r <> 0 then Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ])
-                      else Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; Filename.concat upperdir "tmp" ])
+                      if r = 0 then
+                        let () = append_to_file (config_dir [ "results"; "good"; OpamPackage.to_string pkg ]) "b" in
+                        Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; Filename.concat upperdir "tmp" ])
+                      else
+                        let () = append_to_file (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ]) "b" in
+                        Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ])
                     in
                     let () = OpamConsole.note "tidy up took %.3fs" (chrono ()) in
                     r
@@ -191,4 +201,4 @@ let () =
                     let () = OpamConsole.warning "layer exist" in
                     acc
                 else acc)
-              0 ordered_installation)
+              0 ordered_installation))
