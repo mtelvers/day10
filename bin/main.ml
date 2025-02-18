@@ -92,8 +92,7 @@ let env =
 
 let ocaml =
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
-  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
-  solve (OpamPackage.of_string "ocaml.5.3.0") st
+  OpamSwitchState.with_ `Lock_none gt @@ fun st -> solve (OpamPackage.of_string "ocaml.5.3.0") st
 
 let () =
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
@@ -102,14 +101,15 @@ let () =
   |> OpamPackage.Set.iter (fun package ->
          let chrono = OpamConsole.timer () in
          let solution =
-           if not (Sys.file_exists (config_dir [ "results"; "no-solution"; OpamPackage.to_string package ])) then
+           let filename = config_dir [ "results"; "solution"; OpamPackage.to_string package ] in
+           if Sys.file_exists filename then Json_solution.load filename
+           else
              solve package st
              |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
              |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
-           else OpamPackage.Map.empty
+             |> Json_solution.save filename
          in
          let () = OpamConsole.note "solve for %s took %.3fs" (OpamPackage.to_string package) (chrono ()) in
-         let () = if OpamPackage.Map.is_empty solution then write_to_file (config_dir [ "results"; "no-solution"; OpamPackage.to_string package ]) "" in
          let chrono = OpamConsole.timer () in
          let ordered_installation = topological_sort solution in
          let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
