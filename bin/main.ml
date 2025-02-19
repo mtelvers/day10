@@ -90,9 +90,9 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let sudo cmd =
+let sudo ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  Sys.command (Filename.quote_command "sudo" cmd)
+  Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
@@ -191,15 +191,17 @@ let () =
                       let () = write_to_file (config_dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
                       let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                       let chrono = OpamConsole.timer () in
-                      let r = sudo [ "runc"; "run"; "-b"; config_dir []; "build" ] in
+                      let temp = Filename.temp_file ~temp_dir:(config_dir ["temp"]) "build-" (OpamPackage.to_string pkg) in
+                      let r = sudo ~stdout:temp ~stderr:temp [ "runc"; "run"; "-b"; config_dir []; "build" ] in
                       let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                       let chrono = OpamConsole.timer () in
                       let _ =
                         if r = 0 then
                           let () = append_to_file (config_dir [ "results"; "good"; OpamPackage.to_string pkg ]) "b" in
+                          let () = Sys.rename temp (Filename.concat upperdir "build.log") in
                           sudo [ "rm"; "-rf"; Filename.concat upperdir "tmp" ]
                         else
-                          let () = append_to_file (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ]) "b" in
+                          let () = Sys.rename temp (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ]) in
                           sudo [ "rm"; "-rf"; upperdir ]
                       in
                       let () = OpamConsole.note "tidy up took %.3fs" (chrono ()) in
