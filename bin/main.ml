@@ -90,6 +90,10 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
+let sudo cmd =
+  let () = OpamConsole.note "%s" (String.concat " " cmd) in
+  Sys.command (Filename.quote_command "sudo" cmd)
+
 let ocaml =
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
   OpamSwitchState.with_ `Lock_none gt @@ fun st -> solve (OpamPackage.of_string "ocaml.5.3.0") st
@@ -147,23 +151,19 @@ let () =
                       else
                         OpamPackage.Set.iter
                           (fun dep ->
-                            let () =
-                              OpamConsole.note "cp %s %s" (config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ]) upperdir
-                            in
                             ignore
-                              (Sys.command
-                                 (Filename.quote_command "sudo"
-                                    [
-                                      "cp";
-                                      "--no-clobber";
-                                      "--archive";
-                                      "--no-dereference";
-                                      "--recursive";
-                                      "--reflink=auto";
-                                      "--no-target-directory";
-                                      config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
-                                      upperdir;
-                                    ])))
+                              (sudo
+                                 [
+                                   "cp";
+                                   "--no-clobber";
+                                   "--archive";
+                                   "--no-dereference";
+                                   "--recursive";
+                                   "--reflink=auto";
+                                   "--no-target-directory";
+                                   config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
+                                   upperdir;
+                                 ]))
                           deps
                     in
                     let () = OpamConsole.note "copy took %.3fs" (chrono ()) in
@@ -184,16 +184,16 @@ let () =
                     let () = write_to_file (config_dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
                     let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                     let chrono = OpamConsole.timer () in
-                    let r = Sys.command (Filename.quote_command "sudo" [ "runc"; "run"; "-b"; config_dir []; "build" ]) in
+                    let r = sudo [ "runc"; "run"; "-b"; config_dir []; "build" ] in
                     let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                     let chrono = OpamConsole.timer () in
                     let _ =
                       if r = 0 then
                         let () = append_to_file (config_dir [ "results"; "good"; OpamPackage.to_string pkg ]) "b" in
-                        Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; Filename.concat upperdir "tmp" ])
+                        sudo [ "rm"; "-rf"; Filename.concat upperdir "tmp" ]
                       else
                         let () = append_to_file (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ]) "b" in
-                        Sys.command (Filename.quote_command "sudo" [ "rm"; "-rf"; upperdir ])
+                        sudo [ "rm"; "-rf"; upperdir ]
                     in
                     let () = OpamConsole.note "tidy up took %.3fs" (chrono ()) in
                     r
