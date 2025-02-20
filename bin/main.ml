@@ -8,9 +8,12 @@ let () = OpamFormatConfig.init ()
 let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
-let constraints = OpamPackage.Name.Map.of_list [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")) ]
 
 let solve pkg st =
+  let constraints =
+    OpamPackage.Name.Map.of_list
+      [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
+  in
   let context = Opam_0install.Switch_context.create ~constraints st in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
@@ -129,10 +132,12 @@ let () =
                     if not (OpamPackage.Set.is_empty deps) then
                       OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",")
                   in
+                  let chrono = OpamConsole.timer () in
                   let rec loop deps acc =
                     OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc)) deps acc
                   in
                   let alldeps = loop deps (OpamPackage.Set.singleton pkg) in
+                  let () = OpamConsole.note "finding all %i dependencies took %.3fs" (OpamPackage.Set.cardinal alldeps) (chrono ()) in
                   let bad =
                     OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ])) alldeps false
                   in
@@ -191,7 +196,7 @@ let () =
                       let () = write_to_file (config_dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
                       let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                       let chrono = OpamConsole.timer () in
-                      let temp = Filename.temp_file ~temp_dir:(config_dir ["temp"]) "build-" (OpamPackage.to_string pkg) in
+                      let temp = Filename.temp_file ~temp_dir:(config_dir [ "temp" ]) "build-" (OpamPackage.to_string pkg) in
                       let r = sudo ~stdout:temp ~stderr:temp [ "runc"; "run"; "-b"; config_dir []; "build" ] in
                       let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                       let chrono = OpamConsole.timer () in
@@ -210,6 +215,89 @@ let () =
                   else
                     let () = OpamConsole.warning "bad package or dependency" in
                     1
-                else
-                  acc)
+                else acc)
               0 ordered_installation))
+
+(*
+let _ = if false then x ()
+
+let latest =
+  OpamPackage.Set.filter
+    (fun pkg ->
+      let name = OpamPackage.to_string pkg in
+      String.starts_with ~prefix:"z" name)
+    latest
+   *)
+
+let emit_page name page =
+  let open Tyxml.Html in
+  Printf.printf "Generating: %s\n" name;
+  let file_handle = open_out name in
+  let fmt = Format.formatter_of_out_channel file_handle in
+  Format.fprintf fmt "%a@." (pp ~indent:true ()) page;
+  close_out file_handle
+
+let log_to_pre textfile =
+  let open Tyxml.Html in
+  let input = In_channel.with_open_text textfile @@ fun ic -> In_channel.input_all ic in
+  html (head (title (txt textfile)) []) (body [ pre [ txt input ] ])
+
+let index_html =
+  let open Tyxml.Html in
+  html
+    (head (title (txt "day10")) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ])
+    (body
+       [
+         table
+           (OpamPackage.Set.to_list_map
+              (fun package ->
+                let solution = Json_solution.load (config_dir [ "results"; "solution"; OpamPackage.to_string package ]) in
+                let ordered_installation = topological_sort solution in
+                let name = OpamPackage.to_string package in
+                let result =
+                  if OpamPackage.Map.is_empty solution then txt "no solution"
+                  else if Sys.file_exists (config_dir [ "results"; "good"; name ]) then txt "good"
+                  else if Sys.file_exists (config_dir [ "results"; "bad"; name ]) then a ~a:[ a_href ("results/bad/" ^ name) ] [ txt "bad" ]
+                  else txt "bad dependency"
+                in
+                tr ~a:[]
+                  [
+                    td [ txt (OpamPackage.to_string package) ];
+                    td
+                      [
+                        details (summary [ result ])
+                          [
+                            ol
+                              (List.map
+                                 (fun pkg ->
+                                   let style, content =
+                                     let () = OpamConsole.note "Pkg %s" (OpamPackage.to_string pkg) in
+                                     let deps = OpamPackage.Map.find pkg solution in
+                                     let rec loop deps acc =
+                                       OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc)) deps acc
+                                     in
+                                     let alldeps = loop deps (OpamPackage.Set.singleton pkg) in
+                                     let () = OpamConsole.note "deps %i" (OpamPackage.Set.cardinal alldeps) in
+                                     let hash = hash_of_set alldeps in
+                                     let () = OpamConsole.note "hash %s" hash in
+                                     let build_log = config_dir [ hash; "build.log" ] in
+                                     if Sys.file_exists build_log then
+                                       let () = emit_page (config_dir [ hash ^ ".html" ]) (log_to_pre build_log) in
+                                       ("good", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
+                                     else
+                                       let bad_log = config_dir [ "results"; "bad"; OpamPackage.to_string pkg ] in
+                                       if Sys.file_exists bad_log then
+                                         let () = emit_page (config_dir [ hash ^ ".html" ]) (log_to_pre bad_log) in
+                                         ("bad", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
+                                       else ("skipped", txt (OpamPackage.to_string pkg))
+                                   in
+                                   li ~a:[ a_class [ style ] ] [ content ])
+                                 ordered_installation);
+                          ];
+                      ];
+                  ])
+              latest
+           |> List.rev);
+       ])
+
+let () = emit_page (config_dir [ "index.html" ]) index_html
