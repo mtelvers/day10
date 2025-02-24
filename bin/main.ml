@@ -58,9 +58,9 @@ let solve pkg st =
       OpamPackage.Map.empty
 
 let available =
+  let pinned = OpamPackage.Set.singleton (OpamPackage.of_string "ocaml.5.3.0") in
   OpamGlobalState.with_ `Lock_none @@ fun gt ->
-  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
-  OpamSwitchState.compute_available_packages gt st.switch st.switch_config ~pinned:OpamPackage.Set.empty ~opams:st.opams
+  OpamSwitchState.with_ `Lock_none gt @@ fun st -> OpamSwitchState.compute_available_packages gt st.switch st.switch_config ~pinned ~opams:st.opams
 
 let latest =
   OpamPackage.Name.Map.fold
@@ -96,6 +96,14 @@ let env =
 let sudo ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
+
+let rec find_all_deps solution deps acc =
+  OpamPackage.Set.fold
+    (fun dep acc ->
+      match OpamPackage.Set.mem dep acc with
+      | true -> acc
+      | false -> find_all_deps solution (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc))
+    deps acc
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
@@ -133,10 +141,7 @@ let () =
                       OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",")
                   in
                   let chrono = OpamConsole.timer () in
-                  let rec loop deps acc =
-                    OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc)) deps acc
-                  in
-                  let alldeps = loop deps (OpamPackage.Set.singleton pkg) in
+                  let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
                   let () = OpamConsole.note "finding all %i dependencies took %.3fs" (OpamPackage.Set.cardinal alldeps) (chrono ()) in
                   let bad =
                     OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ])) alldeps false
@@ -173,7 +178,7 @@ let () =
                                       "--recursive";
                                       "--reflink=auto";
                                       "--no-target-directory";
-                                      config_dir [ hash_of_set (loop (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
+                                      config_dir [ hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
                                       upperdir;
                                     ]))
                             deps
@@ -273,11 +278,7 @@ let index_html =
                                    let style, content =
                                      let () = OpamConsole.note "Pkg %s" (OpamPackage.to_string pkg) in
                                      let deps = OpamPackage.Map.find pkg solution in
-                                     let rec loop deps acc =
-                                       OpamPackage.Set.fold (fun dep acc -> loop (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc)) deps acc
-                                     in
-                                     let alldeps = loop deps (OpamPackage.Set.singleton pkg) in
-                                     let () = OpamConsole.note "deps %i" (OpamPackage.Set.cardinal alldeps) in
+                                     let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
                                      let hash = hash_of_set alldeps in
                                      let () = OpamConsole.note "hash %s" hash in
                                      let build_log = config_dir [ hash; "build.log" ] in
