@@ -8,7 +8,6 @@ let () = OpamFormatConfig.init ()
 let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
-
 let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 let opam_repository = "/home/mtelvers/opam-repository/packages"
 
@@ -53,7 +52,7 @@ let solve pkg =
       let pkgnames = OpamPackage.names_of_packages pkgs in
       OpamPackage.Set.fold
         (fun pkg acc ->
-           let opam = opam_file pkg in
+          let opam = opam_file pkg in
           let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
           let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
           let name = OpamPackage.name pkg in
@@ -75,7 +74,7 @@ let latest =
     (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
     (OpamPackage.to_map available) OpamPackage.Set.empty
 
-let rec topological_sort pkgs =
+let rec topological_sort freq pkgs =
   match OpamPackage.Map.is_empty pkgs with
   | true -> []
   | false ->
@@ -91,17 +90,15 @@ let rec topological_sort pkgs =
       let installable = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
       let () = assert (not (OpamPackage.Map.is_empty installable)) in
       (* find most frequent dep *)
-      let frequency =
-        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) pkgs 0) installable
-      in
       let i =
-        OpamPackage.Map.fold (fun p count (pkg, best) -> if count > best then (p, count) else (pkg, best)) frequency (OpamPackage.Map.choose frequency)
-        |> fun (i, _) -> i
+        OpamPackage.Map.to_list installable |> List.map fst
+        |> List.sort (fun p1 p2 -> compare (OpamPackage.Map.find p2 freq) (OpamPackage.Map.find p1 freq))
+        |> List.hd
       in
       (* Remove package i and remove the dependency on i from all other packages *)
       let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
       let () = Printf.printf "Install %s\n\n" (OpamPackage.to_string i) in
-      i :: topological_sort pkgs
+      i :: topological_sort freq pkgs
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
@@ -132,9 +129,7 @@ let rec find_all_deps solution deps acc =
     deps acc
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
-
-let ocaml =
-  solve (OpamPackage.of_string "ocaml.5.3.0")
+let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
 
 let () =
   latest
@@ -151,7 +146,14 @@ let () =
          in
          let () = OpamConsole.note "solve for %s took %.3fs" (OpamPackage.to_string package) (chrono ()) in
          let chrono = OpamConsole.timer () in
-         let ordered_installation = topological_sort solution in
+         let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+         let frequency =
+           OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
+         in
+         let () = OpamConsole.note "finding all dependencies took %.3fs" (chrono ()) in
+         let chrono = OpamConsole.timer () in
+         let () = OpamPackage.Map.iter (fun pkg count -> Printf.printf "%s: %i\n" (OpamPackage.to_string pkg) count) frequency in
+         let ordered_installation = topological_sort frequency solution in
          let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
          ignore
            (List.fold_left
@@ -163,9 +165,7 @@ let () =
                     if not (OpamPackage.Set.is_empty deps) then
                       OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",")
                   in
-                  let chrono = OpamConsole.timer () in
-                  let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
-                  let () = OpamConsole.note "finding all %i dependencies took %.3fs" (OpamPackage.Set.cardinal alldeps) (chrono ()) in
+                  let alldeps = OpamPackage.Map.find pkg alldeps in
                   let bad =
                     OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (config_dir [ "results"; "bad"; OpamPackage.to_string pkg ])) alldeps false
                   in
@@ -280,7 +280,13 @@ let index_html =
            (OpamPackage.Set.to_list_map
               (fun package ->
                 let solution = Json_solution.load (config_dir [ "results"; "solution"; OpamPackage.to_string package ]) in
-                let ordered_installation = topological_sort solution in
+                let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+                let frequency =
+                  OpamPackage.Map.mapi
+                    (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0)
+                    alldeps
+                in
+                let ordered_installation = topological_sort frequency solution in
                 let name = OpamPackage.to_string package in
                 let style, result =
                   if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
@@ -293,7 +299,8 @@ let index_html =
                     td [ txt (OpamPackage.to_string package) ];
                     td
                       [
-                        details (summary ~a:[ a_class [ style ] ] [ result ])
+                        details
+                          (summary ~a:[ a_class [ style ] ] [ result ])
                           [
                             ol
                               (List.map
