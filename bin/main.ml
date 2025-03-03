@@ -1,4 +1,4 @@
-module Solver = Opam_0install.Solver.Make (Opam_0install.Switch_context)
+module Solver = Opam_0install.Solver.Make (Opam_0install.Dir_context)
 module Input = Solver.Input
 module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
@@ -9,12 +9,19 @@ let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 
-let solve pkg st =
+let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
+let opam_repository = "/home/mtelvers/opam-repository/packages"
+
+let opam_file pkg =
+  let opam_path = List.fold_left Filename.concat opam_repository [ OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
+  OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+
+let solve pkg =
   let constraints =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let context = Opam_0install.Switch_context.create ~constraints st in
+  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints opam_repository in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -46,7 +53,8 @@ let solve pkg st =
       let pkgnames = OpamPackage.names_of_packages pkgs in
       OpamPackage.Set.fold
         (fun pkg acc ->
-          let depopts = OpamFile.OPAM.depopts (OpamSwitchState.opam st pkg) |> OpamFormula.all_names in
+           let opam = opam_file pkg in
+          let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
           let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
           let name = OpamPackage.name pkg in
           let deps = expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> OpamPackage.packages_of_names pkgs in
@@ -71,15 +79,33 @@ let rec topological_sort pkgs =
   match OpamPackage.Map.is_empty pkgs with
   | true -> []
   | false ->
-      (* Find any package which can be installed - could sort by frequency *)
-      let i = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs |> OpamPackage.Map.choose |> fun (i, _) -> i in
+      let () =
+        OpamPackage.Map.iter
+          (fun pkg deps ->
+            let () = Printf.printf "%s: " (OpamPackage.to_string pkg) in
+            let () = OpamPackage.Set.iter (fun pkg -> Printf.printf "%s, " (OpamPackage.to_string pkg)) deps in
+            Printf.printf "\n")
+          pkgs
+      in
+      (* Find all packages which can be installed *)
+      let installable = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
+      let () = assert (not (OpamPackage.Map.is_empty installable)) in
+      (* find most frequent dep *)
+      let frequency =
+        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) pkgs 0) installable
+      in
+      let i =
+        OpamPackage.Map.fold (fun p count (pkg, best) -> if count > best then (p, count) else (pkg, best)) frequency (OpamPackage.Map.choose frequency)
+        |> fun (i, _) -> i
+      in
       (* Remove package i and remove the dependency on i from all other packages *)
       let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
+      let () = Printf.printf "Install %s\n\n" (OpamPackage.to_string i) in
       i :: topological_sort pkgs
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
-let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day28"
+let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day29"
 let hostname = "builder"
 let () = write_to_file (config_dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
 
@@ -108,12 +134,9 @@ let rec find_all_deps solution deps acc =
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
 let ocaml =
-  OpamGlobalState.with_ `Lock_none @@ fun gt ->
-  OpamSwitchState.with_ `Lock_none gt @@ fun st -> solve (OpamPackage.of_string "ocaml.5.3.0") st
+  solve (OpamPackage.of_string "ocaml.5.3.0")
 
 let () =
-  OpamGlobalState.with_ `Lock_none @@ fun gt ->
-  OpamSwitchState.with_ `Lock_none gt @@ fun st ->
   latest
   |> OpamPackage.Set.iter (fun package ->
          let chrono = OpamConsole.timer () in
@@ -121,7 +144,7 @@ let () =
            let filename = config_dir [ "results"; "solution"; OpamPackage.to_string package ] in
            if Sys.file_exists filename then Json_solution.load filename
            else
-             solve package st
+             solve package
              |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
              |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
              |> Json_solution.save filename
@@ -259,18 +282,18 @@ let index_html =
                 let solution = Json_solution.load (config_dir [ "results"; "solution"; OpamPackage.to_string package ]) in
                 let ordered_installation = topological_sort solution in
                 let name = OpamPackage.to_string package in
-                let result =
-                  if OpamPackage.Map.is_empty solution then txt "no solution"
-                  else if Sys.file_exists (config_dir [ "results"; "good"; name ]) then txt "good"
-                  else if Sys.file_exists (config_dir [ "results"; "bad"; name ]) then a ~a:[ a_href ("results/bad/" ^ name) ] [ txt "bad" ]
-                  else txt "bad dependency"
+                let style, result =
+                  if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
+                  else if Sys.file_exists (config_dir [ "results"; "good"; name ]) then ("good", txt "good")
+                  else if Sys.file_exists (config_dir [ "results"; "bad"; name ]) then ("bad", a ~a:[ a_href ("results/bad/" ^ name) ] [ txt "bad" ])
+                  else ("bad", txt "bad dependency")
                 in
                 tr ~a:[]
                   [
                     td [ txt (OpamPackage.to_string package) ];
                     td
                       [
-                        details (summary [ result ])
+                        details (summary ~a:[ a_class [ style ] ] [ result ])
                           [
                             ol
                               (List.map
