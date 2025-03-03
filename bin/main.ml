@@ -86,14 +86,6 @@ let rec topological_sort freq pkgs =
   match OpamPackage.Map.is_empty pkgs with
   | true -> []
   | false ->
-      let () =
-        OpamPackage.Map.iter
-          (fun pkg deps ->
-            let () = Printf.printf "%s: " (OpamPackage.to_string pkg) in
-            let () = OpamPackage.Set.iter (fun pkg -> Printf.printf "%s, " (OpamPackage.to_string pkg)) deps in
-            Printf.printf "\n")
-          pkgs
-      in
       (* Find all packages which can be installed *)
       let installable = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
       let () = assert (not (OpamPackage.Map.is_empty installable)) in
@@ -105,7 +97,6 @@ let rec topological_sort freq pkgs =
       in
       (* Remove package i and remove the dependency on i from all other packages *)
       let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
-      let () = Printf.printf "Install %s\n\n" (OpamPackage.to_string i) in
       i :: topological_sort freq pkgs
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
@@ -160,7 +151,6 @@ let () =
       in
       let () = OpamConsole.note "finding all dependencies took %.3fs" (chrono ()) in
       let chrono = OpamConsole.timer () in
-      let () = OpamPackage.Map.iter (fun pkg count -> Printf.printf "%s: %i\n" (OpamPackage.to_string pkg) count) frequency in
       let ordered_installation = topological_sort frequency solution in
       let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
       ignore
