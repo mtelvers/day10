@@ -197,7 +197,7 @@ let () =
         (List.fold_left
            (fun acc pkg ->
              if acc = 0 then
-               let () = OpamConsole.note "pkg %s" (OpamPackage.to_string pkg) in
+               let () = OpamConsole.note "building pkg %s" (OpamPackage.to_string pkg) in
                let deps = OpamPackage.Map.find pkg solution in
                let () =
                  if not (OpamPackage.Set.is_empty deps) then
@@ -227,8 +227,6 @@ let () =
                      else
                        OpamPackage.Set.iter
                          (fun dep ->
-                           let () = OpamConsole.note "%s" (OpamPackage.to_string dep) in
-                           let () = OpamConsole.note "built with %s" (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " ") in
                            assert (
                              0
                              = sudo
