@@ -138,7 +138,7 @@ let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
 
 module IntSet = Set.Make (Int)
 
-let _ =
+let () =
   OpamPackage.Set.fold
     (fun package acc ->
       let acc =
@@ -169,6 +169,7 @@ let _ =
           exit 0
       | child -> IntSet.add child acc)
     latest_available IntSet.empty
+  |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
 
 let () =
   OpamPackage.Set.iter
@@ -187,7 +188,9 @@ let () =
       let chrono = OpamConsole.timer () in
       let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
       let frequency =
-        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) dependencies 0) dependencies
+        OpamPackage.Map.mapi
+          (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) dependencies 0)
+          dependencies
       in
       let () = OpamConsole.note "finding all dependencies took %.3fs" (chrono ()) in
       let chrono = OpamConsole.timer () in
