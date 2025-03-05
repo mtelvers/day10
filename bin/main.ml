@@ -10,8 +10,10 @@ let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 let opam_repository = "/home/mtelvers/opam-repository/packages"
+
 (* let commit = "c940a5f1a97ea0abf72b5f8a3319f15551c41337" *)
-let commit = "a263eb47bd23b8c5e3555052b1f086fe933eebde"
+(* let commit = "a263eb47bd23b8c5e3555052b1f086fe933eebde" *)
+let commit = "64a9d673ccf21203b08de3ef29ca06ad97d5bc3c"
 
 let opam_file pkg =
   let opam_path = List.fold_left Filename.concat opam_repository [ OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
@@ -134,6 +136,40 @@ let rec find_all_deps solution deps acc =
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
 
+module IntSet = Set.Make (Int)
+
+let _ =
+  OpamPackage.Set.fold
+    (fun package acc ->
+      let acc =
+        let rec loop acc =
+          if IntSet.cardinal acc <= 32 then acc
+          else
+            let running, finished =
+              IntSet.partition
+                (fun pid ->
+                  let c, _ = Unix.waitpid [ WNOHANG ] pid in
+                  pid <> c)
+                acc
+            in
+            let () = if IntSet.is_empty finished then Unix.sleepf 0.1 in
+            loop running
+        in
+        loop acc
+      in
+      match Unix.fork () with
+      | 0 ->
+          let filename = config_dir [ "results"; commit; "solution"; OpamPackage.to_string package ] in
+          if not (Sys.file_exists filename) then
+            ignore
+              (solve package
+              |> OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x ocaml))
+              |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter (fun y -> not (OpamPackage.Map.mem y ocaml)) x)
+              |> Json_solution.save filename);
+          exit 0
+      | child -> IntSet.add child acc)
+    latest_available IntSet.empty
+
 let () =
   OpamPackage.Set.iter
     (fun package ->
@@ -149,9 +185,9 @@ let () =
       in
       let () = OpamConsole.note "solve for %s took %.3fs" (OpamPackage.to_string package) (chrono ()) in
       let chrono = OpamConsole.timer () in
-      let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+      let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
       let frequency =
-        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
+        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) dependencies 0) dependencies
       in
       let () = OpamConsole.note "finding all dependencies took %.3fs" (chrono ()) in
       let chrono = OpamConsole.timer () in
@@ -167,7 +203,7 @@ let () =
                  if not (OpamPackage.Set.is_empty deps) then
                    OpamConsole.note "deps %s" (OpamPackage.Set.to_list deps |> List.map OpamPackage.to_string |> String.concat ",")
                in
-               let alldeps = OpamPackage.Map.find pkg alldeps in
+               let alldeps = OpamPackage.Map.find pkg dependencies in
                let bad =
                  OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (config_dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ])) alldeps false
                in
@@ -180,7 +216,7 @@ let () =
                        "/usr/bin/env";
                        "bash";
                        "-c";
-                       "opamh.exe make-state --output=$HOME/.opam/5.3/.opam-switch/switch-state --quiet && opam-build -v " ^ OpamPackage.to_string pkg;
+                       "opamh.exe make-state --output=$HOME/.opam/default/.opam-switch/switch-state --quiet && opam-build -v " ^ OpamPackage.to_string pkg;
                      ]
                    in
                    let workdir = config_dir [ "work" ] in
@@ -192,6 +228,7 @@ let () =
                        OpamPackage.Set.iter
                          (fun dep ->
                            let () = OpamConsole.note "%s" (OpamPackage.to_string dep) in
+                           let () = OpamConsole.note "built with %s" (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " ") in
                            assert (
                              0
                              = sudo
@@ -248,17 +285,6 @@ let () =
              else acc)
            0 ordered_installation))
     latest_available
-
-(*
-let _ = if false then x ()
-
-let latest =
-  OpamPackage.Set.filter
-    (fun pkg ->
-      let name = OpamPackage.to_string pkg in
-      String.starts_with ~prefix:"z" name)
-    latest
-   *)
 
 let emit_page name page =
   let open Tyxml.Html in
