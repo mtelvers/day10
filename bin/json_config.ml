@@ -43,7 +43,7 @@ let default_linux_caps =
     "CAP_AUDIT_WRITE";
   ]
 
-let make ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
+let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
   `Assoc
     [
       ("ociVersion", `String "1.0.1-dev");
@@ -70,7 +70,7 @@ let make ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
             ("rlimits", `List [ `Assoc [ ("type", `String "RLIMIT_NOFILE"); ("hard", `Int 1024); ("soft", `Int 1024) ] ]);
             ("noNewPrivileges", `Bool false);
           ] );
-      ("root", `Assoc [ ("path", `String "dummy"); ("readonly", `Bool false) ]);
+      ("root", `Assoc [ ("path", `String root); ("readonly", `Bool false) ]);
       ("hostname", `String hostname);
       ( "mounts",
         `List

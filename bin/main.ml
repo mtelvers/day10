@@ -4,35 +4,43 @@ module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
+let hostname = "builder"
+let () = Os.write_to_file (Config.dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
 let () = OpamFormatConfig.init ()
 let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
-let opam_repository = "/home/mtelvers/opam-repository/packages"
-let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day29"
+let commit = Os.run ("git -C " ^ (Config.opam_repository []) ^ " rev-parse HEAD") |> String.trim
 
-let run cmd =
-  let inp = Unix.open_process_in cmd in
-  let r = In_channel.input_all inp in
-  In_channel.close inp;
-  r
-
-let commit = run ("git -C " ^ opam_repository ^ " rev-parse HEAD") |> String.trim
+let () =
+  if not (Sys.file_exists (Config.dir [ "results"; commit ])) then
+    let argv = [ "/usr/bin/env"; "bash"; "-c"; "opam update" ] in
+    let mounts =
+      [
+        { Json_config.ty = "bind"; src = (Config.opam_repository []); dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
+        { ty = "bind"; src = Config.dir [ "download-cache" ]; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
+        { ty = "bind"; src = Config.dir [ "hosts" ]; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+      ]
+    in
+    let config = Json_config.make ~root:"rootfs" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env:Config.env ~mounts ~network:true in
+    let () = Os.write_to_file (Config.dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
+    let r = Os.sudo [ "runc"; "run"; "-b"; Config.dir []; "build" ] in
+    assert (r = 0)
 
 let () =
   List.iter
     (fun dir -> if not (Sys.file_exists dir) then Sys.mkdir dir 0o755)
     [
-      config_dir [ "results" ];
-      config_dir [ "results"; commit ];
-      config_dir [ "results"; commit; "good" ];
-      config_dir [ "results"; commit; "bad" ];
-      config_dir [ "results"; commit; "solution" ];
+      Config.dir [ "results" ];
+      Config.dir [ "results"; commit ];
+      Config.dir [ "results"; commit; "good" ];
+      Config.dir [ "results"; commit; "bad" ];
+      Config.dir [ "results"; commit; "solution" ];
     ]
 
 let opam_file pkg =
-  let opam_path = List.fold_left Filename.concat opam_repository [ OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
+  let opam_path = Config.opam_repository [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
   OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
 
 let solve pkg =
@@ -40,7 +48,7 @@ let solve pkg =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints opam_repository in
+  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints (Config.opam_repository ["packages"]) in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -85,9 +93,11 @@ let solve pkg =
       OpamPackage.Map.empty
 
 let all_packages =
+  let packages = Config.opam_repository ["packages"] in
   Array.fold_left
-    (fun acc d -> Filename.concat opam_repository d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
-    OpamPackage.Set.empty (Sys.readdir opam_repository)
+    (fun acc d ->
+      Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
+    OpamPackage.Set.empty (Sys.readdir packages)
 
 let latest =
   OpamPackage.Name.Map.fold
@@ -121,25 +131,6 @@ let rec topological_sort freq pkgs =
       let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
       i :: topological_sort freq pkgs
 
-let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
-let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
-let hostname = "builder"
-let () = write_to_file (config_dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
-
-let env =
-  [
-    ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-    ("HOME", "/home/opam");
-    ("OPAMYES", "1");
-    ("OPAMCONFIRMLEVEL", "unsafe-yes");
-    ("OPAMERRLOGLEN", "0");
-    ("OPAMPRECISETRACKING", "1");
-  ]
-
-let sudo ?stdout ?stderr cmd =
-  let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
-
 let rec find_all_deps solution deps acc =
   OpamPackage.Set.fold
     (fun dep acc ->
@@ -153,14 +144,12 @@ let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
 
 module IntSet = Set.Make (Int)
 
-let nproc = run "nproc" |> String.trim |> int_of_string
-
 let () =
   OpamPackage.Set.fold
     (fun package acc ->
       let acc =
         let rec loop acc =
-          if IntSet.cardinal acc <= nproc then acc
+          if IntSet.cardinal acc <= Os.nproc then acc
           else
             let running, finished =
               IntSet.partition
@@ -176,7 +165,7 @@ let () =
       in
       match Unix.fork () with
       | 0 ->
-          let filename = config_dir [ "results"; commit; "solution"; OpamPackage.to_string package ] in
+          let filename = Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ] in
           if not (Sys.file_exists filename) then
             ignore
               (solve package
@@ -193,7 +182,7 @@ let () =
     (fun package ->
       let chrono = OpamConsole.timer () in
       let solution =
-        let filename = config_dir [ "results"; commit; "solution"; OpamPackage.to_string package ] in
+        let filename = Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ] in
         if Sys.file_exists filename then Json_solution.load filename
         else
           solve package
@@ -225,11 +214,11 @@ let () =
                in
                let alldeps = OpamPackage.Map.find pkg dependencies in
                let bad =
-                 OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (config_dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ])) alldeps false
+                 OpamPackage.Set.fold (fun pkg acc -> acc || Sys.file_exists (Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ])) alldeps false
                in
                if not bad then
                  let hash = hash_of_set alldeps in
-                 let upperdir = config_dir [ hash ] in
+                 let upperdir = Config.dir [ hash ] in
                  if not (Sys.file_exists upperdir) then
                    let argv =
                      [
@@ -239,8 +228,8 @@ let () =
                        "opamh.exe make-state --output=$HOME/.opam/default/.opam-switch/switch-state --quiet && opam-build -v " ^ OpamPackage.to_string pkg;
                      ]
                    in
-                   let workdir = config_dir [ "work" ] in
-                   let lowerdir = config_dir [ "rootfs" ] in
+                   let workdir = Config.dir [ "work" ] in
+                   let lowerdir = Config.dir [ "rootfs" ] in
                    let chrono = OpamConsole.timer () in
                    let () =
                      if OpamPackage.Set.is_empty deps then Sys.mkdir upperdir 0o755
@@ -249,7 +238,7 @@ let () =
                          (fun dep ->
                            assert (
                              0
-                             = sudo
+                             = Os.sudo
                                  [
                                    "cp";
                                    "--no-clobber";
@@ -258,7 +247,7 @@ let () =
                                    "--recursive";
                                    "--reflink=auto";
                                    "--no-target-directory";
-                                   config_dir [ hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
+                                   Config.dir [ hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty) ];
                                    upperdir;
                                  ]))
                          deps
@@ -273,26 +262,26 @@ let () =
                          dst = "/";
                          options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ];
                        };
-                       { ty = "bind"; src = config_dir [ "download-cache" ]; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
-                       { ty = "bind"; src = config_dir [ "hosts" ]; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+                       { ty = "bind"; src = Config.dir [ "download-cache" ]; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
+                       { ty = "bind"; src = Config.dir [ "hosts" ]; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
                      ]
                    in
-                   let config = Json_config.make ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
-                   let () = write_to_file (config_dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
+                   let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env:Config.env ~mounts ~network:true in
+                   let () = Os.write_to_file (Config.dir [ "config.json" ]) (Yojson.Safe.pretty_to_string config) in
                    let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                    let chrono = OpamConsole.timer () in
-                   let temp = Filename.temp_file ~temp_dir:(config_dir [ "temp" ]) "build-" (OpamPackage.to_string pkg) in
-                   let r = sudo ~stdout:temp ~stderr:temp [ "runc"; "run"; "-b"; config_dir []; "build" ] in
+                   let temp = Filename.temp_file ~temp_dir:(Config.dir [ "temp" ]) "build-" (OpamPackage.to_string pkg) in
+                   let r = Os.sudo ~stdout:temp ~stderr:temp [ "runc"; "run"; "-b"; Config.dir []; "build" ] in
                    let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                    let chrono = OpamConsole.timer () in
                    let _ =
                      if r = 0 then
-                       let () = append_to_file (config_dir [ "results"; commit; "good"; OpamPackage.to_string pkg ]) "b" in
+                       let () = Os.append_to_file (Config.dir [ "results"; commit; "good"; OpamPackage.to_string pkg ]) "b" in
                        let () = Sys.rename temp (Filename.concat upperdir "build.log") in
-                       sudo [ "rm"; "-rf"; Filename.concat upperdir "tmp" ]
+                       Os.sudo [ "rm"; "-rf"; Filename.concat upperdir "tmp" ]
                      else
-                       let () = Sys.rename temp (config_dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ]) in
-                       sudo [ "rm"; "-rf"; upperdir ]
+                       let () = Sys.rename temp (Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ]) in
+                       Os.sudo [ "rm"; "-rf"; upperdir ]
                    in
                    let () = OpamConsole.note "tidy up took %.3fs" (chrono ()) in
                    r
@@ -327,7 +316,7 @@ let index_html =
            (OpamPackage.Set.to_list_map
               (fun package ->
                 let () = OpamConsole.note "Package %s" (OpamPackage.to_string package) in
-                let solution = Json_solution.load (config_dir [ "results"; commit; "solution"; OpamPackage.to_string package ]) in
+                let solution = Json_solution.load (Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ]) in
                 let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
                 let frequency =
                   OpamPackage.Map.mapi
@@ -338,8 +327,8 @@ let index_html =
                 let name = OpamPackage.to_string package in
                 let style, result =
                   if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
-                  else if Sys.file_exists (config_dir [ "results"; commit; "good"; name ]) then ("good", txt "good")
-                  else if Sys.file_exists (config_dir [ "results"; commit; "bad"; name ]) then
+                  else if Sys.file_exists (Config.dir [ "results"; commit; "good"; name ]) then ("good", txt "good")
+                  else if Sys.file_exists (Config.dir [ "results"; commit; "bad"; name ]) then
                     ("bad", a ~a:[ a_href ("results/" ^ commit ^ "/bad/" ^ name) ] [ txt "bad" ])
                   else ("bad", txt "bad dependency")
                 in
@@ -360,14 +349,14 @@ let index_html =
                                      let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
                                      let hash = hash_of_set alldeps in
                                      let () = OpamConsole.note "hash %s" hash in
-                                     let build_log = config_dir [ hash; "build.log" ] in
+                                     let build_log = Config.dir [ hash; "build.log" ] in
                                      if Sys.file_exists build_log then
-                                       let () = emit_page (config_dir [ hash ^ ".html" ]) (log_to_pre build_log) in
+                                       let () = emit_page (Config.dir [ hash ^ ".html" ]) (log_to_pre build_log) in
                                        ("good", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
                                      else
-                                       let bad_log = config_dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ] in
+                                       let bad_log = Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ] in
                                        if Sys.file_exists bad_log then
-                                         let () = emit_page (config_dir [ hash ^ ".html" ]) (log_to_pre bad_log) in
+                                         let () = emit_page (Config.dir [ hash ^ ".html" ]) (log_to_pre bad_log) in
                                          ("bad", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
                                        else ("skipped", txt (OpamPackage.to_string pkg))
                                    in
@@ -380,4 +369,4 @@ let index_html =
            |> List.rev);
        ])
 
-let () = emit_page (config_dir [ "index.html" ]) index_html
+let () = emit_page (Config.dir [ "index.html" ]) index_html
