@@ -10,10 +10,26 @@ let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 let opam_repository = "/home/mtelvers/opam-repository/packages"
+let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day29"
 
-(* let commit = "c940a5f1a97ea0abf72b5f8a3319f15551c41337" *)
-(* let commit = "a263eb47bd23b8c5e3555052b1f086fe933eebde" *)
-let commit = "64a9d673ccf21203b08de3ef29ca06ad97d5bc3c"
+let run cmd =
+  let inp = Unix.open_process_in cmd in
+  let r = In_channel.input_all inp in
+  In_channel.close inp;
+  r
+
+let commit = run ("git -C " ^ opam_repository ^ " rev-parse HEAD") |> String.trim
+
+let () =
+  List.iter
+    (fun dir -> if not (Sys.file_exists dir) then Sys.mkdir dir 0o755)
+    [
+      config_dir [ "results" ];
+      config_dir [ "results"; commit ];
+      config_dir [ "results"; commit; "good" ];
+      config_dir [ "results"; commit; "bad" ];
+      config_dir [ "results"; commit; "solution" ];
+    ]
 
 let opam_file pkg =
   let opam_path = List.fold_left Filename.concat opam_repository [ OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
@@ -107,7 +123,6 @@ let rec topological_sort freq pkgs =
 
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
-let config_dir = List.fold_left (fun acc f -> Filename.concat acc f) "/home/mtelvers/day29"
 let hostname = "builder"
 let () = write_to_file (config_dir [ "hosts" ]) ("127.0.0.1 localhost " ^ hostname)
 
@@ -138,12 +153,14 @@ let ocaml = solve (OpamPackage.of_string "ocaml.5.3.0")
 
 module IntSet = Set.Make (Int)
 
+let nproc = run "nproc" |> String.trim |> int_of_string
+
 let () =
   OpamPackage.Set.fold
     (fun package acc ->
       let acc =
         let rec loop acc =
-          if IntSet.cardinal acc <= 32 then acc
+          if IntSet.cardinal acc <= nproc then acc
           else
             let running, finished =
               IntSet.partition
