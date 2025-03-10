@@ -1,3 +1,4 @@
+let read_from_file filename = In_channel.with_open_text filename @@ fun ic -> In_channel.input_all ic
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
 

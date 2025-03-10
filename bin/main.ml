@@ -11,14 +11,14 @@ let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
-let commit = Os.run ("git -C " ^ (Config.opam_repository []) ^ " rev-parse HEAD") |> String.trim
+let commit = Os.run ("git -C " ^ Config.opam_repository [] ^ " rev-parse HEAD") |> String.trim
 
 let () =
   if not (Sys.file_exists (Config.dir [ "results"; commit ])) then
     let argv = [ "/usr/bin/env"; "bash"; "-c"; "opam update" ] in
     let mounts =
       [
-        { Json_config.ty = "bind"; src = (Config.opam_repository []); dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
+        { Json_config.ty = "bind"; src = Config.opam_repository []; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
         { ty = "bind"; src = Config.dir [ "download-cache" ]; dst = "/home/opam/.opam/download-cache"; options = [ "rbind"; "rprivate" ] };
         { ty = "bind"; src = Config.dir [ "hosts" ]; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
       ]
@@ -48,7 +48,7 @@ let solve pkg =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.Name.of_string "ocaml", (`Eq, OpamPackage.Version.of_string "5.3.0")); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints (Config.opam_repository ["packages"]) in
+  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints (Config.opam_repository [ "packages" ]) in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -93,10 +93,9 @@ let solve pkg =
       OpamPackage.Map.empty
 
 let all_packages =
-  let packages = Config.opam_repository ["packages"] in
+  let packages = Config.opam_repository [ "packages" ] in
   Array.fold_left
-    (fun acc d ->
-      Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
+    (fun acc d -> Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
     OpamPackage.Set.empty (Sys.readdir packages)
 
 let latest =
@@ -301,72 +300,98 @@ let emit_page name page =
   Format.fprintf fmt "%a@." (pp ~indent:true ()) page;
   close_out file_handle
 
-let log_to_pre textfile =
+let () =
   let open Tyxml.Html in
-  let input = In_channel.with_open_text textfile @@ fun ic -> In_channel.input_all ic in
-  html (head (title (txt textfile)) []) (body [ pre [ txt input ] ])
+  OpamPackage.Set.iter
+    (fun package ->
+      let name = OpamPackage.to_string package in
+      let () = OpamConsole.note "Package %s" name in
+      let solution = Json_solution.load (Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ]) in
+      let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+      let frequency =
+        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
+      in
+      let ordered_installation = topological_sort frequency solution in
+      let style, result =
+        if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
+        else if Sys.file_exists (Config.dir [ "results"; commit; "good"; name ]) then ("good", txt "good")
+        else if Sys.file_exists (Config.dir [ "results"; commit; "bad"; name ]) then
+          ("bad", a ~a:[ a_href ("results/" ^ commit ^ "/bad/" ^ name) ] [ txt "bad" ])
+        else ("bad", txt "bad dependency")
+      in
+      html
+        (head (title (txt name)) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ])
+        (body
+           (List.map
+              (fun pkg ->
+                let name = OpamPackage.to_string pkg in
+                let content =
+                  let deps = OpamPackage.Map.find pkg solution in
+                  let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
+                  let hash = hash_of_set alldeps in
+                  let build_log = Config.dir [ hash; "build.log" ] in
+                  if Sys.file_exists build_log then pre [ txt (Os.read_from_file build_log) ]
+                  else
+                    let bad_log = Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ] in
+                    if Sys.file_exists bad_log then pre [ txt (Os.read_from_file bad_log) ] else pre []
+                in
+                details (summary ~a:[ a_class [ style ] ] [ txt name ]) [ content ])
+              ordered_installation))
+      |> emit_page (Config.dir [ "html"; name ^ ".html" ]))
+    latest_available
 
-let index_html =
+(* Ordered by date *)
+(* let commits = Sys.readdir (Config.dir [ "results" ]) |> Array.to_list *)
+
+let commits =
+  [
+    "64a9d673ccf21203b08de3ef29ca06ad97d5bc3c";
+    "94a68d7e968e714ae17a21d84962e93eadbb0ffb";
+    "8707d628f2beb80e7f60b89d60c33bdf2ffd9026";
+    "862a7640b194b6ef60dc2d24341920e48dd021fe";
+  ]
+
+let set_of_dir commit dir =
+  Sys.readdir (Config.dir [ "results"; commit; dir ])
+  |> Array.fold_left (fun acc file -> OpamPackage.Set.add (OpamPackage.of_string file) acc) OpamPackage.Set.empty
+
+type results = {
+  commit : string;
+  solution : OpamPackage.Set.t;
+  good : OpamPackage.Set.t;
+  bad : OpamPackage.Set.t;
+}
+
+let results =
+  List.map (fun commit -> { commit; solution = set_of_dir commit "solution"; good = set_of_dir commit "good"; bad = set_of_dir commit "bad" }) commits
+
+let html_list_of_set s =
   let open Tyxml.Html in
-  html
-    (head (title (txt "day10")) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ])
-    (body
-       [
-         table
-           (OpamPackage.Set.to_list_map
-              (fun package ->
-                let () = OpamConsole.note "Package %s" (OpamPackage.to_string package) in
-                let solution = Json_solution.load (Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ]) in
-                let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
-                let frequency =
-                  OpamPackage.Map.mapi
-                    (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0)
-                    alldeps
-                in
-                let ordered_installation = topological_sort frequency solution in
-                let name = OpamPackage.to_string package in
-                let style, result =
-                  if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
-                  else if Sys.file_exists (Config.dir [ "results"; commit; "good"; name ]) then ("good", txt "good")
-                  else if Sys.file_exists (Config.dir [ "results"; commit; "bad"; name ]) then
-                    ("bad", a ~a:[ a_href ("results/" ^ commit ^ "/bad/" ^ name) ] [ txt "bad" ])
-                  else ("bad", txt "bad dependency")
-                in
-                tr ~a:[]
-                  [
-                    td [ txt (OpamPackage.to_string package) ];
-                    td
-                      [
-                        details
-                          (summary ~a:[ a_class [ style ] ] [ result ])
-                          [
-                            ol
-                              (List.map
-                                 (fun pkg ->
-                                   let style, content =
-                                     let () = OpamConsole.note "pkg %s" (OpamPackage.to_string pkg) in
-                                     let deps = OpamPackage.Map.find pkg solution in
-                                     let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
-                                     let hash = hash_of_set alldeps in
-                                     let () = OpamConsole.note "hash %s" hash in
-                                     let build_log = Config.dir [ hash; "build.log" ] in
-                                     if Sys.file_exists build_log then
-                                       let () = emit_page (Config.dir [ hash ^ ".html" ]) (log_to_pre build_log) in
-                                       ("good", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
-                                     else
-                                       let bad_log = Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ] in
-                                       if Sys.file_exists bad_log then
-                                         let () = emit_page (Config.dir [ hash ^ ".html" ]) (log_to_pre bad_log) in
-                                         ("bad", a ~a:[ a_href (hash ^ ".html") ] [ txt (OpamPackage.to_string pkg) ])
-                                       else ("skipped", txt (OpamPackage.to_string pkg))
-                                   in
-                                   li ~a:[ a_class [ style ] ] [ content ])
-                                 ordered_installation);
-                          ];
-                      ];
-                  ])
-              latest_available
-           |> List.rev);
-       ])
+  ul
+    (OpamPackage.Set.to_list_map
+       (fun s ->
+         let name = OpamPackage.to_string s in
+         li [ a ~a:[ a_href (name ^ ".html") ] [ txt name ] ])
+       s)
 
-let () = emit_page (Config.dir [ "index.html" ]) index_html
+let rec loop = function
+  | g0 :: g1 :: tl ->
+      let open Tyxml.Html in
+      let acc = [ h1 [ txt (g0.commit ^ " - " ^ g1.commit) ] ] in
+      let removed = OpamPackage.Set.diff g0.solution g1.solution in
+      let added = OpamPackage.Set.diff g1.solution g0.solution in
+      let acc = acc @ [ h2 [ txt "removed solution" ]; html_list_of_set removed ] in
+      let acc = acc @ [ h2 [ txt "added solution" ]; html_list_of_set added ] in
+      let added = OpamPackage.Set.diff g1.good g0.good in
+      let acc = acc @ [ h2 [ txt "added good" ]; html_list_of_set added ] in
+      let removed = OpamPackage.Set.diff g0.bad g1.bad in
+      let added = OpamPackage.Set.diff g1.bad g0.bad in
+      let acc = acc @ [ h2 [ txt "removed bad" ]; html_list_of_set removed ] in
+      let acc = acc @ [ h2 [ txt "added bad" ]; html_list_of_set added ] in
+      acc @ loop (g1 :: tl)
+  | _ -> []
+
+let () =
+  let open Tyxml.Html in
+  html (head (title (txt "index")) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ]) (body (loop results))
+  |> emit_page (Config.dir [ "html"; "index.html" ])
