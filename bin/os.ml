@@ -13,3 +13,33 @@ let run cmd =
   r
 
 let nproc = run "nproc" |> String.trim |> int_of_string
+let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
+
+module IntSet = Set.Make (Int)
+
+let fork f lst =
+  List.fold_left
+    (fun acc x ->
+      let acc =
+        let rec loop acc =
+          if IntSet.cardinal acc <= nproc then acc
+          else
+            let running, finished =
+              IntSet.partition
+                (fun pid ->
+                  let c, _ = Unix.waitpid [ WNOHANG ] pid in
+                  pid <> c)
+                acc
+            in
+            let () = if IntSet.is_empty finished then Unix.sleepf 0.1 in
+            loop running
+        in
+        loop acc
+      in
+      match Unix.fork () with
+      | 0 ->
+          f x;
+          exit 0
+      | child -> IntSet.add child acc)
+    IntSet.empty lst
+  |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
