@@ -297,9 +297,9 @@ let build package compiler =
        0 ordered_installation)
 
 let () =
-  OpamPackage.Set.to_list_map (fun package -> compilers |> List.map (fun c -> (package, c))) latest_available
-  |> List.flatten
-  |> Os.fork ~np:4 (fun (package, compiler) -> build package compiler)
+  OpamPackage.Set.iter
+    (fun package -> compilers |> List.map (fun c -> (package, c)) |> Os.fork (fun (package, compiler) -> build package compiler))
+    latest_available
 
 let () = exit 0
 
