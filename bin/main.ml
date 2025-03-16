@@ -297,9 +297,9 @@ let build package compiler =
        0 ordered_installation)
 
 let () =
-  OpamPackage.Set.iter
-    (fun package -> compilers |> List.map (fun c -> (package, c)) |> Os.fork (fun (package, compiler) -> build package compiler))
-    latest_available
+  OpamPackage.Set.to_list_map (fun package -> compilers |> List.map (fun c -> (package, c))) latest_available
+  |> List.flatten
+  |> Os.fork ~np:4 (fun (package, compiler) -> build package compiler)
 
 let () = exit 0
 
@@ -313,43 +313,46 @@ let emit_page name page =
 
 let () =
   let open Tyxml.Html in
-  OpamPackage.Set.iter
-    (fun package ->
-      let name = OpamPackage.to_string package in
-      let () = OpamConsole.note "Package %s" name in
-      let solution = Json_solution.load (Config.dir [ "results"; commit; "solution"; OpamPackage.to_string package ]) in
-      let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
-      let frequency =
-        OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
-      in
-      let ordered_installation = topological_sort frequency solution in
-      let style, result =
-        if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
-        else if Sys.file_exists (Config.dir [ "results"; commit; "good"; name ]) then ("good", txt "good")
-        else if Sys.file_exists (Config.dir [ "results"; commit; "bad"; name ]) then
-          ("bad", a ~a:[ a_href ("results/" ^ commit ^ "/bad/" ^ name) ] [ txt "bad" ])
-        else ("bad", txt "bad dependency")
-      in
-      html
-        (head (title (txt name)) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ])
-        (body
-           (List.map
-              (fun pkg ->
-                let name = OpamPackage.to_string pkg in
-                let content =
-                  let deps = OpamPackage.Map.find pkg solution in
-                  let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
-                  let hash = hash_of_set alldeps in
-                  let build_log = Config.dir [ hash; "build.log" ] in
-                  if Sys.file_exists build_log then pre [ txt (Os.read_from_file build_log) ]
-                  else
-                    let bad_log = Config.dir [ "results"; commit; "bad"; OpamPackage.to_string pkg ] in
-                    if Sys.file_exists bad_log then pre [ txt (Os.read_from_file bad_log) ] else pre []
-                in
-                details (summary ~a:[ a_class [ style ] ] [ txt name ]) [ content ])
-              ordered_installation))
-      |> emit_page (Config.dir [ "html"; name ^ ".html" ]))
-    latest_available
+  List.iter
+    (fun compiler ->
+      OpamPackage.Set.iter
+        (fun package ->
+          let name = OpamPackage.to_string package in
+          let () = OpamConsole.note "Package %s" name in
+          let solution = Json_solution.load (Config.dir [ "results"; commit; compiler.version; "solution"; OpamPackage.to_string package ]) in
+          let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+          let frequency =
+            OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
+          in
+          let ordered_installation = topological_sort frequency solution in
+          let style, result =
+            if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
+            else if Sys.file_exists (Config.dir [ "results"; commit; compiler.version; "good"; name ]) then ("good", txt "good")
+            else if Sys.file_exists (Config.dir [ "results"; commit; compiler.version; "bad"; name ]) then
+              ("bad", a ~a:[ a_href ("results/" ^ commit ^ "/bad/" ^ name) ] [ txt "bad" ])
+            else ("bad", txt "bad dependency")
+          in
+          html
+            (head (title (txt name)) [ link ~rel:[ `Stylesheet ] ~href:"stylesheet.css" () ])
+            (body
+               (List.map
+                  (fun pkg ->
+                    let name = OpamPackage.to_string pkg in
+                    let content =
+                      let deps = OpamPackage.Map.find pkg solution in
+                      let alldeps = find_all_deps solution deps (OpamPackage.Set.singleton pkg) in
+                      let hash = hash_of_set alldeps in
+                      let build_log = Config.dir [ hash; "build.log" ] in
+                      if Sys.file_exists build_log then pre [ txt (Os.read_from_file build_log) ]
+                      else
+                        let bad_log = Config.dir [ "results"; commit; compiler.version; "bad"; OpamPackage.to_string pkg ] in
+                        if Sys.file_exists bad_log then pre [ txt (Os.read_from_file bad_log) ] else pre []
+                    in
+                    details (summary ~a:[ a_class [ style ] ] [ txt name ]) [ content ])
+                  ordered_installation))
+          |> emit_page (Config.dir [ "html"; name ^ ".html" ]))
+        latest_available)
+    compilers
 
 (* Ordered by date *)
 (* let commits = Sys.readdir (Config.dir [ "results" ]) |> Array.to_list *)
@@ -362,8 +365,8 @@ let commits =
     "862a7640b194b6ef60dc2d24341920e48dd021fe";
   ]
 
-let set_of_dir commit dir =
-  Sys.readdir (Config.dir [ "results"; commit; dir ])
+let set_of_dir commit compiler dir =
+  Sys.readdir (Config.dir [ "results"; commit; compiler.version; dir ])
   |> Array.fold_left (fun acc file -> OpamPackage.Set.add (OpamPackage.of_string file) acc) OpamPackage.Set.empty
 
 type results = {
@@ -374,7 +377,14 @@ type results = {
 }
 
 let results =
-  List.map (fun commit -> { commit; solution = set_of_dir commit "solution"; good = set_of_dir commit "good"; bad = set_of_dir commit "bad" }) commits
+  List.map
+    (fun commit ->
+      List.map
+        (fun compiler ->
+          { commit; solution = set_of_dir commit compiler "solution"; good = set_of_dir commit compiler "good"; bad = set_of_dir commit compiler "bad" })
+        compilers)
+    commits
+  |> List.flatten
 
 let html_list_of_set s =
   let open Tyxml.Html in

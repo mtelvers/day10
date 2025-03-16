@@ -17,7 +17,8 @@ let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
 
 module IntSet = Set.Make (Int)
 
-let fork f lst =
+let fork ?np f lst =
+  let nproc = Option.value ~default:nproc np in
   List.fold_left
     (fun acc x ->
       let acc =
