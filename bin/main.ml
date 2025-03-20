@@ -181,7 +181,7 @@ let () =
              if not (Sys.file_exists filename) then ignore (solve compiler.ocaml_version package |> munge compiler |> Json_solution.save filename)))
     compilers
 
-let build package compiler =
+let build compiler package =
   let () = OpamConsole.note "Package %s on %s" (OpamPackage.to_string package) compiler.version in
   let solution = Json_solution.load (Config.dir [ "results"; commit; compiler.version; "solution"; OpamPackage.to_string package ]) in
   let chrono = OpamConsole.timer () in
@@ -296,11 +296,7 @@ let build package compiler =
          else acc)
        0 ordered_installation)
 
-let () =
-  OpamPackage.Set.iter
-    (fun package -> compilers |> List.map (fun c -> (package, c)) |> Os.fork (fun (package, compiler) -> build package compiler))
-    latest_available
-
+let () = Os.fork (fun compiler -> OpamPackage.Set.iter (build compiler) latest_available) compilers
 let () = exit 0
 
 let emit_page name page =
