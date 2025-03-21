@@ -48,6 +48,20 @@ let opam_file pkg =
   let opam_path = Config.opam_repository [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
   OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
 
+let env pkg v =
+  let () = Printf.printf "Var name %s\n%!" (OpamVariable.Full.to_string v) in
+  (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
+  else *)
+  match OpamVariable.Full.to_string v with
+  | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
+  | "with-test"
+  | "with-dev-setup"
+  | "dev"
+  | "with-doc" ->
+      Some (OpamTypes.B false)
+  | "build" -> Some (OpamTypes.B true)
+  | x -> std_env x
+
 let solve ocaml_version pkg =
   let constraints =
     OpamPackage.Name.Map.of_list
@@ -86,10 +100,16 @@ let solve ocaml_version pkg =
       OpamPackage.Set.fold
         (fun pkg acc ->
           let opam = opam_file pkg in
+          let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (env pkg) in
+          let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
+          let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
+          let deppost = OpamPackage.Name.Set.diff with_post without_post in
           let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
           let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
           let name = OpamPackage.name pkg in
-          let deps = expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> OpamPackage.packages_of_names pkgs in
+          let deps =
+            expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> fun x -> OpamPackage.Name.Set.diff x deppost |> OpamPackage.packages_of_names pkgs
+          in
           OpamPackage.Map.add pkg deps acc)
         pkgs OpamPackage.Map.empty
   | Error problem ->
@@ -102,6 +122,14 @@ let all_packages =
   Array.fold_left
     (fun acc d -> Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
     OpamPackage.Set.empty (Sys.readdir packages)
+
+(*
+let all_packages =
+  OpamPackage.Set.(
+    empty |> add (OpamPackage.of_string "0install.2.18") |> add (OpamPackage.of_string "alcotest.1.8.0") |> add (OpamPackage.of_string "base.v0.17.1"))
+   *)
+
+let all_packages = OpamPackage.Set.filter (fun pkg -> String.starts_with ~prefix:"a" (OpamPackage.to_string pkg)) all_packages
 
 let latest =
   OpamPackage.Name.Map.fold
@@ -147,21 +175,14 @@ let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_stri
 type compiler = {
   version : string;
   ocaml_version : OpamPackage.t;
-  solution : OpamPackage.Set.t OpamPackage.Map.t;
 }
 
 let compilers =
   List.map
     (fun version ->
       let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string version) in
-      { version; ocaml_version; solution = solve ocaml_version ocaml_version })
+      { version; ocaml_version })
     versions
-
-let munge { ocaml_version; solution; _ } pkg =
-  OpamPackage.Map.filter (fun x _ -> not (OpamPackage.Map.mem x solution)) pkg
-  |> OpamPackage.Map.map (fun x -> OpamPackage.Set.filter_map (fun y -> if OpamPackage.Map.mem y solution then Some ocaml_version else Some y) x)
-  |> OpamPackage.Map.map (fun x -> if OpamPackage.Set.is_empty x then OpamPackage.Set.singleton ocaml_version else x)
-  |> OpamPackage.Map.add ocaml_version OpamPackage.Set.empty
 
 (*
 let () =
@@ -178,7 +199,8 @@ let () =
       OpamPackage.Set.to_list latest_available
       |> Os.fork (fun package ->
              let filename = Config.dir [ "results"; commit; compiler.version; "solution"; OpamPackage.to_string package ] in
-             if not (Sys.file_exists filename) then ignore (solve compiler.ocaml_version package |> munge compiler |> Json_solution.save filename)))
+             if not (Sys.file_exists filename) then
+               ignore (solve compiler.ocaml_version package |> Json_solution.save filename |> Dot_solution.save (filename ^ ".dot"))))
     compilers
 
 let build compiler package =
@@ -216,18 +238,17 @@ let build compiler package =
              let upperdir = Config.dir [ hash ] in
              if not (Sys.file_exists upperdir) then
                let argv =
-                 [ "/usr/bin/env"; "bash"; "-c" ]
-                 @
-                 if pkg = compiler.ocaml_version then [ "opam switch create default " ^ OpamPackage.to_string pkg ]
-                 else
-                   [
-                     String.concat " && "
-                       [
-                         "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh.exe make-state \
-                          --output=$HOME/.opam/default/.opam-switch/switch-state --quiet; fi";
-                         "opam-build -v " ^ OpamPackage.to_string pkg;
-                       ];
-                   ]
+                 [
+                   "/usr/bin/env";
+                   "bash";
+                   "-c";
+                   String.concat " && "
+                     [
+                       "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh.exe make-state \
+                        --output=$HOME/.opam/default/.opam-switch/switch-state --quiet; fi";
+                       "opam-build -v " ^ OpamPackage.to_string pkg;
+                     ];
+                 ]
                in
                let workdir = Config.dir [ "work"; compiler.version ] in
                let lowerdir = Config.dir [ "rootfs" ] in
@@ -274,7 +295,7 @@ let build compiler package =
                let () = OpamConsole.note "configuration files created in %.3fs" (chrono ()) in
                let chrono = OpamConsole.timer () in
                let build_log = Filename.concat upperdir "build.log" in
-               let r = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; compiler.version ] in
+               let r = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; OpamPackage.to_string pkg ^ "-" ^ compiler.version ] in
                let () = OpamConsole.note "runc ran for %.3fs" (chrono ()) in
                let chrono = OpamConsole.timer () in
                let _ =

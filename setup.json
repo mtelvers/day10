@@ -1,0 +1,141 @@
+{
+  "ociVersion": "1.0.1-dev",
+  "process": {
+    "terminal": false,
+    "user": { "uid": 0, "gid": 0 },
+    "args": [
+      "/usr/bin/env", "bash", "-c",
+      "apt update && apt upgrade -y && apt install build-essential unzip bubblewrap git sudo curl rsync -y && adduser --disabled-password --gecos '@opam' --no-create-home --home /home/opam opam && chown -R $(id -u opam):$(id -g opam) /home/opam && su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare -y' && su - opam -c 'opam switch create default --empty'"
+    ],
+    "env": [
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "HOME=/home/opam", "OPAMYES=1", "OPAMCONFIRMLEVEL=unsafe-yes",
+      "OPAMERRLOGLEN=0", "OPAMPRECISETRACKING=1"
+    ],
+    "cwd": "/home/opam",
+    "capabilities": {
+      "bounding": [
+        "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+        "CAP_MKNOD", "CAP_SETGID", "CAP_SETUID", "CAP_SETFCAP",
+        "CAP_SETPCAP", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"
+      ],
+      "effective": [
+        "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+        "CAP_MKNOD", "CAP_SETGID", "CAP_SETUID", "CAP_SETFCAP",
+        "CAP_SETPCAP", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"
+      ],
+      "inheritable": [
+        "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+        "CAP_MKNOD", "CAP_SETGID", "CAP_SETUID", "CAP_SETFCAP",
+        "CAP_SETPCAP", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"
+      ],
+      "permitted": [
+        "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+        "CAP_MKNOD", "CAP_SETGID", "CAP_SETUID", "CAP_SETFCAP",
+        "CAP_SETPCAP", "CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE"
+      ]
+    },
+    "rlimits": [ { "type": "RLIMIT_NOFILE", "hard": 1024, "soft": 1024 } ],
+    "noNewPrivileges": false
+  },
+  "root": { "path": "rootfs", "readonly": false },
+  "hostname": "builder",
+  "mounts": [
+    {
+      "destination": "/home/opam/opam-repository",
+      "type": "bind",
+      "source": "/home/mtelvers/opam-repository",
+      "options": [ "rbind", "rprivate" ]
+    },
+    {
+      "destination": "/etc/hosts",
+      "type": "bind",
+      "source": "/home/mtelvers/day29/hosts",
+      "options": [ "ro", "rbind", "rprivate" ]
+    },
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc",
+      "options": [ "nosuid", "noexec", "nodev" ]
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": [ "nosuid", "strictatime", "mode=755", "size=65536k" ]
+    },
+    {
+      "destination": "/dev/pts",
+      "type": "devpts",
+      "source": "devpts",
+      "options": [
+        "nosuid", "noexec", "newinstance", "ptmxmode=0666", "mode=0620",
+        "gid=5"
+      ]
+    },
+    {
+      "destination": "/sys",
+      "type": "sysfs",
+      "source": "sysfs",
+      "options": [ "nosuid", "noexec", "nodev", "ro" ]
+    },
+    {
+      "destination": "/sys/fs/cgroup",
+      "type": "cgroup",
+      "source": "cgroup",
+      "options": [ "ro", "nosuid", "noexec", "nodev" ]
+    },
+    {
+      "destination": "/dev/shm",
+      "type": "tmpfs",
+      "source": "shm",
+      "options": [ "nosuid", "noexec", "nodev", "mode=1777", "size=65536k" ]
+    },
+    {
+      "destination": "/dev/mqueue",
+      "type": "mqueue",
+      "source": "mqueue",
+      "options": [ "nosuid", "noexec", "nodev" ]
+    },
+    {
+      "destination": "/etc/resolv.conf",
+      "type": "bind",
+      "source": "/etc/resolv.conf",
+      "options": [ "ro", "rbind", "rprivate" ]
+    }
+  ],
+  "linux": {
+    "namespaces": [
+      { "type": "pid" },
+      { "type": "ipc" },
+      { "type": "uts" },
+      { "type": "mount" }
+    ],
+    "maskedPaths": [
+      "/proc/acpi", "/proc/asound", "/proc/kcore", "/proc/keys",
+      "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats",
+      "/proc/sched_debug", "/sys/firmware", "/proc/scsi"
+    ],
+    "readonlyPaths": [
+      "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys",
+      "/proc/sysrq-trigger"
+    ],
+    "seccomp": {
+      "defaultAction": "SCMP_ACT_ALLOW",
+      "syscalls": [
+        {
+          "names": [
+            "fsync", "fdatasync", "msync", "sync", "syncfs",
+            "sync_file_range"
+          ],
+          "action": "SCMP_ACT_ERRNO",
+          "errnoRet": 0
+        }
+      ],
+      "architectures": [
+        "SCMP_ARCH_X86_64", "SCMP_ARCH_X86", "SCMP_ARCH_X32"
+      ]
+    }
+  }
+}
