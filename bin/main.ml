@@ -97,21 +97,34 @@ let solve ocaml_version pkg =
       in
       let pkgs = Solver.packages_of_result out |> OpamPackage.Set.of_list in
       let pkgnames = OpamPackage.names_of_packages pkgs in
-      OpamPackage.Set.fold
-        (fun pkg acc ->
-          let opam = opam_file pkg in
-          let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (env pkg) in
-          let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
-          let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
-          let deppost = OpamPackage.Name.Set.diff with_post without_post in
-          let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
-          let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
-          let name = OpamPackage.name pkg in
-          let deps =
-            expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> fun x -> OpamPackage.Name.Set.diff x deppost |> OpamPackage.packages_of_names pkgs
-          in
-          OpamPackage.Map.add pkg deps acc)
-        pkgs OpamPackage.Map.empty
+      let deptree =
+        OpamPackage.Set.fold
+          (fun pkg acc ->
+            let opam = opam_file pkg in
+            let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (env pkg) in
+            let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
+            let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
+            let deppost = OpamPackage.Name.Set.diff with_post without_post in
+            let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
+            let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
+            let name = OpamPackage.name pkg in
+            let deps =
+              expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> fun x ->
+              OpamPackage.Name.Set.diff x deppost |> OpamPackage.packages_of_names pkgs
+            in
+            OpamPackage.Map.add pkg deps acc)
+          pkgs OpamPackage.Map.empty
+      in
+      let rec dfs map pkg =
+        let deps = OpamPackage.Map.find pkg deptree in
+        OpamPackage.Set.fold
+          (fun p acc ->
+            match OpamPackage.Map.mem p acc with
+            | true -> acc
+            | false -> dfs acc p)
+          deps (OpamPackage.Map.add pkg deps map)
+      in
+      dfs OpamPackage.Map.empty pkg
   | Error problem ->
       OpamConsole.error "No solution";
       print_endline (Solver.diagnostics problem);
@@ -127,9 +140,9 @@ let all_packages =
 let all_packages =
   OpamPackage.Set.(
     empty |> add (OpamPackage.of_string "0install.2.18") |> add (OpamPackage.of_string "alcotest.1.8.0") |> add (OpamPackage.of_string "base.v0.17.1"))
-   *)
 
-let all_packages = OpamPackage.Set.filter (fun pkg -> String.starts_with ~prefix:"a" (OpamPackage.to_string pkg)) all_packages
+let all_packages = OpamPackage.Set.filter (fun pkg -> String.starts_with ~prefix:"0" (OpamPackage.to_string pkg)) all_packages
+   *)
 
 let latest =
   OpamPackage.Name.Map.fold
@@ -145,22 +158,17 @@ let latest_available =
       (not (OpamPackage.Name.Set.mem pkg.name pinned_names)) && OpamFilter.eval_to_bool ~default:false (fun v -> std_env (OpamVariable.Full.to_string v)) avail)
     latest
 
-let rec topological_sort freq pkgs =
+let rec topological_sort pkgs =
   match OpamPackage.Map.is_empty pkgs with
   | true -> []
   | false ->
       (* Find all packages which can be installed *)
-      let installable = OpamPackage.Map.filter (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
+      let installable, remainder = OpamPackage.Map.partition (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
       let () = assert (not (OpamPackage.Map.is_empty installable)) in
-      (* find most frequent dep *)
-      let i =
-        OpamPackage.Map.to_list installable |> List.map fst
-        |> List.sort (fun p1 p2 -> compare (OpamPackage.Map.find p2 freq) (OpamPackage.Map.find p1 freq))
-        |> List.hd
-      in
-      (* Remove package i and remove the dependency on i from all other packages *)
-      let pkgs = OpamPackage.Map.remove i pkgs |> OpamPackage.Map.map (fun deps -> OpamPackage.Set.remove i deps) in
-      i :: topological_sort freq pkgs
+      let installable = OpamPackage.Map.to_list installable |> List.map fst in
+      (* Remove the dependency on any installable package from the remaining packages *)
+      let pkgs = OpamPackage.Map.map (fun deps -> List.fold_left (fun acc pkg -> OpamPackage.Set.remove pkg acc) deps installable) remainder in
+      installable @ topological_sort pkgs
 
 let rec find_all_deps solution deps acc =
   OpamPackage.Set.fold
@@ -208,15 +216,16 @@ let build compiler package =
   let solution = Json_solution.load (Config.dir [ "results"; commit; compiler.version; "solution"; OpamPackage.to_string package ]) in
   let chrono = OpamConsole.timer () in
   let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
-  let frequency =
-    OpamPackage.Map.mapi
-      (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) dependencies 0)
-      dependencies
-  in
   let () = OpamConsole.note "finding all dependencies took %.3fs" (chrono ()) in
   let chrono = OpamConsole.timer () in
-  let ordered_installation = topological_sort frequency solution in
+  let ordered_installation = topological_sort solution in
   let () = OpamConsole.note "topological sort took %.3fs" (chrono ()) in
+  List.iter
+    (fun pkg ->
+      let alldeps = OpamPackage.Map.find pkg dependencies in
+      OpamConsole.note "building pkg %s on %s" (OpamPackage.to_string pkg) (OpamPackage.Set.to_string alldeps))
+    ordered_installation
+(*
   ignore
     (List.fold_left
        (fun acc pkg ->
@@ -316,6 +325,7 @@ let build compiler package =
              1
          else acc)
        0 ordered_installation)
+     *)
 
 let () = Os.fork (fun compiler -> OpamPackage.Set.iter (build compiler) latest_available) compilers
 let () = exit 0
@@ -338,10 +348,7 @@ let () =
           let () = OpamConsole.note "Package %s" name in
           let solution = Json_solution.load (Config.dir [ "results"; commit; compiler.version; "solution"; OpamPackage.to_string package ]) in
           let alldeps = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
-          let frequency =
-            OpamPackage.Map.mapi (fun pkg _ -> OpamPackage.Map.fold (fun _ deps sum -> if OpamPackage.Set.mem pkg deps then sum + 1 else sum) alldeps 0) alldeps
-          in
-          let ordered_installation = topological_sort frequency solution in
+          let ordered_installation = topological_sort solution in
           let style, result =
             if OpamPackage.Map.is_empty solution then ("skipped", txt "no solution")
             else if Sys.file_exists (Config.dir [ "results"; commit; compiler.version; "good"; name ]) then ("good", txt "good")
