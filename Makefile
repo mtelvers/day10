@@ -1,4 +1,5 @@
 workdir = day29
+host = beta.tunbury.uk
 
 build:
 	dune fmt
@@ -7,16 +8,17 @@ build:
 install:
 	dune fmt
 	dune build --release
-	ssh mtelvers@x86-bm-c9.sw.ocaml.org "rm -f main.exe"
-	scp _build/default/bin/main.exe mtelvers@x86-bm-c9.sw.ocaml.org:
-	scp Makefile mtelvers@x86-bm-c9.sw.ocaml.org:
-	scp setup.json mtelvers@x86-bm-c9.sw.ocaml.org:
+	ssh $(host) "rm -f main.exe"
+	scp _build/default/bin/main.exe $(host):
+	ssh $(host) "rm -f opamh.exe"
+	scp ../opamh/_build/default/opamh.exe $(host):
+	ssh $(host) "rm -f opam-build"
+	scp ../opam_build/_build/default/bin/main.exe $(host):opam-build
+	scp Makefile $(host):
+	scp setup.json $(host):
 
 setup:	opam-repository
-	fallocate -l 2048GiB $(workdir).xfs
-	mkfs.xfs -i maxpct=100 $(workdir).xfs
-	mkdir $(workdir)
-	sudo mount $(workdir).xfs $(workdir)
+	mkdir -p $(workdir)
 	sudo chown $$(id -u):$$(id -g) $(workdir)
 	mkdir -p download-cache
 	sudo chown 1000:1000 download-cache
@@ -29,7 +31,8 @@ setup:	opam-repository
 	sudo cp opam-build $(workdir)/rootfs/usr/local/bin
 	sudo curl -L https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux -o $(workdir)/rootfs/usr/local/bin/opam
 	sudo chmod +x $(workdir)/rootfs/usr/local/bin/opam
-	sudo chown -R mtelvers:mtelvers opam-repository
+	sudo chown -R 1000:1000 opam-repository
+	git config --global --add safe.directory /root/opam-repository
 	git -C opam-repository pull origin master
 	cp setup.json $(workdir)/config.json
 	sudo mkdir $(workdir)/rootfs/etc/sudoers.d
@@ -41,9 +44,10 @@ opam-repository:
 	git clone https://github.com/ocaml/opam-repository
 
 clean:
-	sudo umount $(workdir)
-	rmdir $(workdir)
-	rm $(workdir).xfs
+	sudo rm -rf $(workdir)
 
 %.pdf: %.dot
 	dot -Tpdf -o $@ $<
+
+serve:
+	python3 -m http.server --directory day29/html/ --bind 0.0.0.0 8080
