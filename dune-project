@@ -19,7 +19,7 @@
  (name day10)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml)
+ (depends ocaml ppx_deriving_yojson opam-0install)
  (tags
   ("add topics" "to describe" your project)))
 

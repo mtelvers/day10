@@ -1,6 +1,7 @@
 let opam_repository = List.fold_left Filename.concat "/home/mtelvers/opam-repository"
 let download_cache = "/home/mtelvers/download-cache"
 let dir = List.fold_left Filename.concat "/home/mtelvers/day29"
+let hostname = "builder"
 
 let env =
   [

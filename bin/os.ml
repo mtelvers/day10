@@ -15,6 +15,18 @@ let run cmd =
 let nproc = run "nproc" |> String.trim |> int_of_string
 let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
 
+let mkdir_p path =
+  String.split_on_char '/' path
+  |> List.filter (fun s -> String.length s > 0)
+  |> List.fold_left
+       (fun acc el ->
+         let acc = acc ^ "/" ^ el in
+         if Sys.file_exists acc then acc
+         else
+           let () = Sys.mkdir acc 0o777 in
+           acc)
+       ""
+
 module IntSet = Set.Make (Int)
 
 let fork ?np f lst =
@@ -44,3 +56,20 @@ let fork ?np f lst =
       | child -> IntSet.add child acc)
     IntSet.empty lst
   |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
+
+let create_directory_exclusively dir_name write_function =
+  let lock_file = dir_name ^ ".lock" in
+  let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
+  try
+    Unix.lockf lock_fd F_LOCK 0;
+    if Sys.file_exists dir_name then Unix.close lock_fd
+    else (
+      write_function dir_name;
+      Unix.close lock_fd;
+      Unix.unlink lock_file)
+  with
+  | e ->
+      Unix.close lock_fd;
+      (try Unix.unlink lock_file with
+      | _ -> ());
+      raise e
