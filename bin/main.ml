@@ -48,8 +48,9 @@ let _ =
     let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:0 ~gid:0 ~env:Config.env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
     let build_log = Os.path [ temp_dir; "build.log" ] in
-    let _ = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+    let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-f"; Os.path [ rootfs; "/home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
+    let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
@@ -165,26 +166,14 @@ let rec find_all_deps solution deps acc =
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
-type layer = {
-  package : string;
-  deps : string;
-  hash : string;
-  result : int;
-}
-
 let build_layer solution dependencies pkg =
   let () = Printf.printf "Layer %s: %!" (OpamPackage.to_string pkg) in
-  let layer = { package = OpamPackage.to_string pkg; deps = ""; hash = ""; result = 0 } in
   let deps = OpamPackage.Map.find pkg solution in
-  let layer = { layer with deps = OpamPackage.Set.to_string deps } in
-  let () = Printf.printf "%s\n%!" layer.deps in
   let alldeps = OpamPackage.Map.find pkg dependencies in
   let hash = hash_of_set alldeps in
-  let layer = { layer with hash } in
   let layer_dir = Os.path [ Config.dir; hash ] in
   let () = Printf.printf "layer_dir %s\n%!" layer_dir in
-  if not (Sys.file_exists layer_dir) then
-    Os.create_directory_exclusively layer_dir @@ fun target_dir ->
+  let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
     let argv =
@@ -239,39 +228,29 @@ let build_layer solution dependencies pkg =
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
-    let () = if result = 0 then Os.write_to_file (Os.path [ temp_dir; "good" ]) "" else Os.write_to_file (Os.path [ temp_dir; "bad" ]) "" in
-    let () = Unix.rename temp_dir target_dir in
-    let _ = { layer with result } in
-    ()
-  else ()
+    let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    Unix.rename temp_dir target_dir
+  in
+  let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
+  Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string
 
 let build ocaml_version package =
   let solution = solve ocaml_version package in
   let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
   let ordered_installation = topological_sort solution in
-  List.iter (fun pkg -> build_layer solution dependencies pkg) ordered_installation
+  List.fold_left
+    (fun lst pkg ->
+      match lst with
+      | [] -> [ build_layer solution dependencies pkg ]
+      | acc :: _ when acc = 0 -> build_layer solution dependencies pkg :: lst
+      | _ -> lst)
+    [] ordered_installation
+
 (*
-  let layers =
-    List.fold_left
-      (fun (lst : layer list) pkg ->
-        match lst with
-        | [] -> [ build_layer solution dependencies pkg ]
-        | acc :: _ when acc.result = 0 -> build_layer solution dependencies pkg :: lst
-        | _ -> lst)
-      [] ordered_installation
-*)
-(*
-  let result =
-    match layers with
-    | [] -> `No_solution
-    | acc :: _ when acc.result = 0 -> `Success
-    | _ -> `Failed
-  in
-{ status with layers; result } |> status_to_yojson |> Yojson.Safe.to_file (Os.path [ Config.dir; "results"; commit; compiler.version; "status"; status.package ])
+let package = OpamPackage.of_string "ocamlformat.0.27.0"
 let package = OpamPackage.of_string "0install.2.18"
-let package = OpamPackage.of_string "lwt.5.9.1"
 *)
 
-let package = OpamPackage.of_string "ocamlformat.0.27.0"
+let package = OpamPackage.of_string "merlin.5.4.1-503"
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 let _ = build ocaml_version package
