@@ -7,50 +7,50 @@ module Role_map = Output.RoleMap
 let _ =
   let root = Os.path [ Config.dir; "root" ] in
   if not (Sys.file_exists root) then
-    Os.create_directory_exclusively root (fun target_dir ->
-        let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
-        let rootfs = Os.path [ temp_dir; "rootfs" ] in
-        let () = Os.mkdir rootfs in
-        let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
-        let opam = Os.path [ rootfs; "/usr/local/bin/opam" ] in
-        let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
-        let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
-        let _ = Os.sudo [ "cp"; "/home/mtelvers/opam_build/_build/default/bin/main.exe"; Os.path [ rootfs; "/usr/local/bin/opam-build" ] ] in
-        let _ = Os.sudo [ "cp"; "/home/mtelvers/opamh/_build/default/opamh.exe"; Os.path [ rootfs; "/usr/local/bin/opamh" ] ] in
-        let etc_hosts = Os.path [ temp_dir; "hosts" ] in
-        let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
-        let argv =
+    Os.create_directory_exclusively root @@ fun target_dir ->
+    let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
+    let rootfs = Os.path [ temp_dir; "rootfs" ] in
+    let () = Os.mkdir rootfs in
+    let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
+    let opam = Os.path [ rootfs; "/usr/local/bin/opam" ] in
+    let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
+    let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
+    let _ = Os.sudo [ "cp"; "/home/mtelvers/opam_build/_build/default/bin/main.exe"; Os.path [ rootfs; "/usr/local/bin/opam-build" ] ] in
+    let _ = Os.sudo [ "cp"; "/home/mtelvers/opamh/_build/default/opamh.exe"; Os.path [ rootfs; "/usr/local/bin/opamh" ] ] in
+    let etc_hosts = Os.path [ temp_dir; "hosts" ] in
+    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
+    let argv =
+      [
+        "/usr/bin/env";
+        "bash";
+        "-c";
+        String.concat " && "
           [
-            "/usr/bin/env";
-            "bash";
-            "-c";
-            String.concat " && "
-              [
-                "apt update";
-                "apt upgrade -y";
-                "apt install build-essential unzip bubblewrap git sudo curl rsync -y";
-                "adduser --disabled-password --gecos '@opam' --no-create-home --home /home/opam opam";
-                "chown -R $(id -u opam):$(id -g opam) /home/opam";
-                {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
-                "su - opam -c 'mkdir opam-repository'";
-                {|su - opam -c 'echo opam-version: \"2.0\" > opam-repository/repo'|};
-                "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare -y'";
-                "su - opam -c 'opam switch create default --empty'";
-              ];
-          ]
-        in
-        let mounts =
-          [
-            { Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-            (* { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
-          ]
-        in
-        let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:0 ~gid:0 ~env:Config.env ~mounts ~network:true in
-        let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
-        let build_log = Os.path [ temp_dir; "build.log" ] in
-        let _ = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-        let _ = Os.sudo [ "rm"; "-f"; Os.path [ rootfs; "/home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
-        Unix.rename temp_dir target_dir)
+            "apt update";
+            "apt upgrade -y";
+            "apt install build-essential unzip bubblewrap git sudo curl rsync -y";
+            "adduser --disabled-password --gecos '@opam' --no-create-home --home /home/opam opam";
+            "chown -R $(id -u opam):$(id -g opam) /home/opam";
+            {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
+            "su - opam -c 'mkdir opam-repository'";
+            {|su - opam -c 'echo opam-version: \"2.0\" > opam-repository/repo'|};
+            "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare -y'";
+            "su - opam -c 'opam switch create default --empty'";
+          ];
+      ]
+    in
+    let mounts =
+      [
+        { Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+        (* { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
+      ]
+    in
+    let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:0 ~gid:0 ~env:Config.env ~mounts ~network:true in
+    let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
+    let build_log = Os.path [ temp_dir; "build.log" ] in
+    let _ = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+    let _ = Os.sudo [ "rm"; "-f"; Os.path [ rootfs; "/home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
+    Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
 let root = OpamStateConfig.opamroot ()
@@ -184,68 +184,65 @@ let build_layer solution dependencies pkg =
   let layer_dir = Os.path [ Config.dir; hash ] in
   let () = Printf.printf "layer_dir %s\n%!" layer_dir in
   if not (Sys.file_exists layer_dir) then
-    Os.create_directory_exclusively layer_dir (fun target_dir ->
-        let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
-        let () = Printf.printf "temp_dir %s\n%!" temp_dir in
-        let argv =
+    Os.create_directory_exclusively layer_dir @@ fun target_dir ->
+    let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
+    let () = Printf.printf "temp_dir %s\n%!" temp_dir in
+    let argv =
+      [
+        "/usr/bin/env";
+        "bash";
+        "-c";
+        String.concat " && "
           [
-            "/usr/bin/env";
-            "bash";
-            "-c";
-            String.concat " && "
-              [
-                "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh make-state --output=$HOME/.opam/default/.opam-switch/switch-state \
-                 --quiet; fi";
-                "opam-build -v " ^ OpamPackage.to_string pkg;
-              ];
-          ]
-        in
-        let workdir = Os.path [ temp_dir; "work" ] in
-        let () = Os.mkdir workdir in
-        let lowerdir = Os.path [ Config.dir; "root"; "rootfs" ] in
-        let upperdir = Os.path [ temp_dir; "fs" ] in
-        let () = Os.mkdir upperdir in
-        let () =
-          OpamPackage.Set.iter
-            (fun dep ->
-              assert (
-                0
-                = Os.sudo
-                    [
-                      "cp";
-                      (* "--no-clobber"; *)
-                      "--update=none";
-                      "--archive";
-                      "--no-dereference";
-                      "--recursive";
-                      "--link";
-                      "--no-target-directory";
-                      Os.path [ Config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
-                      upperdir;
-                    ]))
-            deps
-        in
-        let etc_hosts = Os.path [ temp_dir; "hosts" ] in
-        let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
-        let mounts =
-          [
-            { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
-            { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
-            { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-          ]
-        in
-        let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
-        let config =
-          Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:1000 ~gid:1000 ~env:Config.env ~mounts ~network:true
-        in
-        let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
-        let build_log = Os.path [ temp_dir; "build.log" ] in
-        let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-        let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
-        let () = if result = 0 then Os.write_to_file (Os.path [ temp_dir; "good" ]) "" else Os.write_to_file (Os.path [ temp_dir; "bad" ]) "" in
-        let () = Unix.rename temp_dir target_dir in
-        let _ = { layer with result } in
-        ())
+            "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh make-state --output=$HOME/.opam/default/.opam-switch/switch-state --quiet; fi";
+            "opam-build -v " ^ OpamPackage.to_string pkg;
+          ];
+      ]
+    in
+    let workdir = Os.path [ temp_dir; "work" ] in
+    let () = Os.mkdir workdir in
+    let lowerdir = Os.path [ Config.dir; "root"; "rootfs" ] in
+    let upperdir = Os.path [ temp_dir; "fs" ] in
+    let () = Os.mkdir upperdir in
+    let () =
+      OpamPackage.Set.iter
+        (fun dep ->
+          assert (
+            0
+            = Os.sudo
+                [
+                  "cp";
+                  (* "--no-clobber"; *)
+                  "--update=none";
+                  "--archive";
+                  "--no-dereference";
+                  "--recursive";
+                  "--link";
+                  "--no-target-directory";
+                  Os.path [ Config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
+                  upperdir;
+                ]))
+        deps
+    in
+    let etc_hosts = Os.path [ temp_dir; "hosts" ] in
+    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
+    let mounts =
+      [
+        { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
+        { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
+        { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+      ]
+    in
+    let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
+    let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:1000 ~gid:1000 ~env:Config.env ~mounts ~network:true in
+    let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
+    let build_log = Os.path [ temp_dir; "build.log" ] in
+    let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+    let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
+    let () = if result = 0 then Os.write_to_file (Os.path [ temp_dir; "good" ]) "" else Os.write_to_file (Os.path [ temp_dir; "bad" ]) "" in
+    let () = Unix.rename temp_dir target_dir in
+    let _ = { layer with result } in
+    ()
   else ()
 
 let build ocaml_version package =
