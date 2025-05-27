@@ -3,4 +3,5 @@
  (name main)
  (libraries opam-0install yojson tyxml ppx_deriving_yojson.runtime)
  (preprocess
-  (pps ppx_deriving_yojson)))
+  (pps ppx_deriving_yojson))
+ (modules_without_implementation git_context))

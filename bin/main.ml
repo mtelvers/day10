@@ -1,4 +1,4 @@
-module Solver = Opam_0install.Solver.Make (Opam_0install.Dir_context)
+module Solver = Opam_0install.Solver.Make (Dir_context)
 module Input = Solver.Input
 module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
@@ -57,11 +57,7 @@ let () = OpamFormatConfig.init ()
 let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
-let std_env = Opam_0install.Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
-
-let opam_file pkg =
-  let opam_path = Os.path [ Config.opam_repository; "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
-  OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+let std_env = Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 
 let env pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
@@ -81,7 +77,12 @@ let solve ocaml_version pkg =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.name ocaml_version, (`Eq, OpamPackage.version ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let context = Opam_0install.Dir_context.create ~env:std_env ~constraints (Os.path [ Config.opam_repository; "packages" ]) in
+  let pins =
+    OpamPackage.Name.Map.empty |>
+    OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10") (OpamPackage.Version.of_string "5",
+    OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw "/home/mtelvers/day10/day10.opam")))
+  in
+  let context = Dir_context.create ~env:std_env ~constraints ~pins (Os.path [ Config.opam_repository; "packages" ]) in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -114,7 +115,7 @@ let solve ocaml_version pkg =
       let deptree =
         OpamPackage.Set.fold
           (fun pkg acc ->
-            let opam = opam_file pkg in
+            let opam = Dir_context.load context pkg in
             let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (env pkg) in
             let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
             let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
@@ -176,7 +177,7 @@ let build_layer solution dependencies pkg =
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
-    let () = Os.write_to_file (Os.path [ layer_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
+    let () = Os.write_to_file (Os.path [ temp_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
     let argv =
       [
         "/usr/bin/env";
@@ -252,8 +253,9 @@ let build ocaml_version package =
 (*
 let package = OpamPackage.of_string "ocamlformat.0.27.0"
 let package = OpamPackage.of_string "0install.2.18"
+let package = OpamPackage.of_string "merlin.5.4.1-503"
 *)
 
-let package = OpamPackage.of_string "merlin.5.4.1-503"
+let package = OpamPackage.of_string "day10.5"
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 let _ = build ocaml_version package
