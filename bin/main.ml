@@ -176,6 +176,7 @@ let build_layer solution dependencies pkg =
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
+    let () = Os.write_to_file (Os.path [ layer_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
     let argv =
       [
         "/usr/bin/env";
@@ -228,10 +229,12 @@ let build_layer solution dependencies pkg =
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
+    let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/sources" ] ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
+  let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
   Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string
 
 let build ocaml_version package =
