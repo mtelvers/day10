@@ -54,8 +54,8 @@ let _ =
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
-let root = OpamStateConfig.opamroot ()
-let _ = OpamStateConfig.load_defaults root
+(* let root = OpamStateConfig.opamroot ()
+let _ = OpamStateConfig.load_defaults root *)
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 
