@@ -79,7 +79,7 @@ let solve ocaml_version pkg =
   in
   let pins =
     OpamPackage.Name.Map.empty |>
-    OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10") (OpamPackage.Version.of_string "5",
+    OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10") (OpamPackage.Version.of_string "dev",
     OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw "/home/mtelvers/day10/day10.opam")))
   in
   let context = Dir_context.create ~env:std_env ~constraints ~pins (Os.path [ Config.opam_repository; "packages" ]) in
@@ -186,7 +186,8 @@ let build_layer solution dependencies pkg =
         String.concat " && "
           [
             "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh make-state --output=$HOME/.opam/default/.opam-switch/switch-state --quiet; fi";
-            "opam-build -v " ^ OpamPackage.to_string pkg;
+            "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/";
+            "cd src && opam-build -v " ^ OpamPackage.to_string pkg;
           ];
       ]
     in
@@ -222,6 +223,7 @@ let build_layer solution dependencies pkg =
         { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
         { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
         { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+        { ty = "bind"; src = "/home/mtelvers/day10"; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] };
       ]
     in
     let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
@@ -256,6 +258,6 @@ let package = OpamPackage.of_string "0install.2.18"
 let package = OpamPackage.of_string "merlin.5.4.1-503"
 *)
 
-let package = OpamPackage.of_string "day10.5"
+let package = OpamPackage.of_string "day10.dev"
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 let _ = build ocaml_version package
