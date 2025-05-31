@@ -16,7 +16,6 @@ let _ =
     let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
     let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
     let _ = Os.sudo [ "cp"; "/home/mtelvers/opam_build/_build/default/bin/main.exe"; Os.path [ rootfs; "/usr/local/bin/opam-build" ] ] in
-    let _ = Os.sudo [ "cp"; "/home/mtelvers/opamh/_build/default/opamh.exe"; Os.path [ rootfs; "/usr/local/bin/opamh" ] ] in
     let etc_hosts = Os.path [ temp_dir; "hosts" ] in
     let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
     let argv =
@@ -54,6 +53,7 @@ let _ =
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
+
 (* let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root *)
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
@@ -78,9 +78,9 @@ let solve ocaml_version pkg =
       [ (OpamPackage.name ocaml_version, (`Eq, OpamPackage.version ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
   let pins =
-    OpamPackage.Name.Map.empty |>
-    OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10") (OpamPackage.Version.of_string "dev",
-    OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw "/home/mtelvers/day10/day10.opam")))
+    OpamPackage.Name.Map.empty
+    |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10")
+         (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw "/home/mtelvers/day10/day10.opam")))
   in
   let context = Dir_context.create ~env:std_env ~constraints ~pins (Os.path [ Config.opam_repository; "packages" ]) in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
@@ -183,12 +183,7 @@ let build_layer solution dependencies pkg =
         "/usr/bin/env";
         "bash";
         "-c";
-        String.concat " && "
-          [
-            "if [ -e $HOME/.opam/default/.opam-switch/switch-state ] ; then opamh make-state --output=$HOME/.opam/default/.opam-switch/switch-state --quiet; fi";
-            "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/";
-            "cd src && opam-build -v " ^ OpamPackage.to_string pkg;
-          ];
+        String.concat " && " [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src && opam-build -v " ^ OpamPackage.to_string pkg ];
       ]
     in
     let workdir = Os.path [ temp_dir; "work" ] in
@@ -215,6 +210,10 @@ let build_layer solution dependencies pkg =
                   upperdir;
                 ]))
         deps
+    in
+    let () =
+      let default_switch = Os.path [ temp_dir; "fs"; "home"; "opam"; ".opam"; "default" ] in
+      if Sys.file_exists default_switch then Opamh.dump_state default_switch
     in
     let etc_hosts = Os.path [ temp_dir; "hosts" ] in
     let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
