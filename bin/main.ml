@@ -243,7 +243,7 @@ let build_layer config solution dependencies pkg =
     let mounts =
       match config.directory with
       | None -> mounts
-      | Some src -> { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } :: mounts
+      | Some src -> mounts @ [{ ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] }]
     in
     let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
     let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
