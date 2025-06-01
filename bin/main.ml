@@ -4,11 +4,30 @@ module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
-let _ =
-  let root = Os.path [ Config.dir; "root" ] in
+type config = {
+  dir : string;
+  opam_repository : string;
+  package : string;
+  directory : string option;
+}
+
+let hostname = "builder"
+
+let env =
+  [
+    ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
+    ("HOME", "/home/opam");
+    ("OPAMYES", "1");
+    ("OPAMCONFIRMLEVEL", "unsafe-yes");
+    ("OPAMERRLOGLEN", "0");
+    ("OPAMPRECISETRACKING", "1");
+  ]
+
+let init config =
+  let root = Os.path [ config.dir; "root" ] in
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
-    let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
+    let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let rootfs = Os.path [ temp_dir; "rootfs" ] in
     let () = Os.mkdir rootfs in
     let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
@@ -17,7 +36,7 @@ let _ =
     let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
     let _ = Os.sudo [ "cp"; "/home/mtelvers/opam_build/_build/default/bin/main.exe"; Os.path [ rootfs; "/usr/local/bin/opam-build" ] ] in
     let etc_hosts = Os.path [ temp_dir; "hosts" ] in
-    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
+    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
     let argv =
       [
         "/usr/bin/env";
@@ -41,10 +60,10 @@ let _ =
     let mounts =
       [
         { Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-        (* { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
+        (* { ty = "bind"; src = config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
       ]
     in
-    let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:0 ~gid:0 ~env:Config.env ~mounts ~network:true in
+    let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
@@ -59,7 +78,7 @@ let _ = OpamStateConfig.load_defaults root *)
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
 let std_env = Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 
-let env pkg v =
+let opam_env pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
   else *)
   match OpamVariable.Full.to_string v with
@@ -72,17 +91,20 @@ let env pkg v =
   | "build" -> Some (OpamTypes.B true)
   | x -> std_env x
 
-let solve ocaml_version pkg =
+let solve config ocaml_version pkg =
   let constraints =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.name ocaml_version, (`Eq, OpamPackage.version ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
   let pins =
-    OpamPackage.Name.Map.empty
-    |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string "day10")
-         (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw "/home/mtelvers/day10/day10.opam")))
+    match config.directory with
+    | None -> OpamPackage.Name.Map.empty
+    | Some directory ->
+        OpamPackage.Name.Map.empty
+        |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string config.package)
+             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ directory; config.package ^ ".opam" ]))))
   in
-  let context = Dir_context.create ~env:std_env ~constraints ~pins (Os.path [ Config.opam_repository; "packages" ]) in
+  let context = Dir_context.create ~env:std_env ~constraints ~pins (Os.path [ config.opam_repository; "packages" ]) in
   let r = Solver.solve context [ OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -116,7 +138,7 @@ let solve ocaml_version pkg =
         OpamPackage.Set.fold
           (fun pkg acc ->
             let opam = Dir_context.load context pkg in
-            let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (env pkg) in
+            let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (opam_env pkg) in
             let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
             let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
             let deppost = OpamPackage.Name.Set.diff with_post without_post in
@@ -167,28 +189,22 @@ let rec find_all_deps solution deps acc =
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
-let build_layer solution dependencies pkg =
+let build_layer config solution dependencies pkg =
   let () = Printf.printf "Layer %s: %!" (OpamPackage.to_string pkg) in
   let deps = OpamPackage.Map.find pkg solution in
   let alldeps = OpamPackage.Map.find pkg dependencies in
   let hash = hash_of_set alldeps in
-  let layer_dir = Os.path [ Config.dir; hash ] in
+  let layer_dir = Os.path [ config.dir; hash ] in
   let () = Printf.printf "layer_dir %s\n%!" layer_dir in
   let write_layer target_dir =
-    let temp_dir = Filename.temp_dir ~temp_dir:Config.dir ~perms:0o755 "temp-" "" in
+    let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
     let () = Os.write_to_file (Os.path [ temp_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
-    let argv =
-      [
-        "/usr/bin/env";
-        "bash";
-        "-c";
-        String.concat " && " [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src && opam-build -v " ^ OpamPackage.to_string pkg ];
-      ]
-    in
+    let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
+    let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
     let workdir = Os.path [ temp_dir; "work" ] in
     let () = Os.mkdir workdir in
-    let lowerdir = Os.path [ Config.dir; "root"; "rootfs" ] in
+    let lowerdir = Os.path [ config.dir; "root"; "rootfs" ] in
     let upperdir = Os.path [ temp_dir; "fs" ] in
     let () = Os.mkdir upperdir in
     let () =
@@ -206,7 +222,7 @@ let build_layer solution dependencies pkg =
                   "--recursive";
                   "--link";
                   "--no-target-directory";
-                  Os.path [ Config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
+                  Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
                   upperdir;
                 ]))
         deps
@@ -216,17 +232,21 @@ let build_layer solution dependencies pkg =
       if Sys.file_exists default_switch then Opamh.dump_state default_switch
     in
     let etc_hosts = Os.path [ temp_dir; "hosts" ] in
-    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ Config.hostname) in
+    let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
     let mounts =
       [
         { Json_config.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
-        { ty = "bind"; src = Config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
+        { ty = "bind"; src = config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
         { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-        { ty = "bind"; src = "/home/mtelvers/day10"; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] };
       ]
     in
+    let mounts =
+      match config.directory with
+      | None -> mounts
+      | Some src -> { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } :: mounts
+    in
     let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
-    let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname:Config.hostname ~uid:1000 ~gid:1000 ~env:Config.env ~mounts ~network:true in
+    let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
@@ -239,24 +259,88 @@ let build_layer solution dependencies pkg =
   let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
   Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string
 
-let build ocaml_version package =
-  let solution = solve ocaml_version package in
+let build config ocaml_version package =
+  let solution = solve config ocaml_version package in
   let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
   let ordered_installation = topological_sort solution in
   List.fold_left
     (fun lst pkg ->
       match lst with
-      | [] -> [ build_layer solution dependencies pkg ]
-      | acc :: _ when acc = 0 -> build_layer solution dependencies pkg :: lst
+      | [] -> [ build_layer config solution dependencies pkg ]
+      | acc :: _ when acc = 0 -> build_layer config solution dependencies pkg :: lst
       | _ -> lst)
     [] ordered_installation
 
-(*
-let package = OpamPackage.of_string "ocamlformat.0.27.0"
-let package = OpamPackage.of_string "0install.2.18"
-let package = OpamPackage.of_string "merlin.5.4.1-503"
-*)
-
-let package = OpamPackage.of_string "day10.dev"
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
-let _ = build ocaml_version package
+
+open Cmdliner
+
+let run_ci config =
+  init config;
+  let package = OpamPackage.of_string (config.package ^ ".dev") in
+  ignore (build config ocaml_version package)
+
+let run_health_check config =
+  init config;
+  let package = OpamPackage.of_string config.package in
+  ignore (build config ocaml_version package)
+
+let cache_dir_term =
+  let doc = "Directory to use for caching (required)" in
+  Arg.(required & opt (some string) None & info [ "cache-dir" ] ~docv:"DIR" ~doc)
+
+let opam_repository_term =
+  let doc = "Directory containing opam repository (required)" in
+  Arg.(required & opt (some string) None & info [ "opam-repository" ] ~docv:"OPAM-REPO" ~doc)
+
+let find_opam_files dir =
+  try
+    Sys.readdir dir |> Array.to_list |> List.filter_map (fun name -> if Filename.check_suffix name ".opam" then Some (Filename.remove_extension name) else None)
+  with
+  | Sys_error _ -> []
+
+let ci_cmd =
+  let directory_arg =
+    let doc = "Directory to test" in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"DIRECTORY" ~doc)
+  in
+  let ci_term =
+    Term.(
+      const (fun dir opam_repository directory -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory })
+      $ cache_dir_term $ opam_repository_term $ directory_arg)
+  in
+  let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
+  Cmd.v ci_info ci_term
+
+let health_check_cmd =
+  let package_arg =
+    let doc = "Package name to test" in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"PACKAGE" ~doc)
+  in
+  let health_check_term =
+    Term.(
+      const (fun dir opam_repository package -> run_health_check { dir; opam_repository; package; directory = None })
+      $ cache_dir_term $ opam_repository_term $ package_arg)
+  in
+  let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
+  Cmd.v health_check_info health_check_term
+
+let main_info =
+  let doc = "A tool for running CI and health checks" in
+  let man =
+    [
+      `S Manpage.s_description;
+      `P "This tool provides CI testing and health checking capabilities.";
+      `P "Use '$(mname) ci DIRECTORY' to run CI tests on a directory.";
+      `P "Use '$(mname) health-check PACKAGE' to run health checks on a package.";
+      `S Manpage.s_examples;
+      `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
+      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repository /tmp/opam-repository package";
+    ]
+  in
+  Cmd.info "day10" ~version:"0.0.1" ~doc ~man
+
+let () =
+  let default_term = Term.(ret (const (`Help (`Pager, None)))) in
+  let cmd = Cmd.group ~default:default_term main_info [ ci_cmd; health_check_cmd ] in
+  exit (Cmd.eval cmd)

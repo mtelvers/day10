@@ -1,7 +1,7 @@
 (executable
  (public_name day10)
  (name main)
- (libraries opam-0install yojson ppx_deriving_yojson.runtime)
+ (libraries opam-0install yojson ppx_deriving_yojson.runtime cmdliner)
  (preprocess
   (pps ppx_deriving_yojson))
  (modules_without_implementation git_context))
