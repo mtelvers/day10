@@ -76,7 +76,33 @@ let () = OpamFormatConfig.init ()
 (* let root = OpamStateConfig.opamroot ()
 let _ = OpamStateConfig.load_defaults root *)
 let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
-let std_env = Dir_context.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
+
+let std_env
+    ?(ocaml_native=true)
+    ?opam_version
+    ~arch ~os ~os_distribution ~os_family ~os_version
+    () =
+  function
+  | "arch" -> Some (OpamTypes.S arch)
+  | "os" -> Some (OpamTypes.S os)
+  | "os-distribution" -> Some (OpamTypes.S os_distribution)
+  | "os-version" -> Some (OpamTypes.S os_version)
+  | "os-family" -> Some (OpamTypes.S os_family)
+  | "opam-version"  -> Some (OpamVariable.S (Option.value ~default:OpamVersion.(to_string current) opam_version))
+  (* There is no system compliler *)
+  | "sys-ocaml-arch"
+  | "sys-ocaml-cc"
+  | "sys-ocaml-libc"
+  | "sys-ocaml-system"
+  | "sys-ocaml-version" -> Some (OpamTypes.S "")
+  | "ocaml:native" -> Some (OpamTypes.B ocaml_native)
+  | "ocaml:version" -> Some (OpamTypes.S "5.3.0")
+  | "enable-ocaml-beta-repository" -> None      (* Fake variable? *)
+  | v ->
+    OpamConsole.warning "Unknown variable %S" v;
+    None
+
+let std_env = std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
 
 let opam_env pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
@@ -89,6 +115,7 @@ let opam_env pkg v =
   | "with-doc" ->
       Some (OpamTypes.B false)
   | "build" -> Some (OpamTypes.B true)
+  | "post" -> None
   | x -> std_env x
 
 let solve config ocaml_version pkg =
@@ -142,6 +169,7 @@ let solve config ocaml_version pkg =
             let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
             let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
             let deppost = OpamPackage.Name.Set.diff with_post without_post in
+let () = Printf.printf "deppost %s\n%!" (OpamPackage.Name.Set.to_string deppost) in
             let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
             let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
             let name = OpamPackage.name pkg in
