@@ -133,3 +133,53 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
                 @ [ ("architectures", strings [ "SCMP_ARCH_X86_64"; "SCMP_ARCH_X86"; "SCMP_ARCH_X32" ]) ]) );
           ] );
     ]
+
+let make_ctr ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
+  `Assoc
+    [
+      ("ociVersion", `String "1.1.0");
+      ( "process",
+        `Assoc
+          [
+            ("terminal", `Bool false);
+            ("user", `Assoc [ ("uid", `Int uid); ("gid", `Int gid) ]);
+            ("args", strings argv);
+            ("env", strings (List.map (fun (k, v) -> Printf.sprintf "%s=%s" k v) env));
+            ("cwd", `String cwd);
+          ] );
+      ("root", `Assoc [ ("path", `String ""); ("readonly", `Bool false) ]);
+      ("hostname", `String hostname);
+      (*
+      ( "mounts",
+        `List
+          (user_mounts mounts
+          @ [
+              mount "/proc" ~options:[ (* TODO: copy to others? *) "nosuid"; "noexec"; "nodev" ] ~ty:"proc" ~src:"proc";
+              mount "/tmp" ~ty:"tmpfs" ~src:"tmpfs" ~options:[ "nosuid"; "noatime"; "nodev"; "noexec"; "mode=1777" ];
+              mount "/dev" ~ty:"tmpfs" ~src:"tmpfs" ~options:[ "nosuid"; "strictatime"; "mode=755"; "size=65536k" ];
+              mount "/dev/pts" ~ty:"devpts" ~src:"devpts" ~options:[ "nosuid"; "noexec"; "newinstance"; "ptmxmode=0666"; "mode=0620"; "gid=5" (* tty *) ];
+              mount "/sys" (* This is how Docker does it. runc's default is a bit different. *) ~ty:"sysfs" ~src:"sysfs"
+                ~options:[ "nosuid"; "noexec"; "nodev"; "ro" ];
+              mount "/sys/fs/cgroup" ~ty:"cgroup" ~src:"cgroup" ~options:[ "ro"; "nosuid"; "noexec"; "nodev" ];
+              mount "/dev/shm" ~ty:"tmpfs" ~src:"shm" ~options:[ "nosuid"; "noexec"; "nodev"; "mode=1777"; "size=65536k" ];
+              mount "/dev/mqueue" ~ty:"mqueue" ~src:"mqueue" ~options:[ "nosuid"; "noexec"; "nodev" ];
+            ]
+          @ if network then [ mount "/etc/resolv.conf" ~ty:"bind" ~src:"/etc/resolv.conf" ~options:[ "ro"; "rbind"; "rprivate" ] ] else []) );
+          *)
+      ( "windows",
+        `Assoc
+          [
+            ( "layerFolders",
+              strings
+                [
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\23";
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\24";
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\25"
+                ] );
+            ("ignoreFlushesDuringBoot", `Bool true);
+            ("network", `Assoc [
+            ("allowUnqualifiedDNSQuery", `Bool true);
+                ]);
+          ] );
+    ]
+

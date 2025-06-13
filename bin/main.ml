@@ -28,8 +28,11 @@ let init config =
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-    let rootfs = Os.path [ temp_dir; "rootfs" ] in
+    let rootfs = Os.path [ temp_dir; "fs" ] in
     let () = Os.mkdir rootfs in
+    let build_log = Os.path [ temp_dir; "build.log" ] in
+            match Sys.win32 with
+            | false ->
     let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
     let opam = Os.path [ rootfs; "/usr/local/bin/opam" ] in
     let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
@@ -65,10 +68,32 @@ let init config =
     in
     let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
-    let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-f"; Os.path [ rootfs; "/home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    Unix.rename temp_dir target_dir
+            | true ->
+    let argv =
+      [
+        "cmd";
+        "/c";
+        String.concat " && "
+          [
+            "curl -L -o c:\\windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+            "opam init -y";
+          ];
+      ]
+    in
+    let mounts =
+      [
+        (*{ Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+         { ty = "bind"; src = config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
+      ]
+    in
+    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
+    let config_json = Os.path [ temp_dir; "config.json" ] in
+    let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
+    let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
@@ -232,7 +257,7 @@ let build_layer config solution dependencies pkg =
     let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
     let workdir = Os.path [ temp_dir; "work" ] in
     let () = Os.mkdir workdir in
-    let lowerdir = Os.path [ config.dir; "root"; "rootfs" ] in
+    let lowerdir = Os.path [ config.dir; "root"; "fs" ] in
     let upperdir = Os.path [ temp_dir; "fs" ] in
     let () = Os.mkdir upperdir in
     let () =

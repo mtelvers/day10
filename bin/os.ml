@@ -7,31 +7,23 @@ let sudo ?stdout ?stderr cmd =
   (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
+let exec ?stdout ?stderr cmd =
+  (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
+  Sys.command (Filename.quote_command ?stdout ?stderr (List.hd cmd) (List.tl cmd))
+
 let run cmd =
   let inp = Unix.open_process_in cmd in
   let r = In_channel.input_all inp in
   In_channel.close inp;
   r
 
-let nproc = run "nproc" |> String.trim |> int_of_string
+let nproc () = run "nproc" |> String.trim |> int_of_string
 let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
-
-let mkdir_p path =
-  String.split_on_char '/' path
-  |> List.filter (fun s -> String.length s > 0)
-  |> List.fold_left
-       (fun acc el ->
-         let acc = acc ^ "/" ^ el in
-         if Sys.file_exists acc then acc
-         else
-           let () = Sys.mkdir acc 0o777 in
-           acc)
-       ""
 
 module IntSet = Set.Make (Int)
 
 let fork ?np f lst =
-  let nproc = Option.value ~default:nproc np in
+  let nproc = Option.value ~default:(nproc ()) np in
   List.fold_left
     (fun acc x ->
       let acc =
