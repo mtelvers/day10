@@ -1,53 +1,48 @@
-workdir = day29
-host = beta.tunbury.uk
+# Makefile for running health-checks on all available OPAM packages in parallel
+# Usage: make -j<N> all                                    (where N is the number of parallel jobs)
+#        make OUTPUT_DIR=/path/to/output all               (to specify custom output directory)
+#        make OPAM_REPO=/path/to/packages all              (to specify custom opam repository)
+#        make clean                                        (to remove markdown files)
 
-build:
-	dune fmt
-	dune build --release
 
-install:
-	dune fmt
-	dune build --release
-	ssh $(host) "rm -f main.exe"
-	scp _build/default/bin/main.exe $(host):
-	ssh $(host) "rm -f opamh.exe"
-	scp ../opamh/_build/default/opamh.exe $(host):
-	ssh $(host) "rm -f opam-build"
-	scp ../opam_build/_build/default/bin/main.exe $(host):opam-build
-	scp Makefile $(host):
-	scp setup.json $(host):
+# OS target
+SYSTEM := debian-12
 
-setup:	opam-repository
-	mkdir -p $(workdir)
-	sudo chown $$(id -u):$$(id -g) $(workdir)
-	mkdir -p download-cache
-	sudo chown 1000:1000 download-cache
-	mkdir -p $(workdir)/dummy
-	mkdir -p $(workdir)/work
-	mkdir -p $(workdir)/temp
-	sudo mkdir -p $(workdir)/rootfs
-	docker export $$(docker run -d debian:12) | sudo tar -C $(workdir)/rootfs -x
-	sudo cp opamh.exe $(workdir)/rootfs/usr/local/bin
-	sudo cp opam-build $(workdir)/rootfs/usr/local/bin
-	sudo curl -L https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux -o $(workdir)/rootfs/usr/local/bin/opam
-	sudo chmod +x $(workdir)/rootfs/usr/local/bin/opam
-	sudo chown -R 1000:1000 opam-repository
-	git config --global --add safe.directory /root/opam-repository
-	git -C opam-repository pull origin master
-	cp setup.json $(workdir)/config.json
-	sudo mkdir $(workdir)/rootfs/etc/sudoers.d
-	echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" | sudo tee $(workdir)/rootfs/etc/sudoers.d/opam
-	echo "127.0.0.1 localhost builder" > $(workdir)/hosts
-	sudo runc run --bundle $(workdir) setup
+# Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
+OUTPUT_DIR := .
 
-opam-repository:
-	git clone https://github.com/ocaml/opam-repository
+# Path to the opam repository root (for git operations) - can be overridden
+OPAM_REPO := /home/mtelvers/opam-repository
 
+# Get the git commit SHA of the opam repository
+OPAM_SHA := $(shell git -C $(OPAM_REPO) rev-parse HEAD 2>/dev/null || echo "unknown")
+
+# Get the list of packages dynamically by finding highest version for each package
+PACKAGES := $(shell for pkg in $(OPAM_REPO)/packages/*/; do ls "$$pkg" 2>/dev/null | sort -V | tail -1; done)
+
+# Create target names using .md suffix for markdown output in OPAM_SHA subdirectory
+TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .md, $(PACKAGES)))
+
+# Default target - depends on all package health-checks
+all: $(TARGETS)
+
+# Pattern rule for running health-check on each package and generating markdown
+# Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.md -> package
+$(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.md:
+	@mkdir -p $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
+	./_build/install/default/bin/day10 health-check --cache-dir /home/mtelvers/cache --opam-repository $(OPAM_REPO) --md $@ $(basename $(notdir $@))
+
+# Clean up markdown files
 clean:
-	sudo rm -rf $(workdir)
+	rm -rf $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
 
-%.pdf: %.dot
-	dot -Tpdf -o $@ $<
+# Show the list of packages that will be processed
+list:
+	@echo "Packages to process (from $(OPAM_REPO)/packages, output to $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/):"
+	@echo $(PACKAGES) | tr ' ' '\n'
 
-serve:
-	python3 -m http.server --directory day29/html/ --bind 0.0.0.0 8080
+# Count total packages
+count:
+	@echo "Total packages: $(words $(PACKAGES))"
+
+.PHONY: all clean list count

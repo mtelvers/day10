@@ -135,6 +135,7 @@ let opam_env pkg v =
   match OpamVariable.Full.to_string v with
   | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
   | "with-test"
+  | "with-dev"
   | "with-dev-setup"
   | "dev"
   | "with-doc" ->
@@ -349,9 +350,12 @@ open Cmdliner
 let output config results = function
   | Some filename ->
     let oc = open_out filename in
-    let () = Printf.fprintf oc "---\nstatus: %s\npackage: %s\n---\n\n"
+    let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
+    let opam_repo_sha = Os.run cmd |> String.trim in
+    let () = Printf.fprintf oc "---\nstatus: %s\nsystem: %s\ncommit: %s\npackage: %s\n---\n\n"
       (build_result_to_string (List.hd results))
-      config.package in
+      ("debian-12-x86_64")
+      opam_repo_sha config.package in
     let () = List.rev results |> List.iter (function
       | Success log
       | Failure log -> output_string oc log
