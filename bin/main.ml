@@ -346,32 +346,31 @@ let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (Opa
 
 open Cmdliner
 
+let output config results = function
+  | Some filename ->
+    let oc = open_out filename in
+    let () = Printf.fprintf oc "---\nstatus: %s\npackage: %s\n---\n\n"
+      (build_result_to_string (List.hd results))
+      config.package in
+    let () = List.rev results |> List.iter (function
+      | Success log
+      | Failure log -> output_string oc log
+      | _ -> ()) in
+    close_out oc
+  | None ->
+    print_string (build_result_to_string (List.hd results))
+
 let run_ci config md =
   init config;
   let package = OpamPackage.of_string (config.package ^ ".dev") in
   let results = build config ocaml_version package in
-  if md then
-    Printf.printf "---\nstatus: %s\npackage: %s\n---\n"
-      (build_result_to_string (List.hd results))
-      config.package
-  else
-    Printf.printf "CI result: %s\n" (build_result_to_string (List.hd results))
+  output config results md
 
 let run_health_check config md =
   init config;
   let package = OpamPackage.of_string config.package in
   let results = build config ocaml_version package in
-  if md then
-    let () = Printf.printf "---\nstatus: %s\npackage: %s\n---\n"
-      (build_result_to_string (List.hd results))
-      config.package in
-    List.rev results |> List.iter (function
-        | Success log
-        | Failure log -> print_endline log
-        | _ -> ()
-      )
-  else
-    Printf.printf "Health check result: %s\n" (build_result_to_string (List.hd results))
+  output config results md
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
@@ -383,7 +382,7 @@ let opam_repository_term =
 
 let md_term =
   let doc = "Output results in markdown format" in
-  Arg.(value & flag & info ["md"] ~doc)
+  Arg.(value & opt (some string) None & info ["md"] ~docv:"FILE" ~doc)
 
 let find_opam_files dir =
   try
