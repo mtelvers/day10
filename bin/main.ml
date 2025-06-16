@@ -194,7 +194,6 @@ let solve config ocaml_version pkg =
             let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
             let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
             let deppost = OpamPackage.Name.Set.diff with_post without_post in
-let () = Printf.printf "deppost %s\n%!" (OpamPackage.Name.Set.to_string deppost) in
             let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
             let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
             let name = OpamPackage.name pkg in
@@ -241,6 +240,18 @@ let rec find_all_deps solution deps acc =
     deps acc
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
+
+type build_result =
+  | No_solution
+  | Dependency_failed
+  | Failure of string
+  | Success of string
+
+let build_result_to_string = function
+  | No_solution -> "no_solution"
+  | Dependency_failed -> "dependency_failed"
+  | Failure _ -> "failure"
+  | Success _ -> "success"
 
 let build_layer config solution dependencies pkg =
   let () = Printf.printf "Layer %s: %!" (OpamPackage.to_string pkg) in
@@ -310,33 +321,57 @@ let build_layer config solution dependencies pkg =
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
   let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
-  Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string
+  let exit_status = Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string in
+  let log = Os.read_from_file (Os.path [ layer_dir; "build.log" ]) in
+  match exit_status with
+  | 0 -> Success log
+  | _ -> Failure log
 
 let build config ocaml_version package =
   let solution = solve config ocaml_version package in
-  let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
-  let ordered_installation = topological_sort solution in
-  List.fold_left
-    (fun lst pkg ->
-      match lst with
-      | [] -> [ build_layer config solution dependencies pkg ]
-      | acc :: _ when acc = 0 -> build_layer config solution dependencies pkg :: lst
-      | _ -> lst)
-    [] ordered_installation
+  if OpamPackage.Map.is_empty solution then
+    [ No_solution ]
+  else
+    let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
+    let ordered_installation = topological_sort solution in
+    List.fold_left
+      (fun lst pkg ->
+        match lst with
+        | [] -> [ build_layer config solution dependencies pkg ]
+        | Success _ :: _ -> build_layer config solution dependencies pkg :: lst
+        | _ -> Dependency_failed :: lst)
+      [] ordered_installation
 
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 
 open Cmdliner
 
-let run_ci config =
+let run_ci config md =
   init config;
   let package = OpamPackage.of_string (config.package ^ ".dev") in
-  ignore (build config ocaml_version package)
+  let results = build config ocaml_version package in
+  if md then
+    Printf.printf "---\nstatus: %s\npackage: %s\n---\n"
+      (build_result_to_string (List.hd results))
+      config.package
+  else
+    Printf.printf "CI result: %s\n" (build_result_to_string (List.hd results))
 
-let run_health_check config =
+let run_health_check config md =
   init config;
   let package = OpamPackage.of_string config.package in
-  ignore (build config ocaml_version package)
+  let results = build config ocaml_version package in
+  if md then
+    let () = Printf.printf "---\nstatus: %s\npackage: %s\n---\n"
+      (build_result_to_string (List.hd results))
+      config.package in
+    List.rev results |> List.iter (function
+        | Success log
+        | Failure log -> print_endline log
+        | _ -> ()
+      )
+  else
+    Printf.printf "Health check result: %s\n" (build_result_to_string (List.hd results))
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
@@ -345,6 +380,10 @@ let cache_dir_term =
 let opam_repository_term =
   let doc = "Directory containing opam repository (required)" in
   Arg.(required & opt (some string) None & info [ "opam-repository" ] ~docv:"OPAM-REPO" ~doc)
+
+let md_term =
+  let doc = "Output results in markdown format" in
+  Arg.(value & flag & info ["md"] ~doc)
 
 let find_opam_files dir =
   try
@@ -359,8 +398,8 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir opam_repository directory -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory })
-      $ cache_dir_term $ opam_repository_term $ directory_arg)
+      const (fun dir opam_repository directory md -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory } md)
+      $ cache_dir_term $ opam_repository_term $ directory_arg $ md_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -372,8 +411,8 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir opam_repository package -> run_health_check { dir; opam_repository; package; directory = None })
-      $ cache_dir_term $ opam_repository_term $ package_arg)
+      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None } md)
+      $ cache_dir_term $ opam_repository_term $ package_arg $ md_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term
@@ -386,9 +425,10 @@ let main_info =
       `P "This tool provides CI testing and health checking capabilities.";
       `P "Use '$(mname) ci DIRECTORY' to run CI tests on a directory.";
       `P "Use '$(mname) health-check PACKAGE' to run health checks on a package.";
+      `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
-      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repository /tmp/opam-repository package";
+      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repository /tmp/opam-repository package --md";
     ]
   in
   Cmd.info "day10" ~version:"0.0.1" ~doc ~man
