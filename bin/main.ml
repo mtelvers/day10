@@ -23,6 +23,15 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
+let win_env =
+  [
+    ("Path", "C:\\Windows\\system32;C:\\Windows;C:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\.cygwin\\root\\usr\\i686-w64-mingw32\\sys-root\\mingw\\bin;C:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\.cygwin\\root\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Users\\ContainerAdministrator\\AppData\\Local\\Microsoft\\WindowsApps");
+    ("OPAMYES", "1");
+    ("OPAMCONFIRMLEVEL", "unsafe-yes");
+    ("OPAMERRLOGLEN", "0");
+    ("OPAMPRECISETRACKING", "1");
+  ]
+
 let init config =
   let root = Os.path [ config.dir; "root" ] in
   if not (Sys.file_exists root) then
@@ -30,6 +39,9 @@ let init config =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let rootfs = Os.path [ temp_dir; "fs" ] in
     let () = Os.mkdir rootfs in
+    let opam_repository = Os.path [ temp_dir; "opam-repository" ] in
+    let () = Os.mkdir opam_repository in
+    let () = Os.write_to_file (Os.path [ opam_repository; "repo" ]) {|opam-version: "2.0"|} in
     let build_log = Os.path [ temp_dir; "build.log" ] in
             match Sys.win32 with
             | false ->
@@ -53,8 +65,6 @@ let init config =
             "adduser --disabled-password --gecos '@opam' --no-create-home --home /home/opam opam";
             "chown -R $(id -u opam):$(id -g opam) /home/opam";
             {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
-            "su - opam -c 'mkdir opam-repository'";
-            {|su - opam -c 'echo opam-version: \"2.0\" > opam-repository/repo'|};
             "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare -y'";
             "su - opam -c 'opam switch create default --empty'";
           ];
@@ -63,13 +73,13 @@ let init config =
     let mounts =
       [
         { Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-        (* { ty = "bind"; src = config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
+        { ty = "bind"; src = opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
       ]
     in
     let config = Json_config.make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-    let _ = Os.sudo [ "rm"; "-f"; Os.path [ rootfs; "/home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
+    let _ = Os.rm (Os.path [ rootfs; "home"; "opam"; ".opam"; "repo"; "state-33BF9E46.cache" ] ) in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
             | true ->
@@ -79,21 +89,28 @@ let init config =
         "/c";
         String.concat " && "
           [
-            "curl -L -o c:\\windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
-            "opam init -y";
+            "set";
+            "curl.exe -L -o c:\\windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+            "curl.exe -L -o c:\\windows\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
+            (* "net user opam /nopassword /add"; *)
+            "opam init -k local -a c:\\opam-repository --bare -y";
+            "opam switch create default --empty";
           ];
       ]
     in
     let mounts =
       [
-        (*{ Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-         { ty = "bind"; src = config.opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] }; *)
+        { Json_config.ty = "bind"; src = rootfs; dst = "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam"; options = [ "rw"; "rbind"; "rprivate" ] };
+        (*{ Json_config.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] }; *)
+        { ty = "bind"; src = opam_repository; dst = "c:\\opam-repository"; options = [ "rbind"; "rprivate" ] };
       ]
     in
-    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
+    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:true in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
-    let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
+    let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
+    let _ = Os.rm (Os.path [ rootfs; "repo"; "state-33BF9E46.cache" ] ) in
+    let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
@@ -127,7 +144,9 @@ let std_env
     OpamConsole.warning "Unknown variable %S" v;
     None
 
-let std_env = std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
+let std_env = match Sys.win32 with
+  | false -> std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
+  | true -> std_env ~arch:"x86_64" ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ()
 
 let opam_env pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
@@ -265,13 +284,17 @@ let build_layer config solution dependencies pkg =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
     let () = Os.write_to_file (Os.path [ temp_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
+    let lowerdir = Os.path [ config.dir; "root"; "fs" ] in
+    let upperdir = Os.path [ temp_dir; "fs" ] in
+    let build_log = Os.path [ temp_dir; "build.log" ] in
+    let () = Os.mkdir upperdir in
+    (
+            match Sys.win32 with
+            | false ->
     let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
     let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
     let workdir = Os.path [ temp_dir; "work" ] in
     let () = Os.mkdir workdir in
-    let lowerdir = Os.path [ config.dir; "root"; "fs" ] in
-    let upperdir = Os.path [ temp_dir; "fs" ] in
-    let () = Os.mkdir upperdir in
     let () =
       OpamPackage.Set.iter
         (fun dep ->
@@ -313,12 +336,48 @@ let build_layer config solution dependencies pkg =
     let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
     let config = Json_config.make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
     let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
-    let build_log = Os.path [ temp_dir; "build.log" ] in
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/sources" ] ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
+            | true ->
+    let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
+    let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
+    let robocopy_log = Os.path [ temp_dir; "robocopy.log" ] in
+    let robocopy = [ "robocopy"; "/e"; "/mt"; "/r:0"; "/np"; "/log:" ^ robocopy_log ] in
+    let _ = Os.exec ~stdout:"NUL" (robocopy @ [ Os.path [ config.dir; "root"; "fs" ]; upperdir; ]) in
+    let () =
+      OpamPackage.Set.iter
+        (fun dep ->
+          assert (
+            16
+            > Os.exec ~stdout:"NUL"
+            (robocopy @
+                [
+                  Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
+                  upperdir;
+                ])))
+        deps
+    in
+
+    let () =
+      let default_switch = Os.path [ temp_dir; "fs"; "default" ] in
+      if Sys.file_exists default_switch then Opamh.dump_state default_switch
+    in
+    let mounts =
+      [
+        { Json_config.ty = "bind"; src = upperdir; dst = "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam"; options = [ "rw"; "rbind"; "rprivate" ] };
+        { ty = "bind"; src = config.opam_repository; dst = "c:\\users\\ContainerAdministrator\\AppData\\Local\\opam\\repo\\default"; options = [ "rbind"; "rprivate" ] };
+      ]
+    in
+    let config = Json_config.make_ctr ~root:upperdir ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:true in
+    let config_json = Os.path [ temp_dir; "config.json" ] in
+    let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
+    let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
+    let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    Unix.rename temp_dir target_dir
+    )
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
   let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
@@ -352,9 +411,8 @@ let output config results = function
     let oc = open_out filename in
     let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
     let opam_repo_sha = Os.run cmd |> String.trim in
-    let () = Printf.fprintf oc "---\nstatus: %s\nsystem: %s\ncommit: %s\npackage: %s\n---\n\n"
+    let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n\n"
       (build_result_to_string (List.hd results))
-      ("debian-12-x86_64")
       opam_repo_sha config.package in
     let () = List.rev results |> List.iter (function
       | Success log

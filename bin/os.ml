@@ -19,6 +19,7 @@ let run cmd =
 
 let nproc () = run "nproc" |> String.trim |> int_of_string
 let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
+let rm path = if (Sys.file_exists path) then Unix.unlink path
 
 module IntSet = Set.Make (Int)
 

@@ -19,5 +19,4 @@ winget install ocaml.opam --scope machine
 ```
 
 dune build
-_build\install\default\bin\day10 health-check --cache-dir c:\cache --opam-repository c:\users\markopam-repository 0install.2.18
-
+_build\install\default\bin\day10.exe health-check --cache-dir c:\Users\Administrator\cache --opam-repository c:\Users\Administrator\opam-repository 0install.2.18

@@ -149,36 +149,21 @@ let make_ctr ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson
           ] );
       ("root", `Assoc [ ("path", `String ""); ("readonly", `Bool false) ]);
       ("hostname", `String hostname);
-      (*
-      ( "mounts",
-        `List
-          (user_mounts mounts
-          @ [
-              mount "/proc" ~options:[ (* TODO: copy to others? *) "nosuid"; "noexec"; "nodev" ] ~ty:"proc" ~src:"proc";
-              mount "/tmp" ~ty:"tmpfs" ~src:"tmpfs" ~options:[ "nosuid"; "noatime"; "nodev"; "noexec"; "mode=1777" ];
-              mount "/dev" ~ty:"tmpfs" ~src:"tmpfs" ~options:[ "nosuid"; "strictatime"; "mode=755"; "size=65536k" ];
-              mount "/dev/pts" ~ty:"devpts" ~src:"devpts" ~options:[ "nosuid"; "noexec"; "newinstance"; "ptmxmode=0666"; "mode=0620"; "gid=5" (* tty *) ];
-              mount "/sys" (* This is how Docker does it. runc's default is a bit different. *) ~ty:"sysfs" ~src:"sysfs"
-                ~options:[ "nosuid"; "noexec"; "nodev"; "ro" ];
-              mount "/sys/fs/cgroup" ~ty:"cgroup" ~src:"cgroup" ~options:[ "ro"; "nosuid"; "noexec"; "nodev" ];
-              mount "/dev/shm" ~ty:"tmpfs" ~src:"shm" ~options:[ "nosuid"; "noexec"; "nodev"; "mode=1777"; "size=65536k" ];
-              mount "/dev/mqueue" ~ty:"mqueue" ~src:"mqueue" ~options:[ "nosuid"; "noexec"; "nodev" ];
-            ]
-          @ if network then [ mount "/etc/resolv.conf" ~ty:"bind" ~src:"/etc/resolv.conf" ~options:[ "ro"; "rbind"; "rprivate" ] ] else []) );
-          *)
+      ( "mounts", `List (user_mounts mounts));
       ( "windows",
         `Assoc
           [
             ( "layerFolders",
               strings
                 [
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\23";
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\24";
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\25"
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\4";
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\3";
+                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\10"
                 ] );
             ("ignoreFlushesDuringBoot", `Bool true);
             ("network", `Assoc [
             ("allowUnqualifiedDNSQuery", `Bool true);
+            ("networkNamespace", `String "b787c9cf-7d58-45d4-951d-dd8f40c0fc40");
                 ]);
           ] );
     ]
