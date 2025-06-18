@@ -344,20 +344,13 @@ let build_layer config solution dependencies pkg =
             | true ->
     let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
     let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
-    let robocopy_log = Os.path [ temp_dir; "robocopy.log" ] in
-    let robocopy = [ "robocopy"; "/e"; "/mt"; "/r:0"; "/np"; "/log:" ^ robocopy_log ] in
-    let _ = Os.exec ~stdout:"NUL" (robocopy @ [ Os.path [ config.dir; "root"; "fs" ]; upperdir; ]) in
+    let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target:upperdir in
     let () =
       OpamPackage.Set.iter
         (fun dep ->
-          assert (
-            16
-            > Os.exec ~stdout:"NUL"
-            (robocopy @
-                [
-                  Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
-                  upperdir;
-                ])))
+          Os.hardlink_tree
+            ~source:(Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs"])
+              ~target:upperdir)
         deps
     in
 
@@ -376,6 +369,7 @@ let build_layer config solution dependencies pkg =
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    let _ = Os.rm (Os.path [ upperdir; "repo"; "state-33BF9E46.cache" ] ) in
     Unix.rename temp_dir target_dir
     )
   in

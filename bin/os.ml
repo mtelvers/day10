@@ -67,3 +67,28 @@ let create_directory_exclusively dir_name write_function =
       (try Unix.unlink lock_file with
       | _ -> ());
       raise e
+
+let hardlink_tree ~source ~target =
+  let rec process_directory current_source current_target =
+    let entries = Sys.readdir current_source in
+    Array.iter (fun entry ->
+      let source = Filename.concat current_source entry in
+      let target = Filename.concat current_target entry in
+      try
+        let stat = Unix.stat source in
+        match stat.st_kind with
+        | Unix.S_LNK
+        | Unix.S_REG ->
+          if not (Sys.file_exists target) then
+            Unix.link source target
+        | Unix.S_DIR ->
+          mkdir target;
+          process_directory source target
+        | _ ->
+          ()
+      with
+      | Unix.Unix_error _ ->
+          ()
+    ) entries
+  in
+  process_directory source target
