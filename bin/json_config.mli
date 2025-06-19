@@ -26,6 +26,6 @@ val make_ctr :
   gid:int ->
   env:(string * string) list ->
   mounts:mount list ->
-  network:bool ->
+  network:string ->
   Yojson.Safe.t
 

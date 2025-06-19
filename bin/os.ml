@@ -54,19 +54,11 @@ let fork ?np f lst =
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
-  try
-    Unix.lockf lock_fd F_LOCK 0;
-    if Sys.file_exists dir_name then Unix.close lock_fd
-    else (
-      write_function dir_name;
-      Unix.close lock_fd;
-      Unix.unlink lock_file)
-  with
-  | e ->
-      Unix.close lock_fd;
-      (try Unix.unlink lock_file with
-      | _ -> ());
-      raise e
+  Unix.lockf lock_fd F_LOCK 0;
+  if not (Sys.file_exists dir_name) then write_function dir_name;
+  Unix.close lock_fd;
+  try Unix.unlink lock_file with
+  | _ -> ()
 
 let hardlink_tree ~source ~target =
   let rec process_directory current_source current_target =

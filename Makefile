@@ -13,12 +13,15 @@ OUTPUT_DIR := .
 
 # Path to the opam repository root (for git operations) - can be overridden
 OPAM_REPO := /home/mtelvers/opam-repository
+#
+# Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
+CACHE_DIR := /home/mtelvers/cache
 
 # Get the git commit SHA of the opam repository
-OPAM_SHA := $(shell git -C $(OPAM_REPO) rev-parse HEAD 2>/dev/null || echo "unknown")
+OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "unknown")
 
-# Get the list of packages dynamically by finding highest version for each package
-PACKAGES := $(shell for pkg in $(OPAM_REPO)/packages/*/; do ls "$$pkg" 2>/dev/null | sort -V | tail -1; done)
+# Get the list of packages from opam
+PACKAGES := $(shell opam list --available --installable --columns=package --short 0*)
 
 # Create target names using .md suffix for markdown output in OPAM_SHA subdirectory
 TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .md, $(PACKAGES)))
@@ -30,7 +33,7 @@ all: $(TARGETS)
 # Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.md -> package
 $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.md:
 	@mkdir -p $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
-	./_build/install/default/bin/day10 health-check --cache-dir /home/mtelvers/cache --opam-repository $(OPAM_REPO) --md $@ $(basename $(notdir $@))
+	./_build/install/default/bin/day10 health-check --cache-dir $(CACHE_DIR) --opam-repository $(OPAM_REPO) --md $@ $(basename $(notdir $@))
 
 # Clean up markdown files
 clean:

@@ -163,7 +163,7 @@ let make_ctr ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson
             ("ignoreFlushesDuringBoot", `Bool true);
             ("network", `Assoc [
             ("allowUnqualifiedDNSQuery", `Bool true);
-            ("networkNamespace", `String "b787c9cf-7d58-45d4-951d-dd8f40c0fc40");
+            ("networkNamespace", `String network);
                 ]);
           ] );
     ]

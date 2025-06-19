@@ -12,6 +12,7 @@ type config = {
 }
 
 let hostname = "builder"
+let network = "c16ace7b-f5b1-4fc8-87ae-01290fd7ad74"
 
 let env =
   [
@@ -105,7 +106,7 @@ let init config =
         { ty = "bind"; src = opam_repository; dst = "c:\\opam-repository"; options = [ "rbind"; "rprivate" ] };
       ]
     in
-    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:true in
+    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
@@ -364,7 +365,7 @@ let build_layer config solution dependencies pkg =
         { ty = "bind"; src = config.opam_repository; dst = "c:\\users\\ContainerAdministrator\\AppData\\Local\\opam\\repo\\default"; options = [ "rbind"; "rprivate" ] };
       ]
     in
-    let config = Json_config.make_ctr ~root:upperdir ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:true in
+    let config = Json_config.make_ctr ~root:upperdir ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
