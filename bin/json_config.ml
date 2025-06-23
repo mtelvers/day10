@@ -134,7 +134,8 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
           ] );
     ]
 
-let make_ctr ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
+
+let make_ctr ~layers ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
   `Assoc
     [
       ("ociVersion", `String "1.1.0");
@@ -153,13 +154,7 @@ let make_ctr ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson
       ( "windows",
         `Assoc
           [
-            ( "layerFolders",
-              strings
-                [
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\4";
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\3";
-                  "C:\\ProgramData\\containerd\\root\\io.containerd.snapshotter.v1.windows\\snapshots\\10"
-                ] );
+            ( "layerFolders", strings layers);
             ("ignoreFlushesDuringBoot", `Bool true);
             ("network", `Assoc [
             ("allowUnqualifiedDNSQuery", `Bool true);

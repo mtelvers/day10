@@ -12,7 +12,7 @@ type config = {
 }
 
 let hostname = "builder"
-let network = "c16ace7b-f5b1-4fc8-87ae-01290fd7ad74"
+let network = "35b0b92b-d2a7-429b-92ad-4671880d25f2"
 
 let env =
   [
@@ -91,11 +91,11 @@ let init config =
         String.concat " && "
           [
             "set";
-            "curl.exe -L -o c:\\windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
-            "curl.exe -L -o c:\\windows\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
+            "curl.exe -L -o c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+            "curl.exe -L -o c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
             (* "net user opam /nopassword /add"; *)
-            "opam init -k local -a c:\\opam-repository --bare -y";
-            "opam switch create default --empty";
+            "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe init -k local -a c:\\opam-repository --bare -y";
+            "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe switch create default --empty";
           ];
       ]
     in
@@ -106,12 +106,17 @@ let init config =
         { ty = "bind"; src = opam_repository; dst = "c:\\opam-repository"; options = [ "rbind"; "rprivate" ] };
       ]
     in
-    let config = Json_config.make_ctr ~root:rootfs ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
+    let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
+    let _ = Os.retry_exec ~stdout:mounts_json [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ] in
+    let layers = Json_layers.read_layers mounts_json in
+    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
     let _ = Os.rm (Os.path [ rootfs; "repo"; "state-33BF9E46.cache" ] ) in
+    let _ = Os.rm (Os.path [ rootfs; "default"; ".opam-switch"; "lock" ] ) in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
@@ -344,7 +349,7 @@ let build_layer config solution dependencies pkg =
     Unix.rename temp_dir target_dir
             | true ->
     let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-    let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
+    let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]) ] in
     let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target:upperdir in
     let () =
       OpamPackage.Set.iter
@@ -365,12 +370,17 @@ let build_layer config solution dependencies pkg =
         { ty = "bind"; src = config.opam_repository; dst = "c:\\users\\ContainerAdministrator\\AppData\\Local\\opam\\repo\\default"; options = [ "rbind"; "rprivate" ] };
       ]
     in
-    let config = Json_config.make_ctr ~root:upperdir ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
+    let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
+    let _ = Os.retry_exec ~stdout:mounts_json [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ] in
+    let layers = Json_layers.read_layers mounts_json in
+    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
+    let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
     let _ = Os.rm (Os.path [ upperdir; "repo"; "state-33BF9E46.cache" ] ) in
+    let _ = Os.rm (Os.path [ upperdir; "default"; ".opam-switch"; "lock" ] ) in
     Unix.rename temp_dir target_dir
     )
   in

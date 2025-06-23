@@ -33,7 +33,7 @@ all: $(TARGETS)
 # Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.md -> package
 $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.md:
 	@mkdir -p $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
-	./_build/install/default/bin/day10 health-check --cache-dir $(CACHE_DIR) --opam-repository $(OPAM_REPO) --md $@ $(basename $(notdir $@))
+	./_build/install/default/bin/day10 health-check --cache-dir "$(CACHE_DIR)" --opam-repository "$(OPAM_REPO)" --md $@ $(basename $(notdir $@))
 
 # Clean up markdown files
 clean:

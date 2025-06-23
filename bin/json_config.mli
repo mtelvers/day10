@@ -18,7 +18,7 @@ val make :
   Yojson.Safe.t
 
 val make_ctr :
-  root:string ->
+  layers:string list ->
   cwd:string ->
   argv:string list ->
   hostname:string ->

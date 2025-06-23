@@ -8,8 +8,19 @@ let sudo ?stdout ?stderr cmd =
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
 let exec ?stdout ?stderr cmd =
-  (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
+  let () = OpamConsole.note "%s" (String.concat " " cmd) in
   Sys.command (Filename.quote_command ?stdout ?stderr (List.hd cmd) (List.tl cmd))
+
+let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
+  let rec loop n =
+    match (exec ?stdout ?stderr cmd, n) with
+    | 0, _ -> 0
+    | r, 0 -> r
+    | _, n ->
+    OpamConsole.note "retry %i: %s" (tries - n + 1) (String.concat " " cmd);
+                    Unix.sleepf (Random.float 2.0); loop (n - 1)
+  in
+    loop tries
 
 let run cmd =
   let inp = Unix.open_process_in cmd in
