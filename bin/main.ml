@@ -9,6 +9,7 @@ type config = {
   opam_repository : string;
   package : string;
   directory : string option;
+  md : string option;
 }
 
 let hostname = "builder"
@@ -422,9 +423,32 @@ let build config ocaml_version package =
 
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 
+let run_list opam_repository =
+  let packages = Os.path [ opam_repository; "packages" ] in
+  let all_packages =
+    Array.fold_left
+      (fun acc d -> Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
+      OpamPackage.Set.empty (Sys.readdir packages)
+  in
+  let latest =
+    OpamPackage.Name.Map.fold
+      (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
+      (OpamPackage.to_map all_packages) OpamPackage.Set.empty
+  in
+  OpamPackage.Set.filter
+    (fun pkg ->
+      let opam =
+        OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ packages; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ])))
+      in
+      OpamFilter.eval_to_bool ~default:false (opam_env pkg) (OpamFile.OPAM.available opam))
+    latest
+  |> OpamPackage.Set.to_list
+  |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
+
 open Cmdliner
 
-let output config results = function
+let output config results =
+  match config.md with
   | Some filename ->
     let oc = open_out filename in
     let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
@@ -440,17 +464,17 @@ let output config results = function
   | None ->
     print_string (build_result_to_string (List.hd results))
 
-let run_ci config md =
+let run_ci config =
   init config;
   let package = OpamPackage.of_string (config.package ^ ".dev") in
   let results = build config ocaml_version package in
-  output config results md
+  output config results
 
-let run_health_check config md =
+let run_health_check config =
   init config;
   let package = OpamPackage.of_string config.package in
   let results = build config ocaml_version package in
-  output config results md
+  output config results
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
@@ -477,7 +501,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir opam_repository directory md -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory } md)
+      const (fun dir opam_repository directory md -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md })
       $ cache_dir_term $ opam_repository_term $ directory_arg $ md_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
@@ -490,11 +514,16 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None } md)
+      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None; md })
       $ cache_dir_term $ opam_repository_term $ package_arg $ md_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term
+
+let list_cmd =
+  let list_term = Term.(const (fun opam_repository -> run_list opam_repository) $ opam_repository_term) in
+  let list_info = Cmd.info "list" ~doc:"List packages in opam repository" in
+  Cmd.v list_info list_term
 
 let main_info =
   let doc = "A tool for running CI and health checks" in
@@ -504,15 +533,17 @@ let main_info =
       `P "This tool provides CI testing and health checking capabilities.";
       `P "Use '$(mname) ci DIRECTORY' to run CI tests on a directory.";
       `P "Use '$(mname) health-check PACKAGE' to run health checks on a package.";
+      `P "Use '$(mname) list' list packages in opam repository.";
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
       `P "$(mname) health-check --cache-dir /tmp/cache --opam-repository /tmp/opam-repository package --md";
+      `P "$(mname) list --opam-repository /tmp/opam-repository";
     ]
   in
   Cmd.info "day10" ~version:"0.0.1" ~doc ~man
 
 let () =
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ ci_cmd; health_check_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ ci_cmd; health_check_cmd ; list_cmd ] in
   exit (Cmd.eval cmd)

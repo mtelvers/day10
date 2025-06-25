@@ -26,3 +26,11 @@ _build\install\default\bin\day10.exe health-check --cache-dir c:\Users\Administr
 ```
 make -j 2 SYSTEM=windows-x86_64 OUTPUT_DIR=./output CACHE_DIR=c:\\Users\\Administrator\\cache OPAM_REPO=c:\\Users\\Administrator\\opam-repository all
 ```
+
+Next commit
+
+```
+NEXT_MERGE=$(git rev-list --merges --reverse HEAD..upstream/master | head -1)
+git checkout $NEXT_MERGE
+```
+
