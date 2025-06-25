@@ -30,7 +30,26 @@ let run cmd =
 
 let nproc () = run "nproc" |> String.trim |> int_of_string
 let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
-let rm path = if (Sys.file_exists path) then Unix.unlink path
+
+let rec rm ?(recursive=false) path =
+  try
+    let stat = Unix.lstat path in
+    match stat.st_kind with
+    | S_REG | S_LNK | S_CHR | S_BLK | S_FIFO | S_SOCK ->
+      (try
+        Unix.unlink path
+      with
+        Unix.Unix_error (Unix.EACCES, _, _) ->
+          Unix.chmod path (stat.st_perm lor 0o222);
+          Unix.unlink path)
+    | S_DIR ->
+      if recursive then
+        Sys.readdir path
+        |> Array.iter (fun f ->
+          rm ~recursive (Filename.concat path f));
+      Unix.rmdir path
+  with
+    | Unix.Unix_error (Unix.ENOENT, _, _) -> ()
 
 module IntSet = Set.Make (Int)
 

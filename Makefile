@@ -21,7 +21,7 @@ CACHE_DIR := /home/mtelvers/cache
 OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "unknown")
 
 # Get the list of packages from opam
-PACKAGES := $(shell opam list --available --installable --columns=package --short 0*)
+PACKAGES := $(shell opam list --available --installable --columns=package --short)
 
 # Create target names using .md suffix for markdown output in OPAM_SHA subdirectory
 TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .md, $(PACKAGES)))

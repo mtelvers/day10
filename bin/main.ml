@@ -26,7 +26,6 @@ let env =
 
 let win_env =
   [
-    ("Path", "C:\\Windows\\system32;C:\\Windows;C:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\.cygwin\\root\\usr\\i686-w64-mingw32\\sys-root\\mingw\\bin;C:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\.cygwin\\root\\usr\\x86_64-w64-mingw32\\sys-root\\mingw\\bin;C:\\Windows\\System32\\Wbem;C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\;C:\\Windows\\System32\\OpenSSH\\;C:\\Users\\ContainerAdministrator\\AppData\\Local\\Microsoft\\WindowsApps");
     ("OPAMYES", "1");
     ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
@@ -91,11 +90,11 @@ let init config =
         String.concat " && "
           [
             "set";
-            "curl.exe -L -o c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+            "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
             "curl.exe -L -o c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
             (* "net user opam /nopassword /add"; *)
-            "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe init -k local -a c:\\opam-repository --bare -y";
-            "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam.exe switch create default --empty";
+            "opam.exe init -k local -a c:\\opam-repository --bare -y";
+            "opam.exe switch create default --empty";
           ];
       ]
     in
@@ -257,13 +256,11 @@ let rec topological_sort pkgs =
       let pkgs = OpamPackage.Map.map (fun deps -> List.fold_left (fun acc pkg -> OpamPackage.Set.remove pkg acc) deps installable) remainder in
       installable @ topological_sort pkgs
 
-let rec find_all_deps solution deps acc =
-  OpamPackage.Set.fold
-    (fun dep acc ->
-      match OpamPackage.Set.mem dep acc with
-      | true -> acc
-      | false -> find_all_deps solution (OpamPackage.Map.find dep solution) (OpamPackage.Set.add dep acc))
-    deps acc
+let pkg_deps solution =
+  List.fold_left (fun map pkg ->
+    let deps_direct = OpamPackage.Map.find pkg solution in
+    let deps_plus_children = OpamPackage.Set.fold (fun pkg acc -> OpamPackage.Set.union acc (OpamPackage.Map.find pkg map)) deps_direct deps_direct in
+    OpamPackage.Map.add pkg deps_plus_children map) OpamPackage.Map.empty
 
 let hash_of_set s = s |> OpamPackage.Set.to_list |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
@@ -282,13 +279,13 @@ let build_result_to_string = function
 let build_layer config solution dependencies pkg =
   let () = Printf.printf "Layer %s: %!" (OpamPackage.to_string pkg) in
   let deps = OpamPackage.Map.find pkg solution in
-  let alldeps = OpamPackage.Map.find pkg dependencies in
-  let hash = hash_of_set alldeps in
+  let hash = hash_of_set (OpamPackage.Set.add pkg (OpamPackage.Map.find pkg dependencies)) in
   let layer_dir = Os.path [ config.dir; hash ] in
   let () = Printf.printf "layer_dir %s\n%!" layer_dir in
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let () = Printf.printf "temp_dir %s\n%!" temp_dir in
+    let () = Os.write_to_file (Os.path [ temp_dir; "package" ]) (OpamPackage.to_string pkg) in
     let () = Os.write_to_file (Os.path [ temp_dir; "packages" ]) (OpamPackage.Set.to_string deps) in
     let lowerdir = Os.path [ config.dir; "root"; "fs" ] in
     let upperdir = Os.path [ temp_dir; "fs" ] in
@@ -304,6 +301,7 @@ let build_layer config solution dependencies pkg =
     let () =
       OpamPackage.Set.iter
         (fun dep ->
+          let hash = hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
           assert (
             0
             = Os.sudo
@@ -316,7 +314,7 @@ let build_layer config solution dependencies pkg =
                   "--recursive";
                   "--link";
                   "--no-target-directory";
-                  Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs" ];
+                  Os.path [ config.dir; hash; "fs" ];
                   upperdir;
                 ]))
         deps
@@ -345,18 +343,18 @@ let build_layer config solution dependencies pkg =
     let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
     let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/sources" ] ] in
+    let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/build" ] ] in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     Unix.rename temp_dir target_dir
             | true ->
     let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-    let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]) ] in
+    let argv = [ "cmd"; "/c"; String.concat " && " (pin @ [ "set && c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]) ] in
     let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target:upperdir in
     let () =
       OpamPackage.Set.iter
         (fun dep ->
-          Os.hardlink_tree
-            ~source:(Os.path [ config.dir; hash_of_set (find_all_deps solution (OpamPackage.Set.singleton dep) OpamPackage.Set.empty); "fs"])
-              ~target:upperdir)
+          let hash = hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
+          Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs"]) ~target:upperdir)
         deps
     in
 
@@ -380,6 +378,8 @@ let build_layer config solution dependencies pkg =
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
     let _ = Os.rm (Os.path [ upperdir; "repo"; "state-33BF9E46.cache" ] ) in
+    let _ = Os.rm ~recursive:true (Os.path [ upperdir; "default"; ".opam-switch"; "sources" ] ) in
+    let _ = Os.rm ~recursive:true (Os.path [ upperdir; "default"; ".opam-switch"; "build" ] ) in
     let _ = Os.rm (Os.path [ upperdir; "default"; ".opam-switch"; "lock" ] ) in
     Unix.rename temp_dir target_dir
     )
@@ -392,13 +392,26 @@ let build_layer config solution dependencies pkg =
   | 0 -> Success log
   | _ -> Failure log
 
+let reduce dependencies =
+  OpamPackage.Map.map (fun u ->
+    OpamPackage.Set.filter (fun v ->
+      let others = OpamPackage.Set.remove v u in
+      OpamPackage.Set.fold (fun o acc ->
+        acc || OpamPackage.Set.mem v (OpamPackage.Map.find o dependencies)
+      ) others false |> not
+    ) u
+  )
+
 let build config ocaml_version package =
   let solution = solve config ocaml_version package in
+  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in
   if OpamPackage.Map.is_empty solution then
     [ No_solution ]
   else
-    let dependencies = OpamPackage.Map.mapi (fun pkg deps -> find_all_deps solution deps (OpamPackage.Set.singleton pkg)) solution in
     let ordered_installation = topological_sort solution in
+    let dependencies = pkg_deps solution ordered_installation in
+    let solution = reduce dependencies solution in
+    let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in
     List.fold_left
       (fun lst pkg ->
         match lst with
