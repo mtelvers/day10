@@ -10,10 +10,18 @@ type config = {
   package : string;
   directory : string option;
   md : string option;
+  network : string option;
 }
 
 let hostname = "builder"
-let network = "35b0b92b-d2a7-429b-92ad-4671880d25f2"
+
+let create_network () = match Sys.win32 with
+  | true -> Os.run "hcn-namespace create" |> String.trim
+  | false -> ""
+
+let delete_network = function
+  | Some n -> Os.exec ["hcn-namespace"; "delete"; n]
+  | None -> 0
 
 let env =
   [
@@ -109,12 +117,15 @@ let init config =
     let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
     let _ = Os.retry_exec ~stdout:mounts_json [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ] in
     let layers = Json_layers.read_layers mounts_json in
-    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
+    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:(Option.value ~default:"" config.network) in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
-    let _ = Os.rm (Os.path [ rootfs; "repo"; "state-33BF9E46.cache" ] ) in
+    let _ = Os.rm (Os.path [ rootfs; "lock" ] ) in
+    let _ = Os.rm (Os.path [ rootfs; "conf.lock" ] ) in
     let _ = Os.rm (Os.path [ rootfs; "default"; ".opam-switch"; "lock" ] ) in
+    let _ = Os.rm (Os.path [ rootfs; "repo"; "state-33BF9E46.cache" ] ) in
+    let _ = Os.rm (Os.path [ rootfs; "repo"; "conf.lock" ] ) in
     let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
     let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
     Unix.rename temp_dir target_dir
@@ -372,7 +383,7 @@ let build_layer config solution dependencies pkg =
     let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
     let _ = Os.retry_exec ~stdout:mounts_json [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ] in
     let layers = Json_layers.read_layers mounts_json in
-    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network in
+    let config = Json_config.make_ctr ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env:win_env ~mounts ~network:(Option.value ~default:"" config.network) in
     let config_json = Os.path [ temp_dir; "config.json" ] in
     let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
     let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
@@ -405,14 +416,14 @@ let reduce dependencies =
 
 let build config ocaml_version package =
   let solution = solve config ocaml_version package in
-  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in
+(*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
   if OpamPackage.Map.is_empty solution then
     [ No_solution ]
   else
     let ordered_installation = topological_sort solution in
     let dependencies = pkg_deps solution ordered_installation in
     let solution = reduce dependencies solution in
-    let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in
+  (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
     List.fold_left
       (fun lst pkg ->
         match lst with
@@ -467,13 +478,17 @@ let output config results =
 let run_ci config =
   init config;
   let package = OpamPackage.of_string (config.package ^ ".dev") in
+  let config = { config with network = Some (create_network ()) } in
   let results = build config ocaml_version package in
+  let _ = delete_network config.network in
   output config results
 
 let run_health_check config =
   init config;
   let package = OpamPackage.of_string config.package in
+  let config = { config with network = Some (create_network ()) } in
   let results = build config ocaml_version package in
+  let _ = delete_network config.network in
   output config results
 
 let cache_dir_term =
@@ -501,7 +516,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir opam_repository directory md -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md })
+      const (fun dir opam_repository directory md -> run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; network = None })
       $ cache_dir_term $ opam_repository_term $ directory_arg $ md_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
@@ -514,7 +529,7 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None; md })
+      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None; md; network = None })
       $ cache_dir_term $ opam_repository_term $ package_arg $ md_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
