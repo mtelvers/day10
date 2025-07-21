@@ -1,7 +1,4 @@
-
-type parent_layer_paths = {
-  parentLayerPaths: string list; [@key "parentLayerPaths"]
-} [@@deriving yojson]
+type parent_layer_paths = { parentLayerPaths : string list [@key "parentLayerPaths"] } [@@deriving yojson]
 
 type layer = {
   type_ : string;
@@ -15,22 +12,20 @@ type raw_layer = {
   raw_source : string; [@key "Source"]
   raw_target : string; [@key "Target"]
   raw_options : string list; [@key "Options"]
-} [@@deriving yojson]
+}
+[@@deriving yojson]
 
 let parse_option_string str =
   if String.starts_with ~prefix:"parentLayerPaths=" str then
     try
       let json_part = String.sub str 17 (String.length str - 17) in
       let full_json = "{\"parentLayerPaths\":" ^ json_part ^ "}" in
-      Yojson.Safe.from_string full_json
-      |> parent_layer_paths_of_yojson
-      |> Result.to_option
+      Yojson.Safe.from_string full_json |> parent_layer_paths_of_yojson |> Result.to_option
     with
     | _ -> None
-  else
-    None
+  else None
 
-let layer_of_raw (raw_layer:raw_layer) =
+let layer_of_raw (raw_layer : raw_layer) =
   {
     type_ = raw_layer.raw_type_;
     source = raw_layer.raw_source;
@@ -50,6 +45,6 @@ let parse_layers json_string =
 let read_layers path =
   let mounts = Os.read_from_file path in
   match parse_layers mounts with
-  | Ok layers -> (layers |> List.map (fun l -> List.map (fun x -> x.parentLayerPaths) l.options) |> List.flatten |> List.flatten) @ (List.map (fun l -> l.source) layers)
+  | Ok layers ->
+      (layers |> List.map (fun l -> List.map (fun x -> x.parentLayerPaths) l.options) |> List.flatten |> List.flatten) @ List.map (fun l -> l.source) layers
   | Error _ -> []
-

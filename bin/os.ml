@@ -17,10 +17,11 @@ let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
     | 0, _ -> 0
     | r, 0 -> r
     | _, n ->
-    OpamConsole.note "retry %i: %s" (tries - n + 1) (String.concat " " cmd);
-                    Unix.sleepf (Random.float 2.0); loop (n - 1)
+        OpamConsole.note "retry %i: %s" (tries - n + 1) (String.concat " " cmd);
+        Unix.sleepf (Random.float 2.0);
+        loop (n - 1)
   in
-    loop tries
+  loop tries
 
 let run cmd =
   let inp = Unix.open_process_in cmd in
@@ -31,25 +32,25 @@ let run cmd =
 let nproc () = run "nproc" |> String.trim |> int_of_string
 let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
 
-let rec rm ?(recursive=false) path =
+let rec rm ?(recursive = false) path =
   try
     let stat = Unix.lstat path in
     match stat.st_kind with
-    | S_REG | S_LNK | S_CHR | S_BLK | S_FIFO | S_SOCK ->
-      (try
-        Unix.unlink path
-      with
-        Unix.Unix_error (Unix.EACCES, _, _) ->
-          Unix.chmod path (stat.st_perm lor 0o222);
-          Unix.unlink path)
+    | S_REG
+    | S_LNK
+    | S_CHR
+    | S_BLK
+    | S_FIFO
+    | S_SOCK -> (
+        try Unix.unlink path with
+        | Unix.Unix_error (Unix.EACCES, _, _) ->
+            Unix.chmod path (stat.st_perm lor 0o222);
+            Unix.unlink path)
     | S_DIR ->
-      if recursive then
-        Sys.readdir path
-        |> Array.iter (fun f ->
-          rm ~recursive (Filename.concat path f));
-      Unix.rmdir path
+        if recursive then Sys.readdir path |> Array.iter (fun f -> rm ~recursive (Filename.concat path f));
+        Unix.rmdir path
   with
-    | Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+  | Unix.Unix_error (Unix.ENOENT, _, _) -> ()
 
 module IntSet = Set.Make (Int)
 
@@ -93,82 +94,77 @@ let create_directory_exclusively dir_name write_function =
 exception Copy_error of string
 
 let cp ?(buffer_size = 65536) ?(preserve_permissions = true) ?(preserve_times = true) src dst =
-  let safe_close fd = try Unix.close fd with _ -> () in
-  let src_stats =
-    try Unix.stat src
-    with Unix.Unix_error (err, _, _) ->
-      raise (Copy_error (Printf.sprintf "Cannot stat source file '%s': %s" src (Unix.error_message err)))
+  let safe_close fd =
+    try Unix.close fd with
+    | _ -> ()
   in
-  if src_stats.st_kind <> S_REG then
-    raise (Copy_error (Printf.sprintf "Source '%s' is not a regular file" src));
+  let src_stats =
+    try Unix.stat src with
+    | Unix.Unix_error (err, _, _) -> raise (Copy_error (Printf.sprintf "Cannot stat source file '%s': %s" src (Unix.error_message err)))
+  in
+  if src_stats.st_kind <> S_REG then raise (Copy_error (Printf.sprintf "Source '%s' is not a regular file" src));
   let src_fd =
-    try Unix.openfile src [O_RDONLY] 0
-    with Unix.Unix_error (err, _, _) ->
-      raise (Copy_error (Printf.sprintf "Cannot open source file '%s': %s" src (Unix.error_message err)))
+    try Unix.openfile src [ O_RDONLY ] 0 with
+    | Unix.Unix_error (err, _, _) -> raise (Copy_error (Printf.sprintf "Cannot open source file '%s': %s" src (Unix.error_message err)))
   in
   let dst_fd =
-    try Unix.openfile dst [O_WRONLY; O_CREAT; O_TRUNC] src_stats.st_perm
-    with Unix.Unix_error (err, _, _) ->
-      safe_close src_fd;
-      raise (Copy_error (Printf.sprintf "Cannot open destination file '%s': %s" dst (Unix.error_message err)))
+    try Unix.openfile dst [ O_WRONLY; O_CREAT; O_TRUNC ] src_stats.st_perm with
+    | Unix.Unix_error (err, _, _) ->
+        safe_close src_fd;
+        raise (Copy_error (Printf.sprintf "Cannot open destination file '%s': %s" dst (Unix.error_message err)))
   in
   let buffer = Bytes.create buffer_size in
   let rec copy_loop () =
     try
-      match (Unix.read src_fd buffer 0 buffer_size) with
+      match Unix.read src_fd buffer 0 buffer_size with
       | 0 -> ()
       | bytes_read ->
-        let rec write_all pos remaining =
-          if remaining > 0 then
-            let bytes_written = Unix.write dst_fd buffer pos remaining in
-            write_all (pos + bytes_written) (remaining - bytes_written)
-        in
-        write_all 0 bytes_read;
-        copy_loop ()
-    with Unix.Unix_error (err, _, _) ->
-      safe_close src_fd;
-      safe_close dst_fd;
-      raise (Copy_error (Printf.sprintf "Error during copy: %s" (Unix.error_message err)))
+          let rec write_all pos remaining =
+            if remaining > 0 then
+              let bytes_written = Unix.write dst_fd buffer pos remaining in
+              write_all (pos + bytes_written) (remaining - bytes_written)
+          in
+          write_all 0 bytes_read;
+          copy_loop ()
+    with
+    | Unix.Unix_error (err, _, _) ->
+        safe_close src_fd;
+        safe_close dst_fd;
+        raise (Copy_error (Printf.sprintf "Error during copy: %s" (Unix.error_message err)))
   in
   copy_loop ();
   safe_close src_fd;
   safe_close dst_fd;
-  if preserve_permissions then begin
-    try Unix.chmod dst src_stats.st_perm
-    with Unix.Unix_error (err, _, _) ->
-      Printf.eprintf "Warning: Could not preserve permissions: %s\n" (Unix.error_message err)
-  end;
-  if preserve_times then begin
-    try Unix.utimes dst src_stats.st_atime src_stats.st_mtime
-    with Unix.Unix_error (err, _, _) ->
-      Printf.eprintf "Warning: Could not preserve timestamps: %s\n" (Unix.error_message err)
-  end
+  (if preserve_permissions then
+     try Unix.chmod dst src_stats.st_perm with
+     | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: Could not preserve permissions: %s\n" (Unix.error_message err));
+  if preserve_times then
+    try Unix.utimes dst src_stats.st_atime src_stats.st_mtime with
+    | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: Could not preserve timestamps: %s\n" (Unix.error_message err)
 
 let hardlink_tree ~source ~target =
   let rec process_directory current_source current_target =
     let entries = Sys.readdir current_source in
-    Array.iter (fun entry ->
-      let source = Filename.concat current_source entry in
-      let target = Filename.concat current_target entry in
-      try
-        let stat = Unix.lstat source in
-        match stat.st_kind with
-        | Unix.S_LNK ->
-          if not (Sys.file_exists target) then
-            Unix.symlink (Unix.readlink source) target
-        | Unix.S_REG ->
-          if not (Sys.file_exists target) then
-            Unix.link source target
-        | Unix.S_DIR ->
-          mkdir target;
-          process_directory source target
-        | S_CHR | S_BLK | S_FIFO | S_SOCK ->
-          ()
-      with
-      | Unix.Unix_error (Unix.EMLINK, _, _) ->
-          cp source target
-      | Unix.Unix_error (err, _, _) ->
-          Printf.eprintf "Warning: %s -> %s = %s\n" source target (Unix.error_message err);
-    ) entries
+    Array.iter
+      (fun entry ->
+        let source = Filename.concat current_source entry in
+        let target = Filename.concat current_target entry in
+        try
+          let stat = Unix.lstat source in
+          match stat.st_kind with
+          | S_LNK -> if not (Sys.file_exists target) then Unix.symlink (Unix.readlink source) target
+          | S_REG -> if not (Sys.file_exists target) then Unix.link source target
+          | S_DIR ->
+              mkdir target;
+              process_directory source target
+          | S_CHR
+          | S_BLK
+          | S_FIFO
+          | S_SOCK ->
+              ()
+        with
+        | Unix.Unix_error (Unix.EMLINK, _, _) -> cp source target
+        | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: %s -> %s = %s\n" source target (Unix.error_message err))
+      entries
   in
   process_directory source target
