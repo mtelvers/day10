@@ -112,11 +112,10 @@ let solve (config : Config.t) ocaml_version pkg =
             | false -> dfs acc p)
           deps (OpamPackage.Map.add pkg deps map)
       in
-      dfs OpamPackage.Map.empty pkg
+      Ok (dfs OpamPackage.Map.empty pkg)
   | Error problem ->
       OpamConsole.error "No solution";
-      print_endline (Solver.diagnostics problem);
-      OpamPackage.Map.empty
+      Error (Solver.diagnostics problem)
 
 let rec topological_sort pkgs =
   match OpamPackage.Map.is_empty pkgs with
@@ -139,13 +138,13 @@ let pkg_deps solution =
     OpamPackage.Map.empty
 
 type build_result =
-  | No_solution
+  | No_solution of string
   | Dependency_failed
   | Failure of string
   | Success of string
 
 let build_result_to_string = function
-  | No_solution -> "no_solution"
+  | No_solution _ -> "no_solution"
   | Dependency_failed -> "dependency_failed"
   | Failure _ -> "failure"
   | Success _ -> "success"
@@ -169,10 +168,9 @@ let build_layer t solution dependencies pkg =
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
   let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
   let exit_status = Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string in
-  let log = Os.read_from_file (Os.path [ layer_dir; "build.log" ]) in
   match exit_status with
-  | 0 -> Success log
-  | _ -> Failure log
+  | 0 -> Success hash
+  | _ -> Failure hash
 
 let reduce dependencies =
   OpamPackage.Map.map (fun u ->
@@ -183,10 +181,9 @@ let reduce dependencies =
         u)
 
 let build config ocaml_version package =
-  let solution = solve config ocaml_version package in
-  (*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
-  if OpamPackage.Map.is_empty solution then [ No_solution ]
-  else
+  match solve config ocaml_version package with
+  | Ok solution ->
+    (*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
     let t = Container.init ~config in
     init t;
     let ordered_installation = topological_sort solution in
@@ -204,6 +201,8 @@ let build config ocaml_version package =
     in
     Container.deinit ~t;
     results
+  | Error s ->
+    [ No_solution s ]
 
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 
@@ -237,12 +236,17 @@ let output (config : Config.t) results =
       let oc = open_out_bin filename in
       let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
       let opam_repo_sha = Os.run cmd |> String.trim in
-      let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
+      let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
       let () =
         List.rev results
         |> List.iter (function
-             | Success log
-             | Failure log ->
+             | Success hash
+             | Failure hash ->
+                 let package = Os.read_from_file (Os.path [ config.dir; hash; "package" ]) in
+                 Printf.fprintf oc "\n# %s\n\n" package;
+                 let log = Os.read_from_file (Os.path [ config.dir; hash; "build.log" ]) in
+                 output_string oc log
+             | No_solution log ->
                  output_string oc log
              | _ -> ())
       in
