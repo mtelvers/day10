@@ -66,7 +66,7 @@ let run ~t ~temp_dir opam_repository build_log =
   let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
   let _ =
     Os.retry_exec ~stdout:mounts_json
-      [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ]
+      [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:5ae66e790cc84572a3bb9646fcbd13b3dbf1af9252e013167791737880626b0b" ]
   in
   let layers = Json_layers.read_layers mounts_json in
   let config = make_config_json ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:t.network in
@@ -82,7 +82,7 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
   ()
 
-let build ~t ~temp_dir build_log pkg dependencies deps =
+let build ~t ~temp_dir build_log pkg dependencies _ =
   let config = t.config in
   let target = Os.path [ temp_dir; "fs" ] in
   let () = Os.mkdir target in
@@ -96,11 +96,10 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
   in
   let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target in
   let () =
-    OpamPackage.Set.iter
-      (fun dep ->
-        let hash = Util.hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
-        Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target)
-      deps
+    OpamPackage.Map.find pkg dependencies
+    |> OpamPackage.Set.iter (fun dep ->
+      let hash = Util.hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
+    Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target)
   in
   let () =
     let default_switch = Os.path [ temp_dir; "fs"; "default" ] in
@@ -120,15 +119,22 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
   let mounts_json = Os.path [ temp_dir; "mounts.json" ] in
   let _ =
     Os.retry_exec ~stdout:mounts_json
-      [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:6f75278129ccaff6084617218cb8a28e8acc1748beeaae2946dfa92c5ca425ee" ]
+      [ "ctr"; "snapshot"; "prepare"; "--mounts"; Filename.basename temp_dir; "sha256:5ae66e790cc84572a3bb9646fcbd13b3dbf1af9252e013167791737880626b0b" ]
   in
   let layers = Json_layers.read_layers mounts_json in
-  let config = make_config_json ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:t.network in
+  let ctr_config = make_config_json ~layers ~cwd:"c:\\" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:t.network in
   let config_json = Os.path [ temp_dir; "config.json" ] in
-  let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
+  let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string ctr_config) in
   let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
   let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
+  let _ = Os.clense_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target in
+  let () =
+    OpamPackage.Map.find pkg dependencies
+    |> OpamPackage.Set.iter (fun dep ->
+           let hash = Util.hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
+           Os.clense_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target)
+  in
   let _ = Os.rm (Os.path [ target; "repo"; "state-33BF9E46.cache" ]) in
   let _ = Os.rm ~recursive:true (Os.path [ target; "default"; ".opam-switch"; "sources" ]) in
   let _ = Os.rm ~recursive:true (Os.path [ target; "default"; ".opam-switch"; "build" ]) in

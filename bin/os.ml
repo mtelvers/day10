@@ -23,6 +23,17 @@ let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
   in
   loop tries
 
+let retry_rename ?(tries = 10) src dst =
+  let rec loop n =
+    try Unix.rename src dst with
+    | Unix.Unix_error (Unix.EACCES, x, y) ->
+        let d = tries - n + 1 in
+        OpamConsole.note "retry_rename %i: %s -> %s" d src dst;
+        Unix.sleep ((d * d) + Random.int d);
+        if n = 1 then raise (Unix.Unix_error (Unix.EACCES, x, y)) else loop (n - 1)
+  in
+  loop tries
+
 let run cmd =
   let inp = Unix.open_process_in cmd in
   let r = In_channel.input_all inp in
@@ -168,3 +179,34 @@ let hardlink_tree ~source ~target =
       entries
   in
   process_directory source target
+
+let clense_tree ~source ~target =
+  let rec process_directory current_source current_target =
+    let entries = Sys.readdir current_source in
+    Array.iter
+      (fun entry ->
+        let source = Filename.concat current_source entry in
+        let target = Filename.concat current_target entry in
+        try
+          let stat = Unix.lstat source in
+          match stat.st_kind with
+          | Unix.S_LNK
+          | Unix.S_REG ->
+              Printf.printf "unlink %s\n" target;
+              if Sys.file_exists target then (
+                try Unix.unlink target with
+                | Unix.Unix_error (Unix.EACCES, _, _) ->
+                    Unix.chmod target (stat.st_perm lor 0o222);
+                    Unix.unlink target)
+          | Unix.S_DIR -> process_directory source target
+          | S_CHR
+          | S_BLK
+          | S_FIFO
+          | S_SOCK ->
+              ()
+        with
+        | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: unlink %s = %s\n" target (Unix.error_message err))
+      entries
+  in
+  process_directory source target
+
