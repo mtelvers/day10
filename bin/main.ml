@@ -183,26 +183,25 @@ let reduce dependencies =
 let build config ocaml_version package =
   match solve config ocaml_version package with
   | Ok solution ->
-    (*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
-    let t = Container.init ~config in
-    init t;
-    let ordered_installation = topological_sort solution in
-    let dependencies = pkg_deps solution ordered_installation in
-    let solution = reduce dependencies solution in
-    (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
-    let results =
-      List.fold_left
-        (fun lst pkg ->
-          match lst with
-          | [] -> [ build_layer t solution dependencies pkg ]
-          | Success _ :: _ -> build_layer t solution dependencies pkg :: lst
-          | _ -> Dependency_failed :: lst)
-        [] ordered_installation
-    in
-    Container.deinit ~t;
-    results
-  | Error s ->
-    [ No_solution s ]
+      (*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
+      let t = Container.init ~config in
+      init t;
+      let ordered_installation = topological_sort solution in
+      let dependencies = pkg_deps solution ordered_installation in
+      let solution = reduce dependencies solution in
+      (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
+      let results =
+        List.fold_left
+          (fun lst pkg ->
+            match lst with
+            | [] -> [ build_layer t solution dependencies pkg ]
+            | Success _ :: _ -> build_layer t solution dependencies pkg :: lst
+            | _ -> Dependency_failed :: lst)
+          [] ordered_installation
+      in
+      Container.deinit ~t;
+      results
+  | Error s -> [ No_solution s ]
 
 let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string "5.3.0")
 
@@ -231,27 +230,57 @@ let run_list opam_repository =
 open Cmdliner
 
 let output (config : Config.t) results =
-  match config.md with
-  | Some filename ->
-      let oc = open_out_bin filename in
+  let opam_repo_sha =
+    if Option.is_some config.md || Option.is_some config.json then
       let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
-      let opam_repo_sha = Os.run cmd |> String.trim in
-      let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
-      let () =
-        List.rev results
-        |> List.iter (function
-             | Success hash
-             | Failure hash ->
-                 let package = Os.read_from_file (Os.path [ config.dir; hash; "package" ]) in
-                 Printf.fprintf oc "\n# %s\n\n" package;
-                 let log = Os.read_from_file (Os.path [ config.dir; hash; "build.log" ]) in
-                 output_string oc log
-             | No_solution log ->
-                 output_string oc log
-             | _ -> ())
-      in
-      close_out oc
-  | None -> print_string (build_result_to_string (List.hd results))
+      Os.run cmd |> String.trim
+    else ""
+  in
+  let () =
+    Option.iter
+      (fun filename ->
+        let oc = open_out_bin filename in
+        let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
+        let () =
+          List.rev results
+          |> List.iter (function
+               | Success hash
+               | Failure hash ->
+                   let package = Os.read_from_file (Os.path [ config.dir; hash; "package" ]) in
+                   Printf.fprintf oc "\n# %s\n\n" package;
+                   let log = Os.read_from_file (Os.path [ config.dir; hash; "build.log" ]) in
+                   output_string oc log
+               | No_solution log -> output_string oc log
+               | _ -> ())
+        in
+        close_out oc)
+      config.md
+  in
+  let () =
+    Option.iter
+      (fun filename ->
+        let build =
+          List.filter_map
+            (function
+              | Success hash
+              | Failure hash ->
+                  Some (`String hash)
+              | _ -> None)
+            results
+        in
+        let j =
+          `Assoc
+            [
+              ("commit", `String opam_repo_sha);
+              ("package", `String config.package);
+              ("status", `String (build_result_to_string (List.hd results)));
+              ("layers", `List build);
+            ]
+        in
+        Yojson.Safe.to_file  filename j)
+      config.json
+  in
+  print_string (build_result_to_string (List.hd results))
 
 let run_ci (config : Config.t) =
   let package = OpamPackage.of_string (config.package ^ ".dev") in
@@ -275,6 +304,10 @@ let md_term =
   let doc = "Output results in markdown format" in
   Arg.(value & opt (some string) None & info [ "md" ] ~docv:"FILE" ~doc)
 
+let json_term =
+  let doc = "Output results in json format" in
+  Arg.(value & opt (some string) None & info [ "json" ] ~docv:"FILE" ~doc)
+
 let find_opam_files dir =
   try
     Sys.readdir dir |> Array.to_list |> List.filter_map (fun name -> if Filename.check_suffix name ".opam" then Some (Filename.remove_extension name) else None)
@@ -288,9 +321,9 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir opam_repository directory md ->
-          run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md })
-      $ cache_dir_term $ opam_repository_term $ directory_arg $ md_term)
+      const (fun dir opam_repository directory md json ->
+          run_ci { dir; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; json })
+      $ cache_dir_term $ opam_repository_term $ directory_arg $ md_term $ json_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -302,8 +335,8 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir opam_repository package md -> run_health_check { dir; opam_repository; package; directory = None; md })
-      $ cache_dir_term $ opam_repository_term $ package_arg $ md_term)
+      const (fun dir opam_repository package md json -> run_health_check { dir; opam_repository; package; directory = None; md; json })
+      $ cache_dir_term $ opam_repository_term $ package_arg $ md_term $ json_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term

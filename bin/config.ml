@@ -4,4 +4,5 @@ type t = {
   package : string;
   directory : string option;
   md : string option;
+  json : string option;
 }

@@ -23,17 +23,17 @@ OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "un
 # Get the list of packages from opam
 PACKAGES := $(shell ./_build/install/default/bin/day10 list --opam-repository "$(OPAM_REPO)")
 
-# Create target names using .md suffix for markdown output in OPAM_SHA subdirectory
-TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .md, $(PACKAGES)))
+# Create target names using .json suffix for markdown output in OPAM_SHA subdirectory
+TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .json, $(PACKAGES)))
 
 # Default target - depends on all package health-checks
 all: $(TARGETS)
 
 # Pattern rule for running health-check on each package and generating markdown
-# Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.md -> package
-$(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.md:
+# Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.json -> package
+$(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.json:
 	@mkdir -p $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
-	./_build/install/default/bin/day10 health-check --cache-dir "$(CACHE_DIR)" --opam-repository "$(OPAM_REPO)" --md $@ $(basename $(notdir $@))
+	./_build/install/default/bin/day10 health-check --cache-dir "$(CACHE_DIR)" --opam-repository "$(OPAM_REPO)" --json $@ $(basename $(notdir $@))
 
 # Clean up markdown files
 clean:
