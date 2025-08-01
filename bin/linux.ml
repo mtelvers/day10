@@ -12,7 +12,7 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let std_env = Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ()
+let std_env ~(config : Config.t) = Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
 
 (* This is a subset of the capabilities that Docker uses by default.
      These control what root can do in the container.
@@ -142,6 +142,7 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
 let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()
 let config ~t = t.config
+let layer_hash ~t s = t.config.ocaml_version :: (OpamPackage.Set.to_list s) |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
 
 let run ~t:_ ~temp_dir opam_repository build_log =
   let rootfs = Os.path [ temp_dir; "fs" ] in
@@ -196,7 +197,7 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
   let () =
     OpamPackage.Set.iter
       (fun dep ->
-        let hash = Util.hash_of_set (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
+        let hash = layer_hash ~t (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
         assert (
           0
           = Os.sudo
