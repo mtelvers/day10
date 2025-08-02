@@ -36,7 +36,11 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~networ
 let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create" |> String.trim }
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
-let layer_hash ~t s = t.config.ocaml_version :: (OpamPackage.Set.to_list s) |> List.map OpamPackage.to_string |> String.concat " " |> Digest.string |> Digest.to_hex
+let layer_hash ~t s =
+  let deps = OpamPackage.Set.to_list s |> List.map OpamPackage.to_string in
+  let os = List.map (fun v ->
+    std_env ~config:t.config v |> Option.map (OpamVariable.string_of_variable_contents) |> Option.value ~default:"unknown") [ "os-family"; "os-version"; "arch" ] in
+  (os @ deps) |> String.concat " " |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
   let rootfs = Os.path [ temp_dir; "fs" ] in

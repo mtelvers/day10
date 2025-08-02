@@ -293,9 +293,9 @@ let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
   Arg.(required & opt (some string) None & info [ "cache-dir" ] ~docv:"DIR" ~doc)
 
-let version_term =
+let ocaml_version_term =
   let doc = "OCaml version to use (default 5.3.0)" in
-  Arg.(value & opt string "5.3.0" & info [ "version" ] ~docv:"VERSION" ~doc)
+  Arg.(value & opt string "5.3.0" & info [ "ocaml-version" ] ~docv:"VERSION" ~doc)
 
 let opam_repository_term =
   let doc = "Directory containing opam repository (required)" in
@@ -322,10 +322,10 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir version opam_repository directory md json ->
-          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string version) in
+      const (fun dir ocaml_version opam_repository directory md json ->
+          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
           run_ci { dir; ocaml_version; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; json })
-      $ cache_dir_term $ version_term $ opam_repository_term $ directory_arg $ md_term $ json_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -337,10 +337,10 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir version opam_repository package md json ->
-          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string version) in
+      const (fun dir ocaml_version opam_repository package md json ->
+          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
           run_health_check { dir; ocaml_version; opam_repository; package; directory = None; md; json })
-      $ cache_dir_term $ version_term $ opam_repository_term $ package_arg $ md_term $ json_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term
@@ -348,10 +348,10 @@ let health_check_cmd =
 let list_cmd =
   let list_term =
     Term.(
-      const (fun version opam_repository ->
-          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string version) in
+      const (fun ocaml_version opam_repository ->
+          let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
           run_list { dir = ""; ocaml_version; opam_repository; package = ""; directory = None; md = None; json = None })
-      $ version_term $ opam_repository_term)
+      $ ocaml_version_term $ opam_repository_term)
   in
   let list_info = Cmd.info "list" ~doc:"List packages in opam repository" in
   Cmd.v list_info list_term
