@@ -221,7 +221,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       ordered_hashes
   in
   let () =
-    let default_switch = Os.path [ temp_dir; "fs"; "home"; "opam"; ".opam"; "default" ] in
+    let default_switch = Os.path [ lowerdir; "home"; "opam"; ".opam"; "default" ] in
     if Sys.file_exists default_switch then Opamh.dump_state default_switch
   in
   let etc_hosts = Os.path [ temp_dir; "hosts" ] in
