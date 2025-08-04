@@ -192,7 +192,6 @@ let clense_tree ~source ~target =
           match stat.st_kind with
           | Unix.S_LNK
           | Unix.S_REG ->
-              Printf.printf "unlink %s\n" target;
               if Sys.file_exists target then (
                 try Unix.unlink target with
                 | Unix.Unix_error (Unix.EACCES, _, _) ->

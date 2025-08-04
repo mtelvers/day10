@@ -5,7 +5,10 @@ type t = {
 
 let hostname = "builder"
 let env = [ ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
-let std_env ~(config : Config.t) = Util.std_env ~arch:"x86_64" ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ~ocaml_version:config.ocaml_version ()
+
+let std_env ~(config : Config.t) =
+  Util.std_env ~arch:"x86_64" ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ~ocaml_version:config.ocaml_version ()
+
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
 let make_config_json ~layers ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
@@ -36,11 +39,14 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~networ
 let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create" |> String.trim }
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
-let layer_hash ~t s =
-  let deps = OpamPackage.Set.to_list s |> List.map OpamPackage.to_string in
-  let os = List.map (fun v ->
-    std_env ~config:t.config v |> Option.map (OpamVariable.string_of_variable_contents) |> Option.value ~default:"unknown") [ "os-family"; "os-version"; "arch" ] in
-  (os @ deps) |> String.concat " " |> Digest.string |> Digest.to_hex
+
+let layer_hash ~t deps =
+  let os =
+    List.map
+      (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
+      [ "os-family"; "os-version"; "arch" ]
+  in
+  os @ List.map OpamPackage.to_string deps |> String.concat " " |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
   let rootfs = Os.path [ temp_dir; "fs" ] in
@@ -85,9 +91,9 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.rm (Os.path [ rootfs; "repo"; "conf.lock" ]) in
   let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
-  ()
+  result
 
-let build ~t ~temp_dir build_log pkg dependencies _ =
+let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
   let target = Os.path [ temp_dir; "fs" ] in
   let () = Os.mkdir target in
@@ -99,13 +105,8 @@ let build ~t ~temp_dir build_log pkg dependencies _ =
       String.concat " && " (pin @ [ "set && c:\\Users\\ContainerAdministrator\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]);
     ]
   in
-  let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target in
-  let () =
-    OpamPackage.Map.find pkg dependencies
-    |> OpamPackage.Set.iter (fun dep ->
-      let hash = layer_hash ~t (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
-    Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target)
-  in
+  let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; layer_hash ~t []; "fs" ]) ~target in
+  let () = List.iter (fun hash -> Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target) ordered_hashes in
   let () =
     let default_switch = Os.path [ temp_dir; "fs"; "default" ] in
     if Sys.file_exists default_switch then Opamh.dump_state default_switch
@@ -131,17 +132,11 @@ let build ~t ~temp_dir build_log pkg dependencies _ =
   let config_json = Os.path [ temp_dir; "config.json" ] in
   let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string ctr_config) in
   let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
-  let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
-  let _ = Os.clense_tree ~source:(Os.path [ config.dir; "root"; "fs" ]) ~target in
-  let () =
-    OpamPackage.Map.find pkg dependencies
-    |> OpamPackage.Set.iter (fun dep ->
-           let hash = layer_hash ~t (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
-           Os.clense_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target)
-  in
+  let _ = Os.clense_tree ~source:(Os.path [ config.dir; layer_hash ~t []; "fs" ]) ~target in
+  let () = List.iter (fun hash -> Os.clense_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target) ordered_hashes in
   let _ = Os.rm (Os.path [ target; "repo"; "state-33BF9E46.cache" ]) in
   let _ = Os.rm ~recursive:true (Os.path [ target; "default"; ".opam-switch"; "sources" ]) in
   let _ = Os.rm ~recursive:true (Os.path [ target; "default"; ".opam-switch"; "build" ]) in
   let _ = Os.rm (Os.path [ target; "default"; ".opam-switch"; "lock" ]) in
-  ()
+  result

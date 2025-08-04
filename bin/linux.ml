@@ -12,7 +12,8 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let std_env ~(config : Config.t) = Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
+let std_env ~(config : Config.t) =
+  Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
 
 (* This is a subset of the capabilities that Docker uses by default.
      These control what root can do in the container.
@@ -142,11 +143,14 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
 let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()
 let config ~t = t.config
-let layer_hash ~t s =
-  let deps = OpamPackage.Set.to_list s |> List.map OpamPackage.to_string in
-  let os = List.map (fun v ->
-    std_env ~config:t.config v |> Option.map (OpamVariable.string_of_variable_contents) |> Option.value ~default:"unknown") [ "os-family"; "os-version"; "arch" ] in
-  (os @ deps) |> String.concat " " |> Digest.string |> Digest.to_hex
+
+let layer_hash ~t deps =
+  let os =
+    List.map
+      (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
+      [ "os-family"; "os-version"; "arch" ]
+  in
+  os @ List.map OpamPackage.to_string deps |> String.concat " " |> Digest.string |> Digest.to_hex
 
 let run ~t:_ ~temp_dir opam_repository build_log =
   let rootfs = Os.path [ temp_dir; "fs" ] in
@@ -186,28 +190,25 @@ let run ~t:_ ~temp_dir opam_repository build_log =
   let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
   let _ = Os.rm (Os.path [ rootfs; "home"; "opam"; ".opam"; "repo"; "state-33BF9E46.cache" ]) in
-  let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
-  ()
+  result
 
-let build ~t ~temp_dir build_log pkg dependencies deps =
+let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let lowerdir = Os.path [ config.dir; "root"; "fs" ] in
+  let lowerdir = Os.path [ temp_dir; "lower" ] in
   let upperdir = Os.path [ temp_dir; "fs" ] in
-  let () = Os.mkdir upperdir in
+  let workdir = Os.path [ temp_dir; "work" ] in
+  let dummydir = Os.path [ temp_dir; "dummy" ] in
+  let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; dummydir ] in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
   let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ]) ] in
-  let workdir = Os.path [ temp_dir; "work" ] in
-  let () = Os.mkdir workdir in
   let () =
-    OpamPackage.Set.iter
-      (fun dep ->
-        let hash = layer_hash ~t (OpamPackage.Set.add dep (OpamPackage.Map.find dep dependencies)) in
+    List.iter
+      (fun hash ->
         assert (
           0
           = Os.sudo
               [
                 "cp";
-                (* "--no-clobber"; *)
                 "--update=none";
                 "--archive";
                 "--no-dereference";
@@ -215,9 +216,9 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
                 "--link";
                 "--no-target-directory";
                 Os.path [ config.dir; hash; "fs" ];
-                upperdir;
+                lowerdir;
               ]))
-      deps
+      ordered_hashes
   in
   let () =
     let default_switch = Os.path [ temp_dir; "fs"; "home"; "opam"; ".opam"; "default" ] in
@@ -225,9 +226,10 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
   in
   let etc_hosts = Os.path [ temp_dir; "hosts" ] in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
+  let ld = String.concat ":" [ lowerdir; Os.path [ config.dir; layer_hash ~t []; "fs" ] ] in
   let mounts =
     [
-      { Mount.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ lowerdir; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
+      { Mount.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ ld; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
       { ty = "bind"; src = config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
       { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
     ]
@@ -237,12 +239,12 @@ let build ~t ~temp_dir build_log pkg dependencies deps =
     | None -> mounts
     | Some src -> mounts @ [ { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } ]
   in
-  let () = Os.mkdir (Os.path [ temp_dir; "dummy" ]) in
-  let config = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
-  let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config) in
+  let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
+  let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+  let _ = Os.sudo [ "rm"; "-rf"; lowerdir; workdir; dummydir ] in
   let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
   let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/sources" ] ] in
   let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/build" ] ] in
-  let () = Os.write_to_file (Os.path [ temp_dir; "status" ]) (string_of_int result) in
-  ()
+  let _ = Os.sudo [ "rm"; "-f"; Os.path [ upperdir; "home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
+  result

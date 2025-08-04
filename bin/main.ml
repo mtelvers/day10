@@ -4,13 +4,16 @@ module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
+(*
+let container = (module Dummy : S.CONTAINER)
+*)
 let container = if Sys.win32 then (module Windows : S.CONTAINER) else (module Linux : S.CONTAINER)
 
 module Container = (val container)
 
 let init t =
   let config = Container.config ~t in
-  let root = Os.path [ config.dir; "root" ] in
+  let root = Os.path [ config.dir; Container.layer_hash ~t [] ] in
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
@@ -137,6 +140,41 @@ let pkg_deps solution =
       OpamPackage.Map.add pkg deps_plus_children map)
     OpamPackage.Map.empty
 
+(*
+let reduce dependencies =
+  OpamPackage.Map.map (fun u ->
+      OpamPackage.Set.filter
+        (fun v ->
+          let others = OpamPackage.Set.remove v u in
+          OpamPackage.Set.fold (fun o acc -> acc || OpamPackage.Set.mem v (OpamPackage.Map.find o dependencies)) others false |> not)
+        u)
+*)
+
+let extract_dag dag root =
+  let rec loop visited to_visit result =
+    match to_visit with
+    | [] -> result
+    | pkg :: rest -> (
+        if OpamPackage.Set.mem pkg visited then
+          (* OpamPackage already processed, skip it *)
+          loop visited rest result
+        else
+          (* Mark package as visited *)
+          let new_visited = OpamPackage.Set.add pkg visited in
+          match OpamPackage.Map.find_opt pkg dag with
+          | None ->
+              (* OpamPackage not found in the original map, skip it *)
+              loop new_visited rest result
+          | Some deps ->
+              (* Add package and its dependencies to result *)
+              let new_result = OpamPackage.Map.add pkg deps result in
+              (* Add all dependencies to the work list *)
+              let deps_list = OpamPackage.Set.fold (fun dep acc -> dep :: acc) deps [] in
+              let new_to_visit = deps_list @ rest in
+              loop new_visited new_to_visit new_result)
+  in
+  loop OpamPackage.Set.empty [ root ] OpamPackage.Map.empty
+
 type build_result =
   | No_solution of string
   | Dependency_failed
@@ -149,35 +187,24 @@ let build_result_to_string = function
   | Failure _ -> "failure"
   | Success _ -> "success"
 
-let build_layer t solution dependencies pkg =
+let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
-  let () = Printf.printf "Layer %s: %!" (OpamPackage.to_string pkg) in
-  let deps = OpamPackage.Map.find pkg solution in
-  let hash = Container.layer_hash ~t (OpamPackage.Set.add pkg (OpamPackage.Map.find pkg dependencies)) in
   let layer_dir = Os.path [ config.dir; hash ] in
-  let () = Printf.printf "layer_dir %s\n%!" layer_dir in
+  let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
+  let layer_json = Os.path [ layer_dir; "layer.json" ] in
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-    let () = Printf.printf "temp_dir %s\n%!" temp_dir in
-    let () = Util.save_layer_info (Os.path [ temp_dir; "layer.json" ]) pkg deps in
     let build_log = Os.path [ temp_dir; "build.log" ] in
-    let () = Container.build ~t ~temp_dir build_log pkg dependencies deps in
-    Unix.rename temp_dir target_dir
+    let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
+    let () = Unix.rename temp_dir target_dir in
+    Util.save_layer_info layer_json pkg (OpamPackage.Set.of_list ordered_deps) r
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
-  let () = Os.write_to_file (Os.path [ layer_dir; "last_used" ]) (Unix.time () |> string_of_float) in
-  let exit_status = Os.read_from_file (Os.path [ layer_dir; "status" ]) |> int_of_string in
+  let () = Unix.utimes layer_json 0.0 0.0 in
+  let exit_status = Util.load_layer_info_exit_status layer_json in
   match exit_status with
   | 0 -> Success hash
   | _ -> Failure hash
-
-let reduce dependencies =
-  OpamPackage.Map.map (fun u ->
-      OpamPackage.Set.filter
-        (fun v ->
-          let others = OpamPackage.Set.remove v u in
-          OpamPackage.Set.fold (fun o acc -> acc || OpamPackage.Set.mem v (OpamPackage.Map.find o dependencies)) others false |> not)
-        u)
 
 let build config package =
   match solve config package with
@@ -187,16 +214,35 @@ let build config package =
       init t;
       let ordered_installation = topological_sort solution in
       let dependencies = pkg_deps solution ordered_installation in
-      let solution = reduce dependencies solution in
+      (* let solution = reduce dependencies solution in
+      let positions = List.mapi (fun i x -> (x, i)) ordered_installation |> List.fold_left (fun acc (x, i) -> OpamPackage.Map.add x i acc) OpamPackage.Map.empty in *)
       (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
-      let results =
+      let results, _ =
         List.fold_left
-          (fun lst pkg ->
-            match lst with
-            | [] -> [ build_layer t solution dependencies pkg ]
-            | Success _ :: _ -> build_layer t solution dependencies pkg :: lst
-            | _ -> Dependency_failed :: lst)
-          [] ordered_installation
+          (fun (res, m) pkg ->
+            let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
+            let ordered_hashes =
+              List.filter_map
+                (fun p ->
+                  match OpamPackage.Map.find p m with
+                  | Success h
+                  | Failure h ->
+                      Some h
+                  | _ -> None)
+                ordered_deps
+            in
+            let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
+            (* let ordered_deps = OpamPackage.Map.find pkg dependencies |> OpamPackage.Set.to_list |>
+                    List.sort (fun a b -> compare (OpamPackage.Map.find a positions) (OpamPackage.Map.find b positions)) in *)
+            match res with
+            | [] ->
+                let r = build_layer t pkg hash ordered_deps ordered_hashes in
+                ([ r ], OpamPackage.Map.add pkg r m)
+            | Success _ :: _ ->
+                let r = build_layer t pkg hash ordered_deps ordered_hashes in
+                (r :: res, OpamPackage.Map.add pkg r m)
+            | _ -> (Dependency_failed :: res, OpamPackage.Map.add pkg Dependency_failed m))
+          ([], OpamPackage.Map.empty) ordered_installation
       in
       Container.deinit ~t;
       results

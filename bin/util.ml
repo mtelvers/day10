@@ -23,12 +23,17 @@ let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_
 let json_list_of_set s =
   `List (OpamPackage.Set.to_list_map (fun p -> `String (OpamPackage.to_string p)) s)
 
-let save_layer_info name pkg deps =
+let save_layer_info name pkg deps rc =
   Yojson.Safe.to_file name
     (`Assoc
        [ ("package", `String (OpamPackage.to_string pkg));
+         ("exit_status", `Int rc);
          ("deps", json_list_of_set deps);
          ("created", `Float (Unix.time ()))])
+
+let load_layer_info_exit_status name =
+  let json = Yojson.Safe.from_file name in
+  Yojson.Safe.Util.(json |> member "exit_status" |> to_int)
 
 let solution_save name pkgs =
   Yojson.Safe.to_file name
