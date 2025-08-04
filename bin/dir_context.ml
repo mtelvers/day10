@@ -87,12 +87,10 @@ let candidates t name =
                      let pkg = OpamPackage.create name v in
                      let opam = load t pkg in
                      let available = OpamFile.OPAM.available opam in
-                     match OpamFilter.eval ~default:(B false) (env t pkg) available with
-                     | B true -> (v, Ok opam)
-                     | B false -> (v, Error Unavailable)
-                     | _ ->
-                         OpamConsole.error "Available expression not a boolean: %s" (OpamFilter.to_string available);
-                         (v, Error Unavailable)))
+                     let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
+                     match (not avoid) && OpamFilter.eval_to_bool ~default:false (env t pkg) available with
+                     | true -> (v, Ok opam)
+                     | false -> (v, Error Unavailable)))
       | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
           OpamConsole.log "opam-0install" "Package %S not found!" (OpamPackage.Name.to_string name);
           [])

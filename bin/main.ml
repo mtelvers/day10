@@ -197,7 +197,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
     let () = Unix.rename temp_dir target_dir in
-    Util.save_layer_info layer_json pkg (OpamPackage.Set.of_list ordered_deps) r
+    Util.save_layer_info layer_json pkg ordered_deps r
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
   let () = Unix.utimes layer_json 0.0 0.0 in
@@ -251,6 +251,7 @@ let build config package =
 open Cmdliner
 
 let run_list (config : Config.t) =
+  let () = Random.self_init () in
   let packages = Os.path [ config.opam_repository; "packages" ] in
   let all_packages =
     Array.fold_left
@@ -269,7 +270,8 @@ let run_list (config : Config.t) =
       in
       OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam))
     latest
-  |> OpamPackage.Set.to_list
+  |> OpamPackage.Set.to_list_map (fun x -> (Random.bits (), x))
+  |> List.sort compare |> List.map snd
   |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
 
 let output (config : Config.t) results =

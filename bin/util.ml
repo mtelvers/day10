@@ -1,4 +1,3 @@
-
 let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_family ~os_version ~ocaml_version () = function
   | "arch" -> Some (OpamTypes.S arch)
   | "os" -> Some (OpamTypes.S os)
@@ -20,16 +19,15 @@ let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_
       OpamConsole.warning "Unknown variable %S" v;
       None
 
-let json_list_of_set s =
-  `List (OpamPackage.Set.to_list_map (fun p -> `String (OpamPackage.to_string p)) s)
-
 let save_layer_info name pkg deps rc =
   Yojson.Safe.to_file name
     (`Assoc
-       [ ("package", `String (OpamPackage.to_string pkg));
+       [
+         ("package", `String (OpamPackage.to_string pkg));
          ("exit_status", `Int rc);
-         ("deps", json_list_of_set deps);
-         ("created", `Float (Unix.time ()))])
+         ("deps", `List (List.map (fun p -> `String (OpamPackage.to_string p)) deps));
+         ("created", `Float (Unix.time ()));
+       ])
 
 let load_layer_info_exit_status name =
   let json = Yojson.Safe.from_file name in
@@ -39,7 +37,7 @@ let solution_save name pkgs =
   Yojson.Safe.to_file name
     (`Assoc
        (OpamPackage.Map.fold
-          (fun pkg deps lst -> (OpamPackage.to_string pkg, json_list_of_set deps) :: lst)
+          (fun pkg deps lst -> (OpamPackage.to_string pkg, `List (OpamPackage.Set.to_list_map (fun p -> `String (OpamPackage.to_string p)) deps)) :: lst)
           pkgs []))
 
 let solution_load name =

@@ -22,6 +22,7 @@ OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "un
 
 # Get the list of packages from opam
 PACKAGES := $(shell ./_build/install/default/bin/day10 list --opam-repository "$(OPAM_REPO)")
+# PACKAGES := 0install.2.18 diffast-api.0.2 alcotest.1.9.0 bos.0.2.1
 
 # Create target names using .json suffix for markdown output in OPAM_SHA subdirectory
 TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .json, $(PACKAGES)))
@@ -29,9 +30,12 @@ TARGETS := $(addprefix $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/, $(addsuffix .json, 
 # Default target - depends on all package health-checks
 all: $(TARGETS)
 
+$(CACHE_DIR):
+	mkdir -p $(CACHE_DIR)
+
 # Pattern rule for running health-check on each package and generating markdown
 # Extract package name from the full path: $(OUTPUT_DIR)/_packages/package.json -> package
-$(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.json:
+$(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)/%.json: | $(CACHE_DIR)
 	@mkdir -p $(OUTPUT_DIR)/$(OPAM_SHA)/$(SYSTEM)
 	./_build/install/default/bin/day10 health-check --cache-dir "$(CACHE_DIR)" --opam-repository "$(OPAM_REPO)" --json $@ $(basename $(notdir $@))
 
