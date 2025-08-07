@@ -209,7 +209,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
 let build config package =
   match solve config package with
   | Ok solution ->
-      (*  let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".dot") solution in *)
+      let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
       let t = Container.init ~config in
       init t;
       let ordered_installation = topological_sort solution in
@@ -357,6 +357,10 @@ let json_term =
   let doc = "Output results in json format" in
   Arg.(value & opt (some string) None & info [ "json" ] ~docv:"FILE" ~doc)
 
+let dot_term =
+  let doc = "Save solution in Graphviz DOT format" in
+  Arg.(value & opt (some string) None & info [ "dot" ] ~docv:"FILE" ~doc)
+
 let find_opam_files dir =
   try
     Sys.readdir dir |> Array.to_list |> List.filter_map (fun name -> if Filename.check_suffix name ".opam" then Some (Filename.remove_extension name) else None)
@@ -370,10 +374,10 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repository directory md json ->
+      const (fun dir ocaml_version opam_repository directory md json dot ->
           let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
-          run_ci { dir; ocaml_version; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; json })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term)
+          run_ci { dir; ocaml_version; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; json; dot })
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -385,10 +389,10 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repository package md json ->
+      const (fun dir ocaml_version opam_repository package md json dot ->
           let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
-          run_health_check { dir; ocaml_version; opam_repository; package; directory = None; md; json })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term)
+          run_health_check { dir; ocaml_version; opam_repository; package; directory = None; md; json; dot })
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term
@@ -398,7 +402,7 @@ let list_cmd =
     Term.(
       const (fun ocaml_version opam_repository ->
           let ocaml_version = OpamPackage.create (OpamPackage.Name.of_string "ocaml") (OpamPackage.Version.of_string ocaml_version) in
-          run_list { dir = ""; ocaml_version; opam_repository; package = ""; directory = None; md = None; json = None })
+          run_list { dir = ""; ocaml_version; opam_repository; package = ""; directory = None; md = None; json = None; dot = None })
       $ ocaml_version_term $ opam_repository_term)
   in
   let list_info = Cmd.info "list" ~doc:"List packages in opam repository" in

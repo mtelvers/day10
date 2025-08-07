@@ -221,8 +221,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       ordered_hashes
   in
   let () =
-    let default_switch = Os.path [ lowerdir; "home"; "opam"; ".opam"; "default" ] in
-    if Sys.file_exists default_switch then Opamh.dump_state default_switch
+    let packages_dir = Os.path [ lowerdir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "packages" ] in
+    let state_file = Os.path [ upperdir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "switch-state" ] in
+    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
   in
   let etc_hosts = Os.path [ temp_dir; "hosts" ] in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
@@ -242,9 +243,19 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
   let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-  let _ = Os.sudo [ "rm"; "-rf"; lowerdir; workdir; dummydir ] in
-  let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "tmp" ] ] in
-  let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/sources" ] ] in
-  let _ = Os.sudo [ "rm"; "-rf"; Os.path [ upperdir; "home/opam/.opam/default/.opam-switch/build" ] ] in
-  let _ = Os.sudo [ "rm"; "-f"; Os.path [ upperdir; "home/opam/.opam/repo/state-33BF9E46.cache" ] ] in
+  let _ =
+    Os.sudo
+      [
+        "rm";
+        "-rf";
+        lowerdir;
+        workdir;
+        dummydir;
+        Os.path [ upperdir; "tmp" ];
+        Os.path [ upperdir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "sources" ];
+        Os.path [ upperdir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "build" ];
+        Os.path [ upperdir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "packages"; "cache" ];
+        Os.path [ upperdir; "home"; "opam"; ".opam"; "repo"; "state-33BF9E46.cache" ];
+      ]
+  in
   result

@@ -6,4 +6,5 @@ type t = {
   directory : string option;
   md : string option;
   json : string option;
+  dot : string option;
 }

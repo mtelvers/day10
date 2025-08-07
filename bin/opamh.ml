@@ -19,9 +19,7 @@ let compiler_packages =
       "ocaml-options-vanilla";
     ]
 
-let dump_state prefix =
-  let state_file = Os.path [ prefix; ".opam-switch"; "switch-state" ] in
-  let packages_dir = Os.path [ prefix; ".opam-switch"; "packages" ] in
+let dump_state packages_dir state_file =
   let content = Sys.readdir packages_dir |> Array.to_list in
   let packages = List.filter_map (fun x -> OpamPackage.of_string_opt x) content in
   let sel_compiler = List.filter (fun x -> List.mem (OpamPackage.name x) compiler_packages) packages in

@@ -108,8 +108,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let _ = Os.hardlink_tree ~source:(Os.path [ config.dir; layer_hash ~t []; "fs" ]) ~target in
   let () = List.iter (fun hash -> Os.hardlink_tree ~source:(Os.path [ config.dir; hash; "fs" ]) ~target) ordered_hashes in
   let () =
-    let default_switch = Os.path [ temp_dir; "fs"; "default" ] in
-    if Sys.file_exists default_switch then Opamh.dump_state default_switch
+    let packages_dir = Os.path [ temp_dir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "packages" ] in
+    let state_file = Os.path [ temp_dir; "home"; "opam"; ".opam"; "default"; ".opam-switch"; "switch-state" ] in
+    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
   in
   let mounts =
     [
