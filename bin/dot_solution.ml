@@ -1,16 +1,12 @@
 let save name pkgs =
-  let header =
-    {|digraph opam {
-  rankdir="LR";
-  node [shape="box",fontcolor="#ffffff",color="#ef7a08",fillcolor="#ef7a08",style="filled"];
-  edge [color="#888888"];
-|}
-  in
+  let quoted package = "\"" ^ OpamPackage.to_string package ^ "\"" in
   let graph =
-    OpamPackage.Map.fold
-      (fun pkg deps acc ->
-        acc @ OpamPackage.Set.to_list_map (fun dep -> "  \"" ^ OpamPackage.to_string pkg ^ "\" -> \"" ^ OpamPackage.to_string dep ^ "\";") deps)
-      pkgs []
+    OpamPackage.Map.to_list pkgs
+    |> List.filter_map (fun (pkg, deps) ->
+           match OpamPackage.Set.to_list deps with
+           | [] -> None
+           | [ p ] -> Some ("  " ^ quoted pkg ^ " -> " ^ quoted p ^ ";")
+           | lst -> Some ("  " ^ quoted pkg ^ " -> {" ^ (lst |> List.map quoted |> String.concat " ") ^ "}"))
     |> String.concat "\n"
   in
-  Os.write_to_file name (header ^ graph ^ "\n}\n")
+  Os.write_to_file name ("digraph opam {\n" ^ graph ^ "\n}\n")

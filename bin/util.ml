@@ -19,13 +19,14 @@ let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_
       OpamConsole.warning "Unknown variable %S" v;
       None
 
-let save_layer_info name pkg deps rc =
+let save_layer_info name pkg deps hashes rc =
   Yojson.Safe.to_file name
     (`Assoc
        [
          ("package", `String (OpamPackage.to_string pkg));
          ("exit_status", `Int rc);
          ("deps", `List (List.map (fun p -> `String (OpamPackage.to_string p)) deps));
+         ("hashes", `List (List.map (fun h -> `String h) hashes));
          ("created", `Float (Unix.time ()));
        ])
 
