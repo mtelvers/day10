@@ -61,7 +61,13 @@ let rec rm ?(recursive = false) path =
         if recursive then Sys.readdir path |> Array.iter (fun f -> rm ~recursive (Filename.concat path f));
         Unix.rmdir path
   with
-  | Unix.Unix_error (Unix.ENOENT, _, _) -> ()
+  | Unix.Unix_error (Unix.ENOENT, _, _) ->
+                  try
+                          match Sys.is_directory path with
+                          | true -> Sys.rmdir path
+                          | false -> Sys.remove path
+                  with
+                  | _ -> ()
 
 module IntSet = Set.Make (Int)
 
