@@ -1,4 +1,8 @@
-type t = { config : Config.t }
+type t = {
+  config : Config.t;
+  uid : int;
+  gid : int;
+}
 
 let hostname = "builder"
 
@@ -140,7 +144,12 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
           ] );
     ]
 
-let init ~(config : Config.t) = { config }
+let init ~(config : Config.t) =
+  let uid, gid = match Unix.getuid (), Unix.getgid () with
+  | 0, _ -> 1000, 1000
+  | uid, gid -> (uid, gid)
+  in { config; uid; gid }
+
 let deinit ~t:_ = ()
 let config ~t = t.config
 
@@ -152,7 +161,7 @@ let layer_hash ~t deps =
   in
   os @ List.map OpamPackage.to_string deps |> String.concat " " |> Digest.string |> Digest.to_hex
 
-let run ~t:_ ~temp_dir opam_repository build_log =
+let run ~t ~temp_dir opam_repository build_log =
   let rootfs = Os.path [ temp_dir; "fs" ] in
   let () = Os.mkdir rootfs in
   let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
@@ -160,7 +169,7 @@ let run ~t:_ ~temp_dir opam_repository build_log =
   let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Os.path [ rootfs; "/usr/local/bin/opam-build" ] in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-linux"; "-o"; opam_build ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.1.0/opam-build-1.1.0-x86_64-linux"; "-o"; opam_build ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let etc_hosts = Os.path [ temp_dir; "hosts" ] in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
@@ -174,9 +183,9 @@ let run ~t:_ ~temp_dir opam_repository build_log =
           "apt update";
           "apt upgrade -y";
           "apt install build-essential unzip bubblewrap git sudo curl rsync -y";
-          "groupadd --gid 1003 opam";
-          "adduser --disabled-password --gecos '@opam' --no-create-home --uid 1003 --gid 1003 --home /home/opam opam";
-          "chown -R $(id -u opam):$(id -g opam) /home/opam";
+          "groupadd --gid " ^ (string_of_int t.gid) ^ " opam";
+          "adduser --disabled-password --gecos '@opam' --no-create-home --uid " ^ (string_of_int t.uid) ^ " --gid " ^ (string_of_int t.gid) ^ " --home /home/opam opam";
+          "chown -R " ^ (string_of_int t.uid) ^ ":" ^ (string_of_int t.gid) ^ " /home/opam";
           {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
           "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y'";
           "su - opam -c 'opam switch create default --empty'";
@@ -243,10 +252,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     | None -> mounts
     | Some src -> mounts @ [ { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } ]
   in
-  let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1003 ~gid:1003 ~env ~mounts ~network:true in
+  let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
   let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-  (*
   let _ =
     Os.sudo
       [
@@ -262,5 +270,4 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         Os.path [ upperdir; "home"; "opam"; ".opam"; "repo"; "state-33BF9E46.cache" ];
       ]
   in
-  *)
   result
