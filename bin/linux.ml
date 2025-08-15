@@ -178,7 +178,7 @@ let run ~t:_ ~temp_dir opam_repository build_log =
           "adduser --disabled-password --gecos '@opam' --no-create-home --uid 1003 --gid 1003 --home /home/opam opam";
           "chown -R $(id -u opam):$(id -g opam) /home/opam";
           {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
-          "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare -y'";
+          "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y'";
           "su - opam -c 'opam switch create default --empty'";
         ];
     ]
@@ -246,6 +246,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:1003 ~gid:1003 ~env ~mounts ~network:true in
   let () = Os.write_to_file (Os.path [ temp_dir; "config.json" ]) (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+  (*
   let _ =
     Os.sudo
       [
@@ -261,4 +262,5 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         Os.path [ upperdir; "home"; "opam"; ".opam"; "repo"; "state-33BF9E46.cache" ];
       ]
   in
+  *)
   result
