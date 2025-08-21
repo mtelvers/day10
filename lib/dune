@@ -1,0 +1,6 @@
+(library
+ (public_name obi)
+ (name obi)
+ (libraries opam-0install yojson tyxml ppx_deriving_yojson.runtime cmdliner toml)
+ (preprocess
+  (pps ppx_deriving_yojson)))

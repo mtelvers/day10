@@ -1,6 +1,4 @@
 (executable
- (public_name day10)
+ (public_name obi)
  (name main)
- (libraries opam-0install yojson tyxml ppx_deriving_yojson.runtime)
- (preprocess
-  (pps ppx_deriving_yojson)))
+ (libraries obi cmdliner))

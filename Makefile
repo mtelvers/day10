@@ -8,8 +8,8 @@ build:
 install:
 	dune fmt
 	dune build --release
-	ssh $(host) "rm -f main.exe"
-	scp _build/default/bin/main.exe $(host):
+	ssh $(host) "rm -f obi.exe"
+	scp _build/default/bin/main.exe $(host):obi.exe
 	ssh $(host) "rm -f opamh.exe"
 	scp ../opamh/_build/default/opamh.exe $(host):
 	ssh $(host) "rm -f opam-build"
@@ -50,4 +50,23 @@ clean:
 	dot -Tpdf -o $@ $<
 
 serve:
-	python3 -m http.server --directory day29/html/ --bind 0.0.0.0 8080
+	python3 -m http.server --directory $(workdir)/html/ --bind 0.0.0.0 8080
+
+# New targets for the restructured CLI
+obi-setup:
+	dune exec -- obi setup --work-dir $(workdir)
+
+obi-solve:
+	dune exec -- obi solve --work-dir $(workdir)
+
+obi-build:
+	dune exec -- obi build --work-dir $(workdir)
+
+obi-report:
+	dune exec -- obi report --work-dir $(workdir)
+
+obi-run:
+	dune exec -- obi run --work-dir $(workdir)
+
+obi-serve:
+	dune exec -- obi serve --work-dir $(workdir)

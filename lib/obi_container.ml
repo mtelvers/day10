@@ -43,7 +43,7 @@ let default_linux_caps =
     "CAP_AUDIT_WRITE";
   ]
 
-let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
+let make_runtime_config ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
   `Assoc
     [
       ("ociVersion", `String "1.0.1-dev");
@@ -133,3 +133,6 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
                 @ [ ("architectures", strings [ "SCMP_ARCH_X86_64"; "SCMP_ARCH_X86"; "SCMP_ARCH_X32" ]) ]) );
           ] );
     ]
+
+let run_container ~config_file ~name =
+  Obi_os.sudo [ "runc"; "run"; "-b"; Filename.dirname config_file; name ]

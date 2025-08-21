@@ -5,7 +5,7 @@ type mount = {
   options : string list;
 }
 
-val make :
+val make_runtime_config :
   root:string ->
   cwd:string ->
   argv:string list ->
@@ -16,3 +16,5 @@ val make :
   mounts:mount list ->
   network:bool ->
   Yojson.Safe.t
+
+val run_container : config_file:string -> name:string -> int

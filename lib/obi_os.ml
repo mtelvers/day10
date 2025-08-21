@@ -3,7 +3,6 @@ let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
 
 let sudo ?stdout ?stderr cmd =
-  (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
 let run cmd =
