@@ -8,7 +8,7 @@
 SYSTEM := debian-12
 
 # Compiler versions - can be overridden on command line
-COMPILERS := 4.08.1 4.09.1 4.10.2 4.11.2 4.12.1 4.13.1 4.14.2 5.0.0 5.1.1 5.2.1 5.3.0
+COMPILERS := ocaml.4.08.1 ocaml.4.09.1 ocaml.4.10.2 ocaml.4.11.2 ocaml.4.12.1 ocaml.4.13.1 ocaml.4.14.2 ocaml.5.0.0 ocaml.5.1.1 ocaml.5.2.1 ocaml.5.3.0
 
 # Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
 OUTPUT_DIR := output
