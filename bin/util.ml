@@ -34,6 +34,10 @@ let load_layer_info_exit_status name =
   let json = Yojson.Safe.from_file name in
   Yojson.Safe.Util.(json |> member "exit_status" |> to_int)
 
+let load_layer_info_package_name name =
+  let json = Yojson.Safe.from_file name in
+  Yojson.Safe.Util.(json |> member "package" |> to_string)
+
 let solution_save name pkgs =
   Yojson.Safe.to_file name
     (`Assoc

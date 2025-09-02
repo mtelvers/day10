@@ -59,7 +59,7 @@ let solve (config : Config.t) pkg =
              (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ directory; config.package ^ ".opam" ]))))
   in
   let context = Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins (Os.path [ config.opam_repository; "packages" ]) in
-  let r = Solver.solve context [ OpamPackage.name pkg ] in
+  let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
   match r with
   | Ok out ->
       let sels = Output.to_map out in
@@ -296,7 +296,7 @@ let output (config : Config.t) results =
           |> List.iter (function
                | Success hash
                | Failure hash ->
-                   let package = Os.read_from_file (Os.path [ config.dir; hash; "package" ]) in
+                   let package = Util.load_layer_info_package_name (Os.path [ config.dir; hash; "layer.json" ]) in
                    Printf.fprintf oc "\n# %s\n\n" package;
                    let log = Os.read_from_file (Os.path [ config.dir; hash; "build.log" ]) in
                    output_string oc log
