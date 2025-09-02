@@ -17,9 +17,7 @@ let init t =
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-    let opam_repository = Os.path [ temp_dir; "opam-repository" ] in
-    let () = Os.mkdir opam_repository in
-    let () = Os.write_to_file (Os.path [ opam_repository; "repo" ]) {|opam-version: "2.0"|} in
+    let opam_repository = Util.create_opam_repository temp_dir in
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let _ = Container.run ~t ~temp_dir opam_repository build_log in
     Unix.rename temp_dir target_dir
@@ -50,15 +48,12 @@ let solve (config : Config.t) pkg =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.name config.ocaml_version, (`Eq, OpamPackage.version config.ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let pins =
-    match config.directory with
-    | None -> OpamPackage.Name.Map.empty
-    | Some directory ->
+  let pins = Option.fold ~none:OpamPackage.Name.Map.empty ~some:(fun directory ->
         OpamPackage.Name.Map.empty
         |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string config.package)
-             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ directory; config.package ^ ".opam" ]))))
+             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ directory; config.package ^ ".opam" ]))))) config.directory
   in
-  let context = Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins (Os.path [ config.opam_repository; "packages" ]) in
+  let context = Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins (List.map (fun opam_repository -> Os.path [ opam_repository; "packages" ]) config.opam_repositories) in
   let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -199,6 +194,22 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
   let layer_json = Os.path [ layer_dir; "layer.json" ] in
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+    let opam_repo = Util.create_opam_repository temp_dir in
+    let () =
+      List.iter
+        (fun pkg ->
+          let opam_relative_path = Os.path [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
+          List.find_map
+            (fun opam_repository ->
+              let opam = Os.path [ opam_repository; opam_relative_path ] in
+              if Sys.file_exists opam then Some opam else None)
+            config.opam_repositories
+          |> Option.iter (fun src ->
+                 let dst = Os.path [ opam_repo; opam_relative_path ] in
+                 let () = Os.mkdir ~parents:true (Filename.dirname dst) in
+                 Os.cp src dst))
+        (pkg :: ordered_deps)
+    in
     let build_log = Os.path [ temp_dir; "build.log" ] in
     let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
     let () = Unix.rename temp_dir target_dir in
@@ -257,24 +268,22 @@ open Cmdliner
 
 let run_list (config : Config.t) =
   let () = Random.self_init () in
-  let packages = Os.path [ config.opam_repository; "packages" ] in
   let all_packages =
-    Array.fold_left
-      (fun acc d -> Filename.concat packages d |> Sys.readdir |> Array.fold_left (fun acc d -> OpamPackage.Set.add (OpamPackage.of_string d) acc) acc)
-      OpamPackage.Set.empty (Sys.readdir packages)
+    List.fold_left (fun set opam_repository ->
+      let packages = Os.path [ opam_repository; "packages" ] in
+      Array.fold_left
+        (fun acc name -> Filename.concat packages name |> Sys.readdir |> Array.fold_left (fun acc package ->
+                let pkg = OpamPackage.of_string package in
+                let opam = Os.path [ packages; name; package; "opam" ] |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read in
+                match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
+                | true -> OpamPackage.Set.add pkg acc
+                | false -> acc) acc)
+        set (Sys.readdir packages)
+    ) OpamPackage.Set.empty config.opam_repositories
   in
-  let latest =
-    OpamPackage.Name.Map.fold
-      (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
-      (OpamPackage.to_map all_packages) OpamPackage.Set.empty
-  in
-  OpamPackage.Set.filter
-    (fun pkg ->
-      let opam =
-        OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ packages; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ])))
-      in
-      OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam))
-    latest
+  OpamPackage.Name.Map.fold
+    (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
+    (OpamPackage.to_map all_packages) OpamPackage.Set.empty
   |> OpamPackage.Set.to_list_map (fun x -> (Random.bits (), x))
   |> List.sort compare |> List.map snd
   |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
@@ -282,8 +291,9 @@ let run_list (config : Config.t) =
 let output (config : Config.t) results =
   let opam_repo_sha =
     if Option.is_some config.md || Option.is_some config.json then
-      let cmd = Printf.sprintf "git -C %s rev-parse HEAD" config.opam_repository in
-      Os.run cmd |> String.trim
+      List.map (fun opam_repository ->
+        let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
+        Os.run cmd |> String.trim) config.opam_repositories |> String.concat ""
     else ""
   in
   let () =
@@ -354,8 +364,8 @@ let ocaml_version_term =
   Arg.(value & opt string "ocaml.5.3.0" & info [ "ocaml-version" ] ~docv:"VERSION" ~doc)
 
 let opam_repository_term =
-  let doc = "Directory containing opam repository (required)" in
-  Arg.(required & opt (some string) None & info [ "opam-repository" ] ~docv:"OPAM-REPO" ~doc)
+  let doc = "Directory containing opam repositories (required, can be specified multiple times)" in
+  Arg.(non_empty & opt_all string [] & info [ "opam-repository" ] ~docv:"OPAM-REPO" ~doc)
 
 let md_term =
   let doc = "Output results in markdown format" in
@@ -382,9 +392,9 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repository directory md json dot ->
+      const (fun dir ocaml_version opam_repositories directory md json dot ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_ci { dir; ocaml_version; opam_repository; package = List.hd (find_opam_files directory); directory = Some directory; md; json; dot })
+          run_ci { dir; ocaml_version; opam_repositories; package = List.hd (find_opam_files directory); directory = Some directory; md; json; dot })
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
@@ -397,9 +407,9 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repository package md json dot ->
+      const (fun dir ocaml_version opam_repositories package md json dot ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check { dir; ocaml_version; opam_repository; package; directory = None; md; json; dot })
+          run_health_check { dir; ocaml_version; opam_repositories; package; directory = None; md; json; dot })
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
@@ -408,12 +418,12 @@ let health_check_cmd =
 let list_cmd =
   let list_term =
     Term.(
-      const (fun ocaml_version opam_repository ->
+      const (fun ocaml_version opam_repositories ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_list { dir = ""; ocaml_version; opam_repository; package = ""; directory = None; md = None; json = None; dot = None })
+          run_list { dir = ""; ocaml_version; opam_repositories; package = ""; directory = None; md = None; json = None; dot = None })
       $ ocaml_version_term $ opam_repository_term)
   in
-  let list_info = Cmd.info "list" ~doc:"List packages in opam repository" in
+  let list_info = Cmd.info "list" ~doc:"List packages in opam repositories" in
   Cmd.v list_info list_term
 
 let main_info =
@@ -428,8 +438,8 @@ let main_info =
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
-      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repository /tmp/opam-repository package --md";
-      `P "$(mname) list --opam-repository /tmp/opam-repository";
+      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository package --md";
+      `P "$(mname) list --opam-repositories /tmp/opam-repository";
     ]
   in
   Cmd.info "day10" ~version:"0.0.1" ~doc ~man

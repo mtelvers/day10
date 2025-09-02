@@ -1,5 +1,3 @@
-(* This file is copied from opam-0install without any changes *)
-
 type rejection =
   | UserConstraint of OpamFormula.atom
   | Unavailable
@@ -13,14 +11,15 @@ let with_dir path fn =
 let list_dir path =
   let rec aux acc ch =
     match Unix.readdir ch with
-    | name -> aux (name :: acc) ch
+    | name when name.[0] <> '.' -> aux (name :: acc) ch
+    | _ -> aux acc ch
     | exception End_of_file -> acc
   in
   with_dir path (aux [])
 
 type t = {
   env : string -> OpamVariable.variable_contents option;
-  packages_dir : string;
+  packages_dirs : string list;
   pins : (OpamPackage.Version.t * OpamFile.OPAM.t) OpamPackage.Name.Map.t;
   constraints : OpamFormula.version_constraint OpamTypes.name_map; (* User-provided constraints *)
   test : OpamPackage.Name.Set.t;
@@ -32,8 +31,12 @@ let load t pkg =
   match OpamPackage.Name.Map.find_opt name t.pins with
   | Some (_, opam) -> opam
   | None ->
-      let opam_path = t.packages_dir / OpamPackage.Name.to_string name / OpamPackage.to_string pkg / "opam" in
-      OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path))
+      List.find_map
+        (fun packages_dir ->
+          let opam = packages_dir / OpamPackage.Name.to_string name / OpamPackage.to_string pkg / "opam" in
+          if Sys.file_exists opam then Some opam else None)
+        t.packages_dirs
+      |> Option.get |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read
 
 let user_restrictions t name = OpamPackage.Name.Map.find_opt name t.constraints
 let dev = OpamPackage.Version.of_string "dev"
@@ -69,35 +72,39 @@ let version_compare t v1 v2 = if t.prefer_oldest then OpamPackage.Version.compar
 let candidates t name =
   match OpamPackage.Name.Map.find_opt name t.pins with
   | Some (version, opam) -> [ (version, Ok opam) ]
-  | None -> (
-      let versions_dir = t.packages_dir / OpamPackage.Name.to_string name in
-      match list_dir versions_dir with
-      | versions ->
-          let user_constraints = user_restrictions t name in
-          versions
-          |> List.filter_map (fun dir ->
-                 match OpamPackage.of_string_opt dir with
-                 | Some pkg when Sys.file_exists (versions_dir / dir / "opam") -> Some (OpamPackage.version pkg)
-                 | _ -> None)
-          |> List.sort (version_compare t)
-          |> List.map (fun v ->
-                 match user_constraints with
-                 | Some test when not (OpamFormula.check_version_formula (OpamFormula.Atom test) v) -> (v, Error (UserConstraint (name, Some test)))
-                 | _ -> (
-                     let pkg = OpamPackage.create name v in
-                     let opam = load t pkg in
-                     let available = OpamFile.OPAM.available opam in
-                     let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
-                     match (not avoid) && OpamFilter.eval_to_bool ~default:false (env t pkg) available with
-                     | true -> (v, Ok opam)
-                     | false -> (v, Error Unavailable)))
-      | exception Unix.Unix_error (Unix.ENOENT, _, _) ->
-          OpamConsole.log "opam-0install" "Package %S not found!" (OpamPackage.Name.to_string name);
-          [])
+  | None ->
+      let versions =
+        List.concat_map
+          (fun packages_dir ->
+            try packages_dir / OpamPackage.Name.to_string name |> list_dir with
+            | Unix.Unix_error (Unix.ENOENT, _, _) -> [])
+          t.packages_dirs
+        |> List.sort_uniq compare
+      in
+      let user_constraints = user_restrictions t name in
+      versions
+      |> List.filter_map (fun dir ->
+             match OpamPackage.of_string_opt dir with
+             | Some pkg ->
+                 List.find_opt (fun packages_dir -> Sys.file_exists (packages_dir / OpamPackage.Name.to_string name / dir / "opam")) t.packages_dirs
+                 |> Option.map (fun _ -> OpamPackage.version pkg)
+             | _ -> None)
+      |> List.sort (version_compare t)
+      |> List.map (fun v ->
+             match user_constraints with
+             | Some test when not (OpamFormula.check_version_formula (OpamFormula.Atom test) v) -> (v, Error (UserConstraint (name, Some test)))
+             | _ -> (
+                 let pkg = OpamPackage.create name v in
+                 let opam = load t pkg in
+                 let available = OpamFile.OPAM.available opam in
+                 let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
+                 match (not avoid) && OpamFilter.eval_to_bool ~default:false (env t pkg) available with
+                 | true -> (v, Ok opam)
+                 | false -> (v, Error Unavailable)))
 
 let pp_rejection f = function
   | UserConstraint x -> Fmt.pf f "Rejected by user-specified constraint %s" (OpamFormula.string_of_atom x)
   | Unavailable -> Fmt.string f "Availability condition not satisfied"
 
-let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env packages_dir =
-  { env; packages_dir; pins; constraints; test; prefer_oldest }
+let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env packages_dirs =
+  { env; packages_dirs; pins; constraints; test; prefer_oldest }

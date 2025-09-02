@@ -118,7 +118,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       { Mount.ty = "bind"; src = target; dst = "c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam"; options = [ "rw"; "rbind"; "rprivate" ] };
       {
         ty = "bind";
-        src = config.opam_repository;
+        src = Os.path [ temp_dir; "opam-repository" ];
         dst = "c:\\users\\" ^ t.username ^ "\\AppData\\Local\\opam\\repo\\default";
         options = [ "rbind"; "rprivate" ];
       };

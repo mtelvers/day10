@@ -41,7 +41,13 @@ let run cmd =
   r
 
 let nproc () = run "nproc" |> String.trim |> int_of_string
-let mkdir dir = if not (Sys.file_exists dir) then Sys.mkdir dir 0o755
+
+let rec mkdir ?(parents = false) dir =
+  if not (Sys.file_exists dir) then (
+    (if parents then
+       let parent_dir = Filename.dirname dir in
+       if parent_dir <> dir then mkdir ~parents:true parent_dir);
+    Sys.mkdir dir 0o755)
 
 let rec rm ?(recursive = false) path =
   try

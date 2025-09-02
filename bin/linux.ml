@@ -243,7 +243,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let mounts =
     [
       { Mount.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ ld; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
-      { ty = "bind"; src = config.opam_repository; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
+      { ty = "bind"; src = Os.path [ temp_dir; "opam-repository" ]; dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
       { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
     ]
   in
