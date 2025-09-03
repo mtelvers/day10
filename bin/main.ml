@@ -198,7 +198,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
     let () =
       List.iter
         (fun pkg ->
-          let opam_relative_path = Os.path [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg; "opam" ] in
+          let opam_relative_path = Os.path [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg ] in
           List.find_map
             (fun opam_repository ->
               let opam = Os.path [ opam_repository; opam_relative_path ] in
@@ -206,8 +206,14 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
             config.opam_repositories
           |> Option.iter (fun src ->
                  let dst = Os.path [ opam_repo; opam_relative_path ] in
-                 let () = Os.mkdir ~parents:true (Filename.dirname dst) in
-                 Os.cp src dst))
+                 let () = Os.mkdir ~parents:true dst in
+                 let () = Os.cp (Os.path [src; "opam"]) (Os.path [dst; "opam"]) in
+                 let src_files = Os.path [src; "files"] in
+                 if Sys.file_exists src_files then
+                         let dst_files = Os.path [dst; "files"] in
+                         let () = Os.mkdir dst_files in
+                         Sys.readdir src_files |> Array.iter (fun f -> Os.cp (Os.path [src_files; f]) (Os.path [dst_files; f]))
+                 ))
         (pkg :: ordered_deps)
     in
     let build_log = Os.path [ temp_dir; "build.log" ] in
