@@ -1,7 +1,6 @@
 let read_from_file filename = In_channel.with_open_text filename @@ fun ic -> In_channel.input_all ic
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
-let path = List.fold_left Filename.concat ""
 
 let sudo ?stdout ?stderr cmd =
   (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
@@ -67,13 +66,13 @@ let rec rm ?(recursive = false) path =
         if recursive then Sys.readdir path |> Array.iter (fun f -> rm ~recursive (Filename.concat path f));
         Unix.rmdir path
   with
-  | Unix.Unix_error (Unix.ENOENT, _, _) ->
-                  try
-                          match Sys.is_directory path with
-                          | true -> Sys.rmdir path
-                          | false -> Sys.remove path
-                  with
-                  | _ -> ()
+  | Unix.Unix_error (Unix.ENOENT, _, _) -> (
+      try
+        match Sys.is_directory path with
+        | true -> Sys.rmdir path
+        | false -> Sys.remove path
+      with
+      | _ -> ())
 
 module IntSet = Set.Make (Int)
 
@@ -220,4 +219,3 @@ let clense_tree ~source ~target =
       entries
   in
   process_directory source target
-

@@ -13,12 +13,12 @@ module Container = (val container)
 
 let init t =
   let config = Container.config ~t in
-  let root = Os.path [ config.dir; Container.layer_hash ~t [] ] in
+  let root = Path.(config.dir / Container.layer_hash ~t []) in
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let opam_repository = Util.create_opam_repository temp_dir in
-    let build_log = Os.path [ temp_dir; "build.log" ] in
+    let build_log = Path.(temp_dir / "build.log") in
     let _ = Container.run ~t ~temp_dir opam_repository build_log in
     Unix.rename temp_dir target_dir
 
@@ -48,12 +48,18 @@ let solve (config : Config.t) pkg =
     OpamPackage.Name.Map.of_list
       [ (OpamPackage.name config.ocaml_version, (`Eq, OpamPackage.version config.ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
   in
-  let pins = Option.fold ~none:OpamPackage.Name.Map.empty ~some:(fun directory ->
+  let pins =
+    Option.fold ~none:OpamPackage.Name.Map.empty
+      ~some:(fun directory ->
         OpamPackage.Name.Map.empty
         |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string config.package)
-             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw (Os.path [ directory; config.package ^ ".opam" ]))))) config.directory
+             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw Path.((directory / config.package) ^ ".opam")))))
+      config.directory
   in
-  let context = Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins (List.map (fun opam_repository -> Os.path [ opam_repository; "packages" ]) config.opam_repositories) in
+  let context =
+    Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins
+      (List.map (fun opam_repository -> Path.(opam_repository / "packages")) config.opam_repositories)
+  in
   let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
   match r with
   | Ok out ->
@@ -111,8 +117,7 @@ let solve (config : Config.t) pkg =
           deps (OpamPackage.Map.add pkg deps map)
       in
       Ok (dfs OpamPackage.Map.empty pkg)
-  | Error problem ->
-      Error (Solver.diagnostics problem)
+  | Error problem -> Error (Solver.diagnostics problem)
 
 let rec topological_sort pkgs =
   match OpamPackage.Map.is_empty pkgs with
@@ -189,34 +194,34 @@ let print_build_result = function
 
 let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
-  let layer_dir = Os.path [ config.dir; hash ] in
+  let layer_dir = Path.(config.dir / hash) in
   let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
-  let layer_json = Os.path [ layer_dir; "layer.json" ] in
+  let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let opam_repo = Util.create_opam_repository temp_dir in
     let () =
       List.iter
         (fun pkg ->
-          let opam_relative_path = Os.path [ "packages"; OpamPackage.name_to_string pkg; OpamPackage.to_string pkg ] in
+          let opam_relative_path = Path.("packages" / OpamPackage.name_to_string pkg / OpamPackage.to_string pkg) in
           List.find_map
             (fun opam_repository ->
-              let opam = Os.path [ opam_repository; opam_relative_path ] in
+              let opam = Path.(opam_repository / opam_relative_path) in
               if Sys.file_exists opam then Some opam else None)
             config.opam_repositories
           |> Option.iter (fun src ->
-                 let dst = Os.path [ opam_repo; opam_relative_path ] in
+                 let dst = Path.(opam_repo / opam_relative_path) in
                  let () = Os.mkdir ~parents:true dst in
-                 let () = Os.cp (Os.path [src; "opam"]) (Os.path [dst; "opam"]) in
-                 let src_files = Os.path [src; "files"] in
+                 let () = Os.cp Path.(src / "opam") Path.(dst / "opam") in
+                 let () = Os.cp Path.(src / "opam" / "bar") Path.(dst / "opam") in
+                 let src_files = Path.(src / "files") in
                  if Sys.file_exists src_files then
-                         let dst_files = Os.path [dst; "files"] in
-                         let () = Os.mkdir dst_files in
-                         Sys.readdir src_files |> Array.iter (fun f -> Os.cp (Os.path [src_files; f]) (Os.path [dst_files; f]))
-                 ))
+                   let dst_files = Path.(dst / "files") in
+                   let () = Os.mkdir dst_files in
+                   Sys.readdir src_files |> Array.iter (fun f -> Os.cp Path.(src_files / f) Path.(dst_files / f))))
         (pkg :: ordered_deps)
     in
-    let build_log = Os.path [ temp_dir; "build.log" ] in
+    let build_log = Path.(temp_dir / "build.log") in
     let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
     let () = Unix.rename temp_dir target_dir in
     Util.save_layer_info layer_json pkg ordered_deps ordered_hashes r
@@ -275,17 +280,22 @@ open Cmdliner
 let run_list (config : Config.t) =
   let () = Random.self_init () in
   let all_packages =
-    List.fold_left (fun set opam_repository ->
-      let packages = Os.path [ opam_repository; "packages" ] in
-      Array.fold_left
-        (fun acc name -> Filename.concat packages name |> Sys.readdir |> Array.fold_left (fun acc package ->
-                let pkg = OpamPackage.of_string package in
-                let opam = Os.path [ packages; name; package; "opam" ] |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read in
-                match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
-                | true -> OpamPackage.Set.add pkg acc
-                | false -> acc) acc)
-        set (Sys.readdir packages)
-    ) OpamPackage.Set.empty config.opam_repositories
+    List.fold_left
+      (fun set opam_repository ->
+        let packages = Path.(opam_repository / "packages") in
+        Array.fold_left
+          (fun acc name ->
+            Filename.concat packages name |> Sys.readdir
+            |> Array.fold_left
+                 (fun acc package ->
+                   let pkg = OpamPackage.of_string package in
+                   let opam = Path.(packages / name / package / "opam") |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read in
+                   match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
+                   | true -> OpamPackage.Set.add pkg acc
+                   | false -> acc)
+                 acc)
+          set (Sys.readdir packages))
+      OpamPackage.Set.empty config.opam_repositories
   in
   OpamPackage.Name.Map.fold
     (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
@@ -297,9 +307,12 @@ let run_list (config : Config.t) =
 let output (config : Config.t) results =
   let opam_repo_sha =
     if Option.is_some config.md || Option.is_some config.json then
-      List.map (fun opam_repository ->
-        let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
-        Os.run cmd |> String.trim) config.opam_repositories |> String.concat ""
+      List.map
+        (fun opam_repository ->
+          let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
+          Os.run cmd |> String.trim)
+        config.opam_repositories
+      |> String.concat ""
     else ""
   in
   let () =
@@ -312,9 +325,9 @@ let output (config : Config.t) results =
           |> List.iter (function
                | Success hash
                | Failure hash ->
-                   let package = Util.load_layer_info_package_name (Os.path [ config.dir; hash; "layer.json" ]) in
+                   let package = Util.load_layer_info_package_name Path.(config.dir / hash / "layer.json") in
                    Printf.fprintf oc "\n# %s\n\n" package;
-                   let log = Os.read_from_file (Os.path [ config.dir; hash; "build.log" ]) in
+                   let log = Os.read_from_file Path.(config.dir / hash / "build.log") in
                    output_string oc log
                | No_solution log -> output_string oc log
                | _ -> ())
@@ -336,15 +349,11 @@ let output (config : Config.t) results =
         in
         let j =
           `Assoc
-            (
-              [
-              ("name", `String config.package);
-              ("status", `String (build_result_to_string (List.hd results)));
-              ] @
-              (match build with
-              | [] -> []
-              | hd :: _ -> [("layer", hd)])
-            )
+            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))) ]
+            @
+            match build with
+            | [] -> []
+            | hd :: _ -> [ ("layer", hd) ])
         in
         Yojson.Safe.to_file filename j)
       config.json

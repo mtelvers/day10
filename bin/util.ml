@@ -56,7 +56,7 @@ let solution_load name =
        OpamPackage.Map.empty
 
 let create_opam_repository path =
-  let path = Os.path [ path; "opam-repository" ] in
+  let path = Path.(path / "opam-repository") in
   let () = Os.mkdir path in
-  let () = Os.write_to_file (Os.path [ path; "repo" ]) {|opam-version: "2.0"|} in
+  let () = Os.write_to_file Path.(path / "repo") {|opam-version: "2.0"|} in
   path
