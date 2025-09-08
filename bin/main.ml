@@ -213,7 +213,6 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
                  let dst = Path.(opam_repo / opam_relative_path) in
                  let () = Os.mkdir ~parents:true dst in
                  let () = Os.cp Path.(src / "opam") Path.(dst / "opam") in
-                 let () = Os.cp Path.(src / "opam" / "bar") Path.(dst / "opam") in
                  let src_files = Path.(src / "files") in
                  if Sys.file_exists src_files then
                    let dst_files = Path.(dst / "files") in

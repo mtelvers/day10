@@ -60,3 +60,10 @@ let create_opam_repository path =
   let () = Os.mkdir path in
   let () = Os.write_to_file Path.(path / "repo") {|opam-version: "2.0"|} in
   path
+
+let opam_file opam_repositories pkg =
+  List.find_map
+    (fun opam_repository ->
+      let opam = Path.(opam_repository / "packages" / OpamPackage.name_to_string pkg / OpamPackage.to_string pkg / "opam") in
+      if Sys.file_exists opam then Some (OpamFilename.raw opam |> OpamFile.make |> OpamFile.OPAM.read) else None)
+    opam_repositories
