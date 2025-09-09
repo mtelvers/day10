@@ -13,7 +13,7 @@ module Container = (val container)
 
 let init t =
   let config = Container.config ~t in
-  let os_dir = Path.(config.dir / Container.os_key ~t) in
+  let os_dir = Path.(config.dir / Container.os_key ~config) in
   let () = Os.mkdir ~parents:true os_dir in
   let root = Path.(os_dir / "base") in
   if not (Sys.file_exists root) then
@@ -196,7 +196,7 @@ let print_build_result = function
 
 let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
-  let layer_dir = Path.(config.dir / Container.os_key ~t / hash) in
+  let layer_dir = Path.(config.dir / Container.os_key ~config / hash) in
   let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
@@ -326,9 +326,10 @@ let output (config : Config.t) results =
           |> List.iter (function
                | Success hash
                | Failure hash ->
-                   let package = Util.load_layer_info_package_name Path.(config.dir / hash / "layer.json") in
+                   let os_key = Container.os_key ~config in
+                   let package = Util.load_layer_info_package_name Path.(config.dir / os_key / hash / "layer.json") in
                    Printf.fprintf oc "\n# %s\n\n" package;
-                   let log = Os.read_from_file Path.(config.dir / hash / "build.log") in
+                   let log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
                    output_string oc log
                | No_solution log -> output_string oc log
                | _ -> ())

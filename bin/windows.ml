@@ -41,10 +41,10 @@ let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
 
-let os_key ~t =
+let os_key ~config =
   let os =
     List.map
-      (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
+      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
       [ "os-family"; "os-version"; "arch" ]
   in
   String.concat "-" os
@@ -106,7 +106,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let os_key = os_key ~t in
+  let os_key = os_key ~config in
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in

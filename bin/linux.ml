@@ -155,10 +155,10 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let os_key ~t =
+let os_key ~config =
   let os =
     List.map
-      (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
+      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
       [ "os-family"; "os-version"; "arch" ]
   in
   String.concat "-" os
@@ -219,7 +219,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let os_key = os_key ~t in
+  let os_key = os_key ~config in
   let lowerdir = Path.(temp_dir / "lower") in
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in
