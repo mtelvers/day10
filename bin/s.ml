@@ -8,4 +8,5 @@ module type CONTAINER = sig
   val build : t:t -> temp_dir:string -> string -> OpamPackage.t -> string list -> int
   val std_env : config:Config.t -> string -> OpamTypes.variable_contents option
   val layer_hash : t:t -> OpamPackage.t list -> string
+  val os_key : t:t -> string
 end

@@ -41,12 +41,15 @@ let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
 
-let layer_hash ~t deps =
+let os_key ~t =
   let os =
     List.map
       (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
       [ "os-family"; "os-version"; "arch" ]
   in
+  String.concat "-" os
+
+let layer_hash ~t deps =
   let hashes =
     List.map
       (fun opam ->
@@ -54,7 +57,7 @@ let layer_hash ~t deps =
         |> OpamHash.compute_from_string |> OpamHash.to_string)
       deps
   in
-  os @ hashes |> String.concat " " |> Digest.string |> Digest.to_hex
+  String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
   let rootfs = Path.(temp_dir / "fs") in
@@ -103,6 +106,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
+  let os_key = os_key ~t in
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
@@ -111,8 +115,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       "cmd"; "/c"; String.concat " && " (pin @ [ "set && c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]);
     ]
   in
-  let _ = Os.hardlink_tree ~source:Path.(config.dir / layer_hash ~t [] / "fs") ~target in
-  let () = List.iter (fun hash -> Os.hardlink_tree ~source:Path.(config.dir / hash / "fs") ~target) ordered_hashes in
+  let _ = Os.hardlink_tree ~source:Path.(config.dir / os_key / "base" / "fs") ~target in
+  let () = List.iter (fun hash -> Os.hardlink_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) ordered_hashes in
   let () =
     let packages_dir = Path.(temp_dir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
     let state_file = Path.(temp_dir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
@@ -140,8 +144,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string ctr_config) in
   let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
-  let _ = Os.clense_tree ~source:Path.(config.dir / layer_hash ~t [] / "fs") ~target in
-  let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / hash / "fs") ~target) ordered_hashes in
+  let _ = Os.clense_tree ~source:Path.(config.dir / os_key / "base" / "fs") ~target in
+  let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) ordered_hashes in
   let _ = Os.rm Path.(target / "repo" / "state-33BF9E46.cache") in
   let _ = Os.rm ~recursive:true Path.(target / "default" / ".opam-switch" / "sources") in
   let _ = Os.rm ~recursive:true Path.(target / "default" / ".opam-switch" / "build") in

@@ -13,7 +13,9 @@ module Container = (val container)
 
 let init t =
   let config = Container.config ~t in
-  let root = Path.(config.dir / Container.layer_hash ~t []) in
+  let os_dir = Path.(config.dir / Container.os_key ~t) in
+  let () = Os.mkdir ~parents:true os_dir in
+  let root = Path.(os_dir / "base") in
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
@@ -194,7 +196,7 @@ let print_build_result = function
 
 let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
-  let layer_dir = Path.(config.dir / hash) in
+  let layer_dir = Path.(config.dir / Container.os_key ~t / hash) in
   let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =

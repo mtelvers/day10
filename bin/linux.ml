@@ -155,12 +155,15 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let layer_hash ~t deps =
+let os_key ~t =
   let os =
     List.map
       (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
       [ "os-family"; "os-version"; "arch" ]
   in
+  String.concat "-" os
+
+let layer_hash ~t deps =
   let hashes =
     List.map
       (fun opam ->
@@ -168,7 +171,7 @@ let layer_hash ~t deps =
         |> OpamHash.compute_from_string |> OpamHash.to_string)
       deps
   in
-  os @ hashes |> String.concat " " |> Digest.string |> Digest.to_hex
+  String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
   let rootfs = Path.(temp_dir / "fs") in
@@ -216,6 +219,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
+  let os_key = os_key ~t in
   let lowerdir = Path.(temp_dir / "lower") in
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in
@@ -237,7 +241,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
                 "--recursive";
                 "--link";
                 "--no-target-directory";
-                Path.(config.dir / hash / "fs");
+                Path.(config.dir / os_key / hash / "fs");
                 lowerdir;
               ]))
       ordered_hashes
@@ -249,7 +253,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
-  let ld = String.concat ":" [ lowerdir; Path.(config.dir / layer_hash ~t [] / "fs") ] in
+  let ld = String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
   let mounts =
     [
       { Mount.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ ld; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
