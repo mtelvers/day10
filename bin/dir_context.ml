@@ -67,7 +67,13 @@ let filter_deps t pkg f =
   let test = OpamPackage.Name.Set.mem (OpamPackage.name pkg) t.test in
   f |> OpamFilter.partial_filter_formula (env t pkg) |> OpamFilter.filter_deps ~build:true ~post:true ~test ~doc:false ~dev ~dev_setup:false ~default:false
 
-let version_compare t v1 v2 = if t.prefer_oldest then OpamPackage.Version.compare v1 v2 else OpamPackage.Version.compare v2 v1
+let version_compare t (v1, v1_avoid, _) (v2, v2_avoid, _) =
+  match (v1_avoid, v2_avoid) with
+  | true, true
+  | false, false ->
+      if t.prefer_oldest then OpamPackage.Version.compare v1 v2 else OpamPackage.Version.compare v2 v1
+  | true, false -> 1
+  | false, true -> -1
 
 let candidates t name =
   match OpamPackage.Name.Map.find_opt name t.pins with
@@ -89,18 +95,19 @@ let candidates t name =
                  List.find_opt (fun packages_dir -> Sys.file_exists (packages_dir / OpamPackage.Name.to_string name / dir / "opam")) t.packages_dirs
                  |> Option.map (fun _ -> OpamPackage.version pkg)
              | _ -> None)
+      |> List.filter_map (fun v ->
+             let pkg = OpamPackage.create name v in
+             let opam = load t pkg in
+             let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
+             let available = OpamFile.OPAM.available opam in
+             match OpamFilter.eval_to_bool ~default:false (env t pkg) available with
+             | true -> Some (v, avoid, opam)
+             | false -> None)
       |> List.sort (version_compare t)
-      |> List.map (fun v ->
+      |> List.map (fun (v, _, opam) ->
              match user_constraints with
              | Some test when not (OpamFormula.check_version_formula (OpamFormula.Atom test) v) -> (v, Error (UserConstraint (name, Some test)))
-             | _ -> (
-                 let pkg = OpamPackage.create name v in
-                 let opam = load t pkg in
-                 let available = OpamFile.OPAM.available opam in
-                 let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
-                 match (not avoid) && OpamFilter.eval_to_bool ~default:false (env t pkg) available with
-                 | true -> (v, Ok opam)
-                 | false -> (v, Error Unavailable)))
+             | _ -> (v, Ok opam))
 
 let pp_rejection f = function
   | UserConstraint x -> Fmt.pf f "Rejected by user-specified constraint %s" (OpamFormula.string_of_atom x)
