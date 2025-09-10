@@ -177,18 +177,21 @@ let extract_dag dag root =
   loop OpamPackage.Set.empty [ root ] OpamPackage.Map.empty
 
 type build_result =
+  | Solution of OpamTypes.package_set OpamTypes.package_map
   | No_solution of string
   | Dependency_failed
   | Failure of string
   | Success of string
 
 let build_result_to_string = function
+  | Solution _ -> "solution"
   | No_solution _ -> "no_solution"
   | Dependency_failed -> "dependency_failed"
   | Failure _ -> "failure"
   | Success _ -> "success"
 
 let print_build_result = function
+  | Solution _ -> OpamConsole.msg "solution"
   | No_solution _ -> OpamConsole.msg "no_solution"
   | Dependency_failed -> OpamConsole.warning "dependency_failed"
   | Failure _ -> OpamConsole.error "failure"
@@ -273,7 +276,7 @@ let build config package =
           ([], OpamPackage.Map.empty) ordered_installation
       in
       Container.deinit ~t;
-      results
+      results @ [ Solution solution ]
   | Error s -> [ No_solution s ]
 
 open Cmdliner
@@ -306,15 +309,14 @@ let run_list (config : Config.t) =
   |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
 
 let output (config : Config.t) results =
+  let os_key = Container.os_key ~config in
   let opam_repo_sha =
-    if Option.is_some config.md || Option.is_some config.json then
-      List.map
-        (fun opam_repository ->
-          let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
-          Os.run cmd |> String.trim)
-        config.opam_repositories
-      |> String.concat ""
-    else ""
+    List.map
+      (fun opam_repository ->
+        let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
+        Os.run cmd |> String.trim)
+      config.opam_repositories
+    |> String.concat ""
   in
   let () =
     Option.iter
@@ -324,13 +326,15 @@ let output (config : Config.t) results =
         let () =
           List.rev results
           |> List.iter (function
+               | Solution solution ->
+                   Printf.fprintf oc "\n# Solution\n\n";
+                   output_string oc (Dot_solution.to_string solution)
                | Success hash
                | Failure hash ->
-                   let os_key = Container.os_key ~config in
                    let package = Util.load_layer_info_package_name Path.(config.dir / os_key / hash / "layer.json") in
                    Printf.fprintf oc "\n# %s\n\n" package;
-                   let log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
-                   output_string oc log
+                   let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
+                   output_string oc build_log
                | No_solution log -> output_string oc log
                | _ -> ())
         in
@@ -340,22 +344,32 @@ let output (config : Config.t) results =
   let () =
     Option.iter
       (fun filename ->
-        let build =
-          List.filter_map
+        let hash =
+          List.find_map
             (function
               | Success hash
               | Failure hash ->
-                  Some (`String hash)
+                  Some hash
+              | _ -> None)
+            results
+        in
+        let solution =
+          List.find_map
+            (function
+              | Solution s -> Some (Dot_solution.to_string s)
+              | No_solution s -> Some s
               | _ -> None)
             results
         in
         let j =
           `Assoc
-            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))) ]
-            @
-            match build with
-            | [] -> []
-            | hd :: _ -> [ ("layer", hd) ])
+            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String opam_repo_sha) ]
+            @ Option.fold ~none:[]
+                ~some:(fun hash ->
+                  let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
+                  [ ("layer", `String hash); ("log", `String build_log) ])
+                hash
+            @ Option.fold ~none:[] ~some:(fun s -> [ ("solution", `String s) ]) solution)
         in
         Yojson.Safe.to_file filename j)
       config.json

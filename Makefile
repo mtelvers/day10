@@ -8,16 +8,20 @@
 SYSTEM := debian-12
 
 # Compiler versions - can be overridden on command line
-COMPILERS := ocaml.4.08.1 ocaml.4.09.1 ocaml.4.10.2 ocaml.4.11.2 ocaml.4.12.1 ocaml.4.13.1 ocaml.4.14.2 ocaml.5.0.0 ocaml.5.1.1 ocaml.5.2.1 ocaml.5.3.0
+#COMPILERS := ocaml.4.08.1 ocaml.4.09.1 ocaml.4.10.2 ocaml.4.11.2 ocaml.4.12.1 ocaml.4.13.1 ocaml.4.14.2 ocaml.5.0.0 ocaml.5.1.1 ocaml.5.2.1 ocaml.5.3.0
+#COMPILERS := ocaml.4.08.2 ocaml.4.09.2 ocaml.4.10.3 ocaml.4.11.3 ocaml.4.12.2 ocaml.4.13.2 ocaml.4.14.3 ocaml.5.0.1 ocaml.5.1.2 ocaml.5.2.2 ocaml.5.3.1
+COMPILERS := ocaml-base-compiler.5.4.0~beta2
 
 # Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
+#OUTPUT_DIR := output
+#OUTPUT_DIR := relocatable
 OUTPUT_DIR := output
 
 # Path to the opam repository root (for git operations) - can be overridden
 OPAM_REPO := /home/mtelvers/opam-repository
 
 # Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
-CACHE_DIR := /home/mtelvers/cache
+CACHE_DIR := /home/mtelvers/cache2
 
 # Get the git commit SHA of the opam repository
 OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -25,6 +29,8 @@ OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "un
 # Get the list of packages from opam
 PACKAGES := $(shell ./_build/install/default/bin/day10 list --opam-repository "$(OPAM_REPO)")
 # PACKAGES := 0install.2.18 diffast-api.0.2 alcotest.1.9.0 bos.0.2.1 ansi.0.7.0
+
+#		--opam-repository /home/mtelvers/opam-repository-relocatable \
 
 # Template to generate rules for each compiler version
 define COMPILER_TEMPLATE
@@ -34,7 +40,6 @@ $$(OUTPUT_DIR)/$$(OPAM_SHA)/$$(SYSTEM)/$(1)/%.json: | $$(CACHE_DIR)
 		--cache-dir "$$(CACHE_DIR)" \
 		--opam-repository "$$(OPAM_REPO)" \
 		--ocaml-version $(1) \
-		--dot $$(basename $$@).dot \
 		--json $$@ $$(basename $$(notdir $$@))
 endef
 
@@ -69,9 +74,9 @@ $(OUTPUT_DIR)/commits.json:
 	@echo "JSON file generated: $@"
 
 $(OUTPUT_DIR)/%/commit.json:
-	@echo "Generating $@"
+	@echo "Generating flattened $@"
 	@{ \
-		echo '{}'; \
+		sha=$$(basename $(@D)); \
 		for os_dir in $(@D)/*/; do \
 			if [ -d "$$os_dir" ]; then \
 				os=$$(basename "$$os_dir"); \
@@ -79,17 +84,33 @@ $(OUTPUT_DIR)/%/commit.json:
 					if [ -d "$$compiler_dir" ]; then \
 						compiler=$$(basename "$$compiler_dir"); \
 						json_files="$$compiler_dir"*.json; \
-						if ls $$json_files >/dev/null 2>&1; then \
-							cat $$json_files | jq -s --arg os "$$os" --arg compiler "$$compiler" \
-								'{"os": $$os, "compiler": $$compiler, "data": .}'; \
+	                                        if ls $$json_files >/dev/null 2>&1; then \
+	                                                cat $$json_files | jq --arg os "$$os" --arg compiler "$$compiler" --arg sha "$$sha" \
+	                                                        '. + {"os": $$os, "compiler": $$compiler, "sha": $$sha}'; \
 						fi; \
 					fi; \
 				done; \
 			fi; \
 		done; \
-	} | jq -s '.[1:] | reduce .[] as $$item ({}; .[$$item.os][$$item.compiler] = $$item.data)' > $@
+	} | jq -s '.' > $@
 
 json: $(OUTPUT_DIR)/commits.json $(foreach dir,$(wildcard output/*),$(dir)/commit.json)
+
+$(OUTPUT_DIR)/%/commit.parquet: $(OUTPUT_DIR)/%/commit.json
+	@echo "Converting $< to Parquet format"
+	clickhouse local --query "SELECT * FROM file('$<', 'JSONEachRow') INTO OUTFILE '$@' FORMAT Parquet"
+
+$(OUTPUT_DIR)/%/commit-with-logs.json:
+	@echo "Generating flattened $@ with build logs using Python"
+	python3 process_with_logs.py $(@D) --cache-dir $(CACHE_DIR) --output-json $@
+
+$(OUTPUT_DIR)/%/commit-with-logs.parquet: $(OUTPUT_DIR)/%/commit-with-logs.json
+	@echo "Converting $< to Parquet format"
+	clickhouse local --query "SELECT * FROM file('$<', 'JSONEachRow') INTO OUTFILE '$@' FORMAT Parquet"
+
+# Combined target to generate both JSON and Parquet with build logs
+$(OUTPUT_DIR)/%/commit-with-logs: $(OUTPUT_DIR)/%/commit-with-logs.json $(OUTPUT_DIR)/%/commit-with-logs.parquet
+	@echo "Generated both JSON and Parquet files with build logs for $(@D)"
 
 copy:
 	@find $(CACHE_DIR) -maxdepth 2 \( -name "layer.json" -o -name "build.log" \) -print0 | \
@@ -126,4 +147,6 @@ next:
 	git -C $(OPAM_REPO) log --oneline -1 $$next_merge; \
 	git -C $(OPAM_REPO) checkout $$next_merge
 
-.PHONY: all clean list count $(COMPILERS)
+parquet: $(foreach dir,$(wildcard $(OUTPUT_DIR)/*),$(dir)/commit.parquet)
+
+.PHONY: all clean list count parquet $(COMPILERS)
