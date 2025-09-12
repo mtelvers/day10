@@ -103,6 +103,8 @@ let candidates t name =
              match OpamFilter.eval_to_bool ~default:false (env t pkg) available with
              | true -> Some (v, avoid, opam)
              | false -> None)
+      (* https://github.com/ocaml-opam/opam-0install-cudf/issues/5 cf 4.12.1 *)
+      |> (fun l -> if List.for_all (fun (_, avoid, _) -> avoid) l then [] else l)
       |> List.sort (version_compare t)
       |> List.map (fun (v, _, opam) ->
              match user_constraints with
