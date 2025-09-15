@@ -98,7 +98,7 @@ let candidates t name =
       |> List.filter_map (fun v ->
              let pkg = OpamPackage.create name v in
              let opam = load t pkg in
-             let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam || OpamFile.OPAM.has_flag Pkgflag_Deprecated opam in
+             let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam in
              let available = OpamFile.OPAM.available opam in
              match OpamFilter.eval_to_bool ~default:false (env t pkg) available with
              | true -> Some (v, avoid, opam)
@@ -106,6 +106,7 @@ let candidates t name =
       (* https://github.com/ocaml-opam/opam-0install-cudf/issues/5 cf 4.12.1 *)
       |> (fun l -> if List.for_all (fun (_, avoid, _) -> avoid) l then [] else l)
       |> List.sort (version_compare t)
+      |> List.map (fun (v, avoid, opam) -> let () = Printf.printf "%s.%s\n" (OpamPackage.Name.to_string name) (OpamPackage.Version.to_string v) in (v, avoid, opam))
       |> List.map (fun (v, _, opam) ->
              match user_constraints with
              | Some test when not (OpamFormula.check_version_formula (OpamFormula.Atom test) v) -> (v, Error (UserConstraint (name, Some test)))
