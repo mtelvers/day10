@@ -7,10 +7,10 @@ let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let os_key ~t =
+let os_key ~config =
   let os =
     List.map
-      (fun v -> std_env ~config:t.config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
+      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
       [ "os-family"; "os-version"; "arch" ]
   in
   String.concat "-" os
@@ -25,17 +25,17 @@ let layer_hash ~t deps =
   in
   String.concat " " hashes |> Digest.string |> Digest.to_hex
 
-let run ~t:_ ~temp_dir opam_repository build_log = 0
+let run ~t:_ ~temp_dir:_ _opam_repository _build_log = 0
 
-let build ~t ~temp_dir build_log pkg ordered_hashes =
+let build ~t ~temp_dir _build_log _pkg ordered_hashes =
   let config = t.config in
   let () =
     List.iter
       (fun hash ->
-        let path = Os.path [ config.dir; hash ] in
+        let path = Path.(config.dir / hash) in
         let e = if Sys.file_exists path then "ok" else "not found" in
         Printf.printf "%s: %s\n" path e)
       ordered_hashes
   in
-  let rootfs = Os.path [ temp_dir; "fs" ] in
+  let _rootfs = Path.(temp_dir / "fs") in
   0

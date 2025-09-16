@@ -4,10 +4,12 @@ module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
-(*
-let container = (module Dummy : S.CONTAINER)
-*)
-let container = if Sys.win32 then (module Windows : S.CONTAINER) else (module Linux : S.CONTAINER)
+let container =
+  match Os.run "uname" |> String.trim with
+  | "Linux" -> (module Linux : S.CONTAINER)
+  | "FreeBSD" -> (module Freebsd : S.CONTAINER)
+  | s when String.starts_with ~prefix:"CYGWIN_NT" s -> (module Windows : S.CONTAINER)
+  | _ -> (module Dummy : S.CONTAINER)
 
 module Container = (val container)
 
