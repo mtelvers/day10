@@ -68,7 +68,6 @@ let run ~t ~temp_dir opam_repository build_log =
       "/c";
       String.concat " && "
         [
-          "set";
           "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
           "curl.exe -L -o c:\\Users\\" ^ t.username
           ^ "\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
@@ -95,11 +94,16 @@ let run ~t ~temp_dir opam_repository build_log =
   let config_json = Path.(temp_dir / "config.json") in
   let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
   let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
-  let _ = Os.rm Path.(rootfs / "lock") in
-  let _ = Os.rm Path.(rootfs / "conf.lock") in
-  let _ = Os.rm Path.(rootfs / "default" / ".opam-switch" / "lock") in
-  let _ = Os.rm Path.(rootfs / "repo" / "state-33BF9E46.cache") in
-  let _ = Os.rm Path.(rootfs / "repo" / "conf.lock") in
+  let () = Os.cp Path.(rootfs / ".cygwin" / "root" / "etc" / "setup" / "installed.db") Path.(temp_dir / "installed.db") in
+  let () = List.iter (Os.rm) [
+    Path.(rootfs / "lock");
+    Path.(rootfs / "conf.lock");
+    Path.(rootfs / "default" / ".opam-switch" / "lock");
+    Path.(rootfs / ".cygwin" / "root" / "etc" / "setup" / "installed.db");
+    Path.(rootfs / "default" / ".opam-switch" / "packages" / "cache");
+    Path.(rootfs / "default" / ".opam-switch" / "environment");
+    Path.(rootfs / "repo" / "state-33BF9E46.cache");
+    Path.(rootfs / "repo" / "conf.lock")] in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
   result
@@ -112,14 +116,20 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
   let argv =
     [
-      "cmd"; "/c"; String.concat " && " (pin @ [ "set && c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]);
+      "cmd"; "/c"; String.concat " && " (
+           ["curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+                "opam option sys-pkg-manager-cmd"] @
+           pin @ [ "c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]);
     ]
   in
-  let _ = Os.hardlink_tree ~source:Path.(config.dir / os_key / "base" / "fs") ~target in
-  let () = List.iter (fun hash -> Os.hardlink_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) ordered_hashes in
+  let sources = ordered_hashes @ [ "base" ] in
+  let () = List.iter (fun hash -> Os.copy_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
+  let lines = List.fold_left (fun acc hash ->
+    In_channel.with_open_text Path.(config.dir / os_key / hash / "installed.db") @@ fun ic -> acc @ In_channel.input_lines ic) [] sources in
+  let () = Os.write_to_file Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db") (List.sort_uniq compare lines |> String.concat "\n") in
   let () =
-    let packages_dir = Path.(temp_dir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
-    let state_file = Path.(temp_dir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
+    let packages_dir = Path.(target / "default" / ".opam-switch" / "packages") in
+    let state_file = Path.(target / "default" / ".opam-switch" / "switch-state") in
     if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
   in
   let mounts =
@@ -144,10 +154,13 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string ctr_config) in
   let result = Os.exec ~stdout:build_log ~stderr:build_log [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; Filename.basename temp_dir ] in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
-  let _ = Os.clense_tree ~source:Path.(config.dir / os_key / "base" / "fs") ~target in
-  let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) ordered_hashes in
-  let _ = Os.rm Path.(target / "repo" / "state-33BF9E46.cache") in
-  let _ = Os.rm ~recursive:true Path.(target / "default" / ".opam-switch" / "sources") in
-  let _ = Os.rm ~recursive:true Path.(target / "default" / ".opam-switch" / "build") in
-  let _ = Os.rm Path.(target / "default" / ".opam-switch" / "lock") in
+  let () = Os.cp Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db") Path.(temp_dir / "installed.db") in
+  let () = List.iter (Os.rm) [
+    Path.(target / "repo" / "state-33BF9E46.cache");
+    Path.(target / "default" / ".opam-switch" / "lock");
+    Path.(target / "default" / ".opam-switch" / "environment");
+    Path.(target / "default" / ".opam-switch" / "packages" / "cache");
+    Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db")] in
+  let () = List.iter (Os.rm ~recursive:true) [ Path.(target / "default" / ".opam-switch" / "sources"); Path.(target / "default" / ".opam-switch" / "build")] in
+  let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
   result
