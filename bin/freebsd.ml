@@ -180,12 +180,13 @@ let run ~t ~temp_dir opam_repository build_log =
     [
       "pw groupadd opam -g " ^ string_of_int t.gid;
       "pw useradd -m -n opam -g opam -u " ^ string_of_int t.uid ^ " -h - -c opam";
-      "pkg install -y sudo gmake git patch rsync zstd pkgconf";
+      "pkg install -y sudo gmake git patch rsync bash zstd pkgconf";
       {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /usr/local/etc/sudoers.d/opam|};
     ]
   in
   let result = Os.sudo ~stdout:build_log (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
   let () = if result = 0 then ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]) in
+  let _ = Os.sudo [ "chflags"; "-R"; "0"; rootfs ] in
   let argv =
     [ "touch /home/opam/.hushlogin"; "opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y"; "opam switch create default --empty" ]
   in
@@ -224,7 +225,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         let dir = Path.(config.dir / os_key / hash / "fs") in
         let dirs = Sys.readdir dir |> Array.to_list |> List.map (fun d -> Path.(dir / d)) in
         ignore (Os.sudo ([ "cp"; "-n"; "-a"; "-R"; "-l" ] @ dirs @ [ lowerdir ])))
-      ordered_hashes
+      (ordered_hashes @ [ "base" ])
   in
   let () =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
@@ -233,8 +234,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let mounts =
     [
-      { Mount.ty = "nullfs"; src = Path.(config.dir / os_key / "base" / "fs"); dst = "work"; options = [ "ro" ] };
-      { Mount.ty = "unionfs"; src = lowerdir; dst = "work"; options = [ "rw" ] };
+      { Mount.ty = "nullfs"; src = lowerdir; dst = "work"; options = [ "ro" ] };
       { Mount.ty = "unionfs"; src = upperdir; dst = "work"; options = [ "rw" ] };
       { ty = "nullfs"; src = Path.(temp_dir / "opam-repository"); dst = Path.("work" / "home" / "opam" / ".opam" / "repo" / "default"); options = [ "ro" ] };
     ]
@@ -248,7 +248,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () =
     if result = 0 then (
       ignore (Os.sudo [ "umount"; Path.(workdir / "dev") ]);
-      ignore (Os.sudo [ "sudo"; "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]))
+      ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]))
   in
   let _ =
     Os.sudo
