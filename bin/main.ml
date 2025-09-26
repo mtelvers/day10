@@ -294,6 +294,7 @@ let run_list (config : Config.t) =
             Filename.concat packages name |> Sys.readdir
             |> Array.fold_left
                  (fun acc package ->
+                   if package.[0] = '.' then acc else
                    let pkg = OpamPackage.of_string package in
                    let opam = Path.(packages / name / package / "opam") |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read in
                    match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
