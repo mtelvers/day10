@@ -7,4 +7,5 @@ type t = {
   md : string option;
   json : string option;
   dot : string option;
+  with_test : bool;
 }

@@ -201,10 +201,7 @@ let clense_tree ~source ~target =
         try
           let src_stat = Unix.lstat source in
           match src_stat.st_kind with
-          | Unix.S_LNK ->
-              if Sys.file_exists target then
-                if Unix.readlink source = Unix.readlink target then
-                  Unix.unlink target
+          | Unix.S_LNK -> if Sys.file_exists target then if Unix.readlink source = Unix.readlink target then Unix.unlink target
           | Unix.S_REG ->
               if Sys.file_exists target then
                 let tgt_stat = Unix.lstat target in
@@ -213,16 +210,14 @@ let clense_tree ~source ~target =
                   | Unix.Unix_error (Unix.EACCES, _, _) ->
                       Unix.chmod target (src_stat.st_perm lor 0o222);
                       Unix.unlink target)
-            | Unix.S_DIR ->
+          | Unix.S_DIR -> (
               process_directory source target;
-              (try
+              try
                 if Sys.file_exists target then
                   let target_entries = Sys.readdir target in
-                  if Array.length target_entries = 0 then
-                    Unix.rmdir target
-               with
-               | Unix.Unix_error (err, _, _) ->
-                   Printf.eprintf "Warning: rmdir %s = %s\n" target (Unix.error_message err))
+                  if Array.length target_entries = 0 then Unix.rmdir target
+              with
+              | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: rmdir %s = %s\n" target (Unix.error_message err))
           | S_CHR
           | S_BLK
           | S_FIFO
@@ -256,7 +251,9 @@ let copy_tree ~source ~target =
           | S_SOCK ->
               ()
         with
-        | Copy_error _-> Printf.eprintf "Warning: hard linking %s -> %s\n" source target; Unix.link source target
+        | Copy_error _ ->
+            Printf.eprintf "Warning: hard linking %s -> %s\n" source target;
+            Unix.link source target
         | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: %s -> %s = %s\n" source target (Unix.error_message err))
       entries
   in
