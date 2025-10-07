@@ -8,4 +8,5 @@ type t = {
   json : string option;
   dot : string option;
   with_test : bool;
+  tag : string option;
 }
