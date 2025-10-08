@@ -1,5 +1,6 @@
 type t = {
   config : Config.t;
+  running_as_root : bool;
   uid : int;
   gid : int;
 }
@@ -145,12 +146,12 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
     ]
 
 let init ~(config : Config.t) =
-  let uid, gid =
+  let running_as_root, uid, gid =
     match (Unix.getuid (), Unix.getgid ()) with
-    | 0, _ -> (1000, 1000)
-    | uid, gid -> (uid, gid)
+    | 0, _ -> (true, 1000, 1000)
+    | uid, gid -> (false, uid, gid)
   in
-  { config; uid; gid }
+  { config; running_as_root; uid; gid }
 
 let deinit ~t:_ = ()
 let config ~t = t.config
@@ -250,6 +251,11 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
     let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
     if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
+  in
+  let () =
+    if t.running_as_root then
+      let home_dir = Path.(upperdir / "home" / "opam") in
+      if Sys.file_exists home_dir then ignore(Os.exec [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
   in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
