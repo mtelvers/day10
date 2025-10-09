@@ -5,10 +5,10 @@ module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
 let container =
-  match Os.run "uname" |> String.trim with
-  | "Linux" -> (module Linux : S.CONTAINER)
-  | "FreeBSD" -> (module Freebsd : S.CONTAINER)
-  | s when String.starts_with ~prefix:"CYGWIN_NT" s -> (module Windows : S.CONTAINER)
+  match OpamStd.Sys.os () with
+  | Linux -> (module Linux : S.CONTAINER)
+  | FreeBSD -> (module Freebsd : S.CONTAINER)
+  | Cygwin -> (module Windows : S.CONTAINER)
   | _ -> (module Dummy : S.CONTAINER)
 
 module Container = (val container)
@@ -200,8 +200,8 @@ let build_result_to_exit_code = function
   | Failure _ -> 3
 
 let print_build_result = function
-  | Solution _ -> OpamConsole.msg "solution"
-  | No_solution _ -> OpamConsole.msg "no_solution"
+  | Solution _ -> OpamConsole.note "solution"
+  | No_solution _ -> OpamConsole.warning "no_solution"
   | Dependency_failed -> OpamConsole.warning "dependency_failed"
   | Failure _ -> OpamConsole.error "failure"
   | Success _ -> OpamConsole.note "success"
@@ -250,6 +250,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
 let build config package =
   match solve config package with
   | Ok solution ->
+      let () = if config.log then Dot_solution.to_string solution |> print_endline in
       let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
       let t = Container.init ~config in
       init t;
@@ -287,7 +288,9 @@ let build config package =
       in
       Container.deinit ~t;
       results @ [ Solution solution ]
-  | Error s -> [ No_solution s ]
+  | Error s ->
+      let () = if config.log then print_endline s in
+      [ No_solution s ]
 
 open Cmdliner
 
@@ -483,8 +486,8 @@ let tag_term =
   Arg.(value & opt (some string) None & info [ "tag" ] ~docv:"TAG" ~doc)
 
 let arch_term =
-  let doc = "Architecture (default: detected using uname -m)" in
-  let default = Os.run "uname -m" |> String.trim in
+  let doc = "Architecture (default: detected from opam)" in
+  let default = OpamSysPoll.arch OpamVariable.Map.empty |> Option.value ~default:"unknown" in
   Arg.(value & opt string default & info [ "arch" ] ~docv:"ARCH" ~doc)
 
 let find_opam_files dir =
