@@ -3,6 +3,7 @@ type t = {
   ocaml_version : OpamPackage.t;
   opam_repositories : string list;
   package : string;
+  arch : string;
   directory : string option;
   md : string option;
   json : string option;

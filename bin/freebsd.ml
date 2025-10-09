@@ -4,13 +4,10 @@ type t = {
   gid : int;
 }
 
-let hostname = "builder"
 let env = [ ("HOME", "/home/opam"); ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
 let std_env ~(config : Config.t) =
-  Util.std_env ~arch:"x86_64" ~os:"freebsd" ~os_distribution:"freebsd" ~os_family:"bsd" ~os_version:"1402000" ~ocaml_version:config.ocaml_version ()
-
-let strings xs = `List (List.map (fun x -> `String x) xs)
+  Util.std_env ~arch:config.arch ~os:"freebsd" ~os_distribution:"freebsd" ~os_family:"bsd" ~os_version:"1402000" ~ocaml_version:config.ocaml_version ()
 
 let install_script =
   {|#!/bin/sh
@@ -161,6 +158,7 @@ let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   [ "jail"; "-c"; "name=" ^ Filename.basename temp_dir; "path=" ^ rootfs; "mount.devfs" ] @ mounts @ network @ cmd @ [ "-c"; params ]
 
 let run ~t ~temp_dir opam_repository build_log =
+  let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
   let script = Path.(temp_dir / "install_script") in
@@ -171,10 +169,10 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "install"; "-y"; "pkg" ] in
   let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "upgrade"; "-y"; "-f" ] in
   let opam = Path.(rootfs / "usr" / "bin" / "opam") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-freebsd"; "-o"; opam ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-freebsd"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Path.(rootfs / "usr" / "bin" / "opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.2.0/opam-build-1.2.0-x86_64-freebsd"; "-o"; opam_build ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.2.0/opam-build-1.2.0-" ^ config.arch ^ "-freebsd"; "-o"; opam_build ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let argv =
     [

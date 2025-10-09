@@ -18,7 +18,7 @@ let env =
   ]
 
 let std_env ~(config : Config.t) =
-  Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
+  Util.std_env ~arch:config.arch ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
 
 (* This is a subset of the capabilities that Docker uses by default.
      These control what root can do in the container.
@@ -175,14 +175,15 @@ let layer_hash ~t deps =
   String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
+  let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
   let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:12) | sudo tar -C " ^ rootfs ^ " -x" ] in
   let opam = Path.(rootfs / "/usr/local/bin/opam") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-linux"; "-o"; opam ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-linux"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Path.(rootfs / "/usr/local/bin/opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.1.0/opam-build-1.1.0-x86_64-linux"; "-o"; opam_build ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.1.0/opam-build-1.1.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in

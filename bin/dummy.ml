@@ -1,7 +1,7 @@
 type t = { config : Config.t }
 
 let std_env ~(config : Config.t) =
-  Util.std_env ~arch:"x86_64" ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
+  Util.std_env ~arch:config.arch ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
 
 let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()

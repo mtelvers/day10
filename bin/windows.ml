@@ -8,7 +8,7 @@ let hostname = "builder"
 let env = [ ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
 let std_env ~(config : Config.t) =
-  Util.std_env ~arch:"x86_64" ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ~ocaml_version:config.ocaml_version ()
+  Util.std_env ~arch:config.arch ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ~ocaml_version:config.ocaml_version ()
 
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
@@ -60,6 +60,7 @@ let layer_hash ~t deps =
   String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
+  let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
   let argv =
@@ -68,9 +69,9 @@ let run ~t ~temp_dir opam_repository build_log =
       "/c";
       String.concat " && "
         [
-          "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+          "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
           "curl.exe -L -o c:\\Users\\" ^ t.username
-          ^ "\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-x86_64-windows.exe";
+          ^ "\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-" ^ config.arch ^ "-windows.exe";
           (* "net user opam /nopassword /add"; *)
           "opam.exe init -k local -a c:\\opam-repository --bare -y";
           "opam.exe switch create default --empty";
@@ -124,7 +125,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       "/c";
       String.concat " && "
         ([
-           "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-x86_64-windows.exe";
+           "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
            "opam option sys-pkg-manager-cmd";
          ]
         @ pin
