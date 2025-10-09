@@ -240,6 +240,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
     Util.save_layer_info layer_json pkg ordered_deps ordered_hashes r
   in
   let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
+  let () = if config.log then Os.read_from_file Path.(layer_dir / "build.log") |> print_endline in
   let () = Unix.utimes layer_json 0.0 0.0 in
   let exit_status = Util.load_layer_info_exit_status layer_json in
   match exit_status with
@@ -469,6 +470,10 @@ let with_test_term =
   let doc = "Enable test dependencies (default false)" in
   Arg.(value & flag & info [ "with-test" ] ~doc)
 
+let log_term =
+  let doc = "Print build logs (default false)" in
+  Arg.(value & flag & info [ "log" ] ~doc)
+
 let all_versions_term =
   let doc = "List all versions instead of just the latest" in
   Arg.(value & flag & info [ "all-versions" ] ~doc)
@@ -495,7 +500,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test arch ->
+      const (fun dir ocaml_version opam_repositories directory md json dot with_test log arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_ci
             {
@@ -510,8 +515,9 @@ let ci_cmd =
               dot;
               with_test;
               tag = None;
+              log;
             })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ arch_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ arch_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -523,10 +529,10 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories package md json dot with_test tag arch ->
+      const (fun dir ocaml_version opam_repositories package md json dot with_test log tag arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check { dir; ocaml_version; opam_repositories; package; arch; directory = None; md; json; dot; with_test; tag })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ tag_term $ arch_term)
+          run_health_check { dir; ocaml_version; opam_repositories; package; arch; directory = None; md; json; dot; with_test; tag; log })
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ tag_term $ arch_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
   Cmd.v health_check_info health_check_term
@@ -537,7 +543,7 @@ let list_cmd =
       const (fun ocaml_version opam_repositories all_versions arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; directory = None; md = None; json = None; dot = None; with_test = false; tag = None }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; directory = None; md = None; json = None; dot = None; with_test = false; tag = None; log = false }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ arch_term)
   in

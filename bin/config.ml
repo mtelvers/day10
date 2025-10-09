@@ -10,4 +10,5 @@ type t = {
   dot : string option;
   with_test : bool;
   tag : string option;
+  log : bool;
 }
