@@ -487,7 +487,7 @@ let tag_term =
 
 let arch_term =
   let doc = "Architecture (default: detected from opam)" in
-  let default = OpamSysPoll.arch OpamVariable.Map.empty |> Option.value ~default:"unknown" in
+  let default = OpamStd.Sys.uname "-m" |> Option.value ~default:"unknown" |> Os.normalise_arch in
   Arg.(value & opt string default & info [ "arch" ] ~docv:"ARCH" ~doc)
 
 let find_opam_files dir =
