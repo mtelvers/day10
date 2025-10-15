@@ -215,7 +215,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let workdir = Path.(temp_dir / "work") in
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir ] in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-  let argv = pin @ [ "opam-build -v " ^ OpamPackage.to_string pkg ] in
+  let with_test = if config.with_test then "--with-test " else "" in
+  let argv = pin @ [ "opam-build -v " ^ with_test ^ OpamPackage.to_string pkg ] in
   let () =
     List.iter
       (fun hash ->

@@ -119,6 +119,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
+  let with_test = if config.with_test then "--with-test " else "" in
   let argv =
     [
       "cmd";
@@ -129,7 +130,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
            "opam option sys-pkg-manager-cmd";
          ]
         @ pin
-        @ [ "c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ OpamPackage.to_string pkg ]);
+        @ [ "c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ with_test ^ OpamPackage.to_string pkg ]);
     ]
   in
   let sources = ordered_hashes @ [ "base" ] in

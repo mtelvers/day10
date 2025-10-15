@@ -37,7 +37,9 @@ let opam_env ~(config : Config.t) pkg v =
   else *)
   match OpamVariable.Full.to_string v with
   | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
-  | "with-test" -> Some (OpamTypes.B config.with_test)
+  | "with-test" ->
+      let is_tested_pkg = String.equal (OpamPackage.name_to_string pkg) config.package in
+      Some (OpamTypes.B (config.with_test && is_tested_pkg))
   | "with-dev"
   | "with-dev-setup"
   | "dev"
