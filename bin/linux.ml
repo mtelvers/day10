@@ -183,7 +183,7 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-linux"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Path.(rootfs / "/usr/local/bin/opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.1.0/opam-build-1.1.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
@@ -228,7 +228,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let dummydir = Path.(temp_dir / "dummy") in
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; dummydir ] in
   let pkg_string = OpamPackage.to_string pkg in
-  let pin = if pkg_string = config.package then [ "opam pin -yn " ^ pkg_string ^ " $HOME/src/"; "cd src" ] else [] in
+  let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ pkg_string ^ " $HOME/src/"; "cd src" ] else [] in
   let with_test = if config.with_test then "--with-test " else "" in
   let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ with_test ^ pkg_string ] ) ] in
   let () =
