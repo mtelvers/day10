@@ -38,7 +38,7 @@ let opam_env ~(config : Config.t) pkg v =
   match OpamVariable.Full.to_string v with
   | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
   | "with-test" ->
-      let is_tested_pkg = String.equal (OpamPackage.name_to_string pkg) config.package in
+      let is_tested_pkg = String.equal (OpamPackage.to_string pkg) config.package in
       Some (OpamTypes.B (config.with_test && is_tested_pkg))
   | "with-dev"
   | "with-dev-setup"
@@ -62,8 +62,9 @@ let solve (config : Config.t) pkg =
              (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw Path.((directory / config.package) ^ ".opam")))))
       config.directory
   in
+  let test = if config.with_test then OpamPackage.Name.Set.singleton (OpamPackage.name pkg) else OpamPackage.Name.Set.empty in
   let context =
-    Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins
+    Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins ~test
       (List.map (fun opam_repository -> Path.(opam_repository / "packages")) config.opam_repositories)
   in
   let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
