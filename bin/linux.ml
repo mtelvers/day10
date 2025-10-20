@@ -229,7 +229,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; dummydir ] in
   let pkg_string = OpamPackage.to_string pkg in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ pkg_string ^ " $HOME/src/"; "cd src" ] else [] in
-  let with_test = if config.with_test then "--with-test " else "" in
+  let with_test = if config.with_test && OpamPackage.name_to_string pkg = config.package then "--with-test " else "" in
   let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ with_test ^ pkg_string ] ) ] in
   let () =
     List.iter
