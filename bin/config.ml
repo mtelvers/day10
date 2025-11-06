@@ -11,4 +11,5 @@ type t = {
   with_test : bool;
   tag : string option;
   log : bool;
+  dry_run : bool;
 }

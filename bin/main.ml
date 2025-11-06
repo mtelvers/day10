@@ -252,6 +252,23 @@ let build config package =
       init t;
       let ordered_installation = topological_sort solution in
       let dependencies = pkg_deps solution ordered_installation in
+      let all_layers_exist =
+        if config.dry_run then
+          List.for_all
+            (fun pkg ->
+              let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
+              let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
+              let layer_dir = Path.(config.dir / Container.os_key ~config / hash) in
+              Sys.file_exists layer_dir)
+            ordered_installation
+        else
+          false
+      in
+      if config.dry_run && not all_layers_exist then (
+        Container.deinit ~t;
+        [ Solution solution ]
+      )
+      else
       (* let solution = reduce dependencies solution in
       let positions = List.mapi (fun i x -> (x, i)) ordered_installation |> List.fold_left (fun acc (x, i) -> OpamPackage.Map.add x i acc) OpamPackage.Map.empty in *)
       (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
@@ -471,6 +488,10 @@ let log_term =
   let doc = "Print build logs (default false)" in
   Arg.(value & flag & info [ "log" ] ~doc)
 
+let dry_run_term =
+  let doc = "Calculate solution and check if layers exist without building (default false)" in
+  Arg.(value & flag & info [ "dry-run" ] ~doc)
+
 let all_versions_term =
   let doc = "List all versions instead of just the latest" in
   Arg.(value & flag & info [ "all-versions" ] ~doc)
@@ -497,7 +518,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test log arch ->
+      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_ci
             {
@@ -513,25 +534,26 @@ let ci_cmd =
               with_test;
               tag = None;
               log;
+              dry_run;
             })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ arch_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ arch_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
 
 let health_check_cmd =
   let package_arg =
-    let doc = "Package name to test" in
+    let doc = "Package name to test (or @filename to read package list from file)" in
     Arg.(required & pos 0 (some string) None & info [] ~docv:"PACKAGE" ~doc)
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories package md json dot with_test log tag arch ->
+      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check { dir; ocaml_version; opam_repositories; package; arch; directory = None; md; json; dot; with_test; tag; log })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ tag_term $ arch_term)
+          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; directory = None; md; json; dot; with_test; tag; log; dry_run } package_arg)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ arch_term)
   in
-  let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package" in
+  let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
 
 let list_cmd =
@@ -540,7 +562,7 @@ let list_cmd =
       const (fun ocaml_version opam_repositories all_versions arch ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; directory = None; md = None; json = None; dot = None; with_test = false; tag = None; log = false }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; directory = None; md = None; json = None; dot = None; with_test = false; tag = None; log = false; dry_run = false }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ arch_term)
   in
