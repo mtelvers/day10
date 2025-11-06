@@ -12,4 +12,5 @@ type t = {
   tag : string option;
   log : bool;
   dry_run : bool;
+  fork : int option;
 }
