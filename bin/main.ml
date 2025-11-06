@@ -195,13 +195,6 @@ let build_result_to_string = function
   | Failure _ -> "failure"
   | Success _ -> "success"
 
-let build_result_to_exit_code = function
-  | Success _ -> 0
-  | Solution _ -> 0
-  | No_solution _ -> 1
-  | Dependency_failed -> 2
-  | Failure _ -> 3
-
 let print_build_result = function
   | Solution _ -> OpamConsole.note "solution"
   | No_solution _ -> OpamConsole.warning "no_solution"
@@ -330,11 +323,10 @@ let run_list (config : Config.t) all_versions =
   |> OpamPackage.Set.to_list_map (fun x -> (Random.bits (), x))
   |> List.sort compare |> List.map snd
   |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
-  |> fun () -> 0
 
 let output (config : Config.t) results =
   let os_key = Container.os_key ~config in
-  let opam_repo_sha =
+  let opam_repo_sha () =
     List.map
       (fun opam_repository ->
         let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
@@ -346,7 +338,7 @@ let output (config : Config.t) results =
     Option.iter
       (fun filename ->
         let oc = open_out_bin filename in
-        let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
+        let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) (opam_repo_sha ()) config.package in
         let () =
           List.rev results
           |> List.iter (function
@@ -387,7 +379,7 @@ let output (config : Config.t) results =
         in
         let j =
           `Assoc
-            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String opam_repo_sha) ]
+            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String (opam_repo_sha ())) ]
             @ Option.fold ~none:[]
                 ~some:(fun hash ->
                   let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
@@ -435,8 +427,7 @@ let output (config : Config.t) results =
         ())
       config.tag
   in
-  print_build_result (List.hd results);
-  build_result_to_exit_code (List.hd results)
+  print_build_result (List.hd results)
 
 let run_ci (config : Config.t) =
   let package = OpamPackage.of_string (config.package ^ ".dev") in
@@ -577,4 +568,4 @@ let main_info =
 let () =
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
   let cmd = Cmd.group ~default:default_term main_info [ ci_cmd; health_check_cmd; list_cmd ] in
-  exit (Cmd.eval' cmd)
+  exit (Cmd.eval cmd)
