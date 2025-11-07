@@ -1,4 +1,55 @@
-let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_family ~os_version ~ocaml_version () = function
+type os = [
+  Dockerfile_opam.Distro.distro
+  | `FreeBSD
+]
+
+let std_env ?(ocaml_native = true) ?opam_version ~arch ~(os:os) ~ocaml_version =
+  let os, os_family, os_distribution, os_version =
+    let host_os_version = OpamSysPoll.os_version OpamVariable.Map.empty in
+    match os with
+    | `FreeBSD ->
+        "freebsd", "bsd", "freebsd", Option.get host_os_version
+    | (#Dockerfile_opam.Distro.distro as os) ->
+        let version_from_tag =
+          let tag = Dockerfile_opam.Distro.tag_of_distro (os :> Dockerfile_opam.Distro.t) in
+          String.rindex_opt tag '-'
+          |> Option.map (fun i ->
+              let i = i + 1 in String.sub tag i (String.length tag - i))
+        in
+        match os with
+        | `Ubuntu _ ->
+            "linux", "debian", "ubuntu", Option.get version_from_tag
+        | `Debian (`Unstable | `Testing) ->
+            "linux", "debian", "debian", "unknown"
+        | `Debian _ ->
+            "linux", "debian", "debian", Option.get version_from_tag
+        | `CentOS _ ->
+            "linux", "rhel", "centos", Option.get version_from_tag
+        | `Fedora _ ->
+            "linux", "fedora", "fedora", Option.get version_from_tag
+        | `OracleLinux _ ->
+            (* XXX The .0 is not strictly accurate... *)
+            "linux", "fedora", "ol", Option.get version_from_tag ^ ".0"
+        | `Alpine _ ->
+            (* XXX The .0 is not strictly accurate... *)
+            "linux", "alpine", "alpine", Option.get version_from_tag ^ ".0"
+        | `Archlinux _ ->
+            "linux", "arch", "arch", "rolling"
+        | `OpenSUSE `Tumbleweed ->
+            (* XXX This needs updating or deriving or something *)
+            "linux", "opensuse", "opensuse-tumbleweed", "20251113"
+        | `OpenSUSE (`V42_1 | `V42_2 | `V42_3) ->
+            "linux", "suse", "opensuse", Option.get version_from_tag
+        | `OpenSUSE (`V15_0 | `V15_1 | `V15_2 | `V15_3 | `V15_4 | `V15_5 | `V15_6 | `V16_0) ->
+            "linux", "suse", "opensuse-leap", Option.get version_from_tag
+        | `Cygwin _ ->
+            "cygwin", "windows", "cygwin", Option.get host_os_version
+        | `Windows _
+        | `WindowsServer _ ->
+            "win32", "windows", "cygwin", Option.get host_os_version
+        
+  in
+  fun () -> function
   | "arch" -> Some (OpamTypes.S arch)
   | "os" -> Some (OpamTypes.S os)
   | "os-distribution" -> Some (OpamTypes.S os_distribution)

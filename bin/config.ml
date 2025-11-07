@@ -4,10 +4,7 @@ type t = {
   opam_repositories : string list;
   package : string;
   arch : string;
-  os : string;
-  os_distribution : string;
-  os_family : string;
-  os_version : string;
+  os : Util.os;
   directory : string option;
   md : string option;
   json : string option;
@@ -20,8 +17,7 @@ type t = {
 }
 
 let std_env ~(config : t) =
-  Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
-    ~ocaml_version:config.ocaml_version ()
+  Util.std_env ~arch:config.arch ~os:config.os ~ocaml_version:config.ocaml_version ()
 
 let os_key ~(config : t) =
   let os =

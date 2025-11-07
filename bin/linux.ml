@@ -162,11 +162,45 @@ let layer_hash ~t deps =
   String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let run ~t ~temp_dir opam_repository build_log =
-  let config = t.config in
-  match config.os_family with
-  | "debian" -> Docker.debian ~config ~temp_dir opam_repository build_log t.uid t.gid
-  | os_family ->
-      failwith (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian" os_family)
+  match t.config.os with
+  | `FreeBSD
+  | `Cygwin _
+  | `Windows _
+  | `WindowsServer _ ->
+      assert false
+  | (#Dockerfile_opam.Distro.distro as distro) ->
+      match Docker.build_base distro t.config.arch ~temp_dir build_log with
+      | Some tag ->
+          let rootfs = Path.(temp_dir / "fs") in
+          let () = Os.mkdir rootfs in
+          let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d " ^ tag ^ ") | sudo tar -C " ^ rootfs ^ " -x" ] in
+          let etc_hosts = Path.(temp_dir / "hosts") in
+          let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
+          let argv =
+            [
+              "/usr/bin/env";
+              "bash";
+              "-c";
+              String.concat " && "
+                [
+                  "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y'";
+                  "su - opam -c 'opam switch create default --empty'";
+                ];
+            ]
+          in
+          let mounts =
+            [
+              { Mount.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
+              { ty = "bind"; src = opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
+            ]
+          in
+          let config = make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
+          let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config) in
+          let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+          let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
+          result
+      | None ->
+          1 (* XXX *)
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
@@ -202,18 +236,25 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
     let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
-    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
+    if Sys.file_exists packages_dir then begin
+      Opamh.dump_state packages_dir state_file;
+      Unix.chown state_file 1000 1000
+    end
   in
+(*
   let () =
     let home_dir = Path.(upperdir / "home" / "opam") in
     if Sys.file_exists home_dir then ignore (Os.sudo [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
   in
+*)
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
   let ld = "lowerdir=" ^ String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
   let ud = "upperdir=" ^ upperdir in
   let wd = "workdir=" ^ workdir in
-  let _ = Os.sudo [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
+  let mount_cmd = [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
+  Os.write_to_file Path.(temp_dir / "mount_rootfs") (String.concat " " mount_cmd);
+  let _ = Os.sudo mount_cmd in
   let mounts =
     [
       { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
@@ -225,7 +266,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     | None -> mounts
     | Some src -> mounts @ [ { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } ]
   in
-  let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
+  let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:1000 ~gid:1000 ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
   let _ = Os.sudo [ "umount"; rootfsdir ] in
