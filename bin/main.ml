@@ -457,21 +457,29 @@ let run_health_check (config : Config.t) =
   output config results
 
 let run_health_check_multi (config : Config.t) package_arg =
-  let packages = expand_package_arg package_arg in
-  (* Ensure output directories exist for multi-package builds *)
-  let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.json in
-  let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.md in
-  let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.dot in
-  let run_with_package pkg_name =
-    let json = Option.map (fun path -> Path.(path / pkg_name ^ ".json")) config.json in
-    let md = Option.map (fun path -> Path.(path / pkg_name ^ ".md")) config.md in
-    let dot = Option.map (fun path -> Path.(path / pkg_name ^ ".dot")) config.dot in
-    let config = { config with package = pkg_name; json; md; dot } in
-    run_health_check config
-  in
-  match config.fork with
-  | Some n -> Os.fork ~np:n run_with_package packages
-  | None -> List.iter run_with_package packages
+  match package_arg.[0] = '@' with
+  | false ->
+      (* Single package: use paths as-is (files, not directories) *)
+      let config = { config with package = package_arg } in
+      run_health_check config
+  | true ->
+      let filename = String.sub package_arg 1 (String.length package_arg - 1) in
+      let packages = Json_packages.read_packages filename in
+      (* Multiple packages: treat paths as directories *)
+      let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.json in
+      let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.md in
+      let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.dot in
+      let run_with_package pkg_name =
+        let json = Option.map (fun path -> Path.(path / pkg_name ^ ".json")) config.json in
+        let md = Option.map (fun path -> Path.(path / pkg_name ^ ".md")) config.md in
+        let dot = Option.map (fun path -> Path.(path / pkg_name ^ ".dot")) config.dot in
+        let config = { config with package = pkg_name; json; md; dot } in
+        run_health_check config
+      in
+      match config.fork with
+      | Some 1
+      | None -> List.iter run_with_package packages
+      | Some n -> Os.fork ~np:n run_with_package packages
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
