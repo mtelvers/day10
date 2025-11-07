@@ -195,15 +195,8 @@ let run ~t ~temp_dir opam_repository build_log =
       ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]);
       ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]))
   in
-  let _ =
-    Os.sudo
-      [
-        "rm";
-        "-rf";
-        Path.(rootfs / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment");
-        Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-33BF9E46.cache");
-      ]
-  in
+  let _ = Os.sudo [ "rm"; "-rf"; Path.(rootfs / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment") ] in
+  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   result
 
@@ -261,7 +254,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         Path.(upperdir / "home" / "opam" / "default" / ".opam-switch" / "build");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment");
-        Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-33BF9E46.cache");
       ]
   in
+  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
   result

@@ -98,16 +98,16 @@ let run ~t ~temp_dir opam_repository build_log =
   let () = Os.cp Path.(rootfs / ".cygwin" / "root" / "etc" / "setup" / "installed.db") Path.(temp_dir / "installed.db") in
   let () =
     List.iter Os.rm
-      [
-        Path.(rootfs / "lock");
-        Path.(rootfs / "conf.lock");
-        Path.(rootfs / "default" / ".opam-switch" / "lock");
-        Path.(rootfs / ".cygwin" / "root" / "etc" / "setup" / "installed.db");
-        Path.(rootfs / "default" / ".opam-switch" / "packages" / "cache");
-        Path.(rootfs / "default" / ".opam-switch" / "environment");
-        Path.(rootfs / "repo" / "state-33BF9E46.cache");
-        Path.(rootfs / "repo" / "conf.lock");
-      ]
+      ([
+         Path.(rootfs / "lock");
+         Path.(rootfs / "conf.lock");
+         Path.(rootfs / "default" / ".opam-switch" / "lock");
+         Path.(rootfs / ".cygwin" / "root" / "etc" / "setup" / "installed.db");
+         Path.(rootfs / "default" / ".opam-switch" / "packages" / "cache");
+         Path.(rootfs / "default" / ".opam-switch" / "environment");
+         Path.(rootfs / "repo" / "conf.lock");
+       ]
+      @ Os.ls ~extn:".cache" Path.(rootfs / "repo"))
   in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   let _ = Os.exec [ "ctr"; "snapshot"; "rm"; Filename.basename temp_dir ] in
@@ -171,13 +171,13 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = Os.cp Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db") Path.(temp_dir / "installed.db") in
   let () =
     List.iter Os.rm
-      [
-        Path.(target / "repo" / "state-33BF9E46.cache");
-        Path.(target / "default" / ".opam-switch" / "lock");
-        Path.(target / "default" / ".opam-switch" / "environment");
-        Path.(target / "default" / ".opam-switch" / "packages" / "cache");
-        Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db");
-      ]
+      ([
+         Path.(target / "default" / ".opam-switch" / "lock");
+         Path.(target / "default" / ".opam-switch" / "environment");
+         Path.(target / "default" / ".opam-switch" / "packages" / "cache");
+         Path.(target / ".cygwin" / "root" / "etc" / "setup" / "installed.db");
+       ]
+      @ Os.ls ~extn:".cache" Path.(target / "repo"))
   in
   let () = List.iter (Os.rm ~recursive:true) [ Path.(target / "default" / ".opam-switch" / "sources"); Path.(target / "default" / ".opam-switch" / "build") ] in
   let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in

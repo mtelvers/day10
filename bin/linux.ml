@@ -218,7 +218,7 @@ let run ~t ~temp_dir opam_repository build_log =
   let config = make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-  let _ = Os.rm Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-33BF9E46.cache") in
+  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
   result
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
@@ -295,7 +295,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "sources");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "build");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
-        Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-33BF9E46.cache");
       ]
   in
+  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
   result
