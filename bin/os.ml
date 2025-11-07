@@ -270,3 +270,14 @@ let normalise_arch raw =
   | a when a = "armv8b" || a = "armv8l" || List.exists (fun prefix -> OpamStd.String.starts_with ~prefix a)
         ["armv5"; "armv6"; "earmv6"; "armv7"; "earmv7"] -> "arm32"
   | s -> s
+
+let ls ?extn dir =
+  try
+    let files = Sys.readdir dir |> Array.to_list |> List.map (Filename.concat dir) in
+    match extn with
+    | None -> files
+    | Some ext ->
+        let ext = if ext <> "" && ext.[0] = '.' then ext else "." ^ ext in
+        List.filter (fun f -> Filename.check_suffix f ext) files
+  with
+  | Sys_error _ -> []
