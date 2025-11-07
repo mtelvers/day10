@@ -183,7 +183,9 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-linux"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Path.(rootfs / "/usr/local/bin/opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ] in
+  let _ =
+    Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ]
+  in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
@@ -225,12 +227,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let lowerdir = Path.(temp_dir / "lower") in
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in
-  let dummydir = Path.(temp_dir / "dummy") in
-  let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; dummydir ] in
+  let rootfsdir = Path.(temp_dir / "rootfs") in
+  let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; rootfsdir ] in
   let pkg_string = OpamPackage.to_string pkg in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ pkg_string ^ " $HOME/src/"; "cd src" ] else [] in
   let with_test = if config.with_test && OpamPackage.name_to_string pkg = config.package then "--with-test " else "" in
-  let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ with_test ^ pkg_string ] ) ] in
+  let argv = [ "/usr/bin/env"; "bash"; "-c"; String.concat " && " (pin @ [ "opam-build -v " ^ with_test ^ pkg_string ]) ] in
   let () =
     List.iter
       (fun hash ->
@@ -258,15 +260,17 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () =
     if t.running_as_root then
       let home_dir = Path.(upperdir / "home" / "opam") in
-      if Sys.file_exists home_dir then ignore(Os.exec [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
+      if Sys.file_exists home_dir then ignore (Os.exec [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
   in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
-  let ld = String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
+  let ld = "lowerdir=" ^ String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
+  let ud = "upperdir=" ^ upperdir in
+  let wd = "workdir=" ^ workdir in
+  let _ = Os.sudo [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
   let mounts =
     [
-      { Mount.ty = "overlay"; src = "overlay"; dst = "/"; options = [ "lowerdir=" ^ ld; "upperdir=" ^ upperdir; "workdir=" ^ workdir ] };
-      { ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
+      { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
       { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
     ]
   in
@@ -275,9 +279,10 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     | None -> mounts
     | Some src -> mounts @ [ { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } ]
   in
-  let config_runc = make ~root:"dummy" ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
+  let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+  let _ = Os.sudo [ "umount"; rootfsdir ] in
   let _ =
     Os.sudo
       [
@@ -285,7 +290,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         "-rf";
         lowerdir;
         workdir;
-        dummydir;
+        rootfsdir;
         Path.(upperdir / "tmp");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "sources");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "build");
