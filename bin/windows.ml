@@ -7,9 +7,6 @@ type t = {
 let hostname = "builder"
 let env = [ ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
-let std_env ~(config : Config.t) =
-  Util.std_env ~arch:config.arch ~os:"win32" ~os_distribution:"cygwin" ~os_family:"windows" ~os_version:"10.0.20348" ~ocaml_version:config.ocaml_version ()
-
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
 let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~network : Yojson.Safe.t =
@@ -40,14 +37,6 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~networ
 let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create" |> String.trim; username = "ContainerAdministrator" }
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
-
-let os_key ~config =
-  let os =
-    List.map
-      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
-      [ "os-family"; "os-version"; "arch" ]
-  in
-  String.concat "-" os
 
 let layer_hash ~t deps =
   let hashes =
@@ -115,7 +104,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let os_key = os_key ~config in
+  let os_key = Config.os_key ~config in
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
   let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in

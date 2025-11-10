@@ -6,9 +6,6 @@ type t = {
 
 let env = [ ("HOME", "/home/opam"); ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
-let std_env ~(config : Config.t) =
-  Util.std_env ~arch:config.arch ~os:"freebsd" ~os_distribution:"freebsd" ~os_family:"bsd" ~os_version:"1402000" ~ocaml_version:config.ocaml_version ()
-
 let install_script =
   {|#!/bin/sh
 #-
@@ -119,14 +116,6 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let os_key ~config =
-  let os =
-    List.map
-      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
-      [ "os-family"; "os-version"; "arch" ]
-  in
-  String.concat "-" os
-
 let layer_hash ~t deps =
   let hashes =
     List.map
@@ -202,7 +191,7 @@ let run ~t ~temp_dir opam_repository build_log =
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let os_key = os_key ~config in
+  let os_key = Config.os_key ~config in
   let lowerdir = Path.(temp_dir / "lower") in
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in

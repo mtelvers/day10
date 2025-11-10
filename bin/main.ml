@@ -15,7 +15,7 @@ module Container = (val container)
 
 let init t =
   let config = Container.config ~t in
-  let os_dir = Path.(config.dir / Container.os_key ~config) in
+  let os_dir = Path.(config.dir / Config.os_key ~config) in
   let () = Os.mkdir ~parents:true os_dir in
   let root = Path.(os_dir / "base") in
   if not (Sys.file_exists root) then
@@ -47,7 +47,7 @@ let opam_env ~(config : Config.t) pkg v =
       Some (OpamTypes.B false)
   | "build" -> Some (OpamTypes.B true)
   | "post" -> None
-  | x -> Container.std_env ~config x
+  | x -> Config.std_env ~config x
 
 let solve (config : Config.t) pkg =
   let constraints =
@@ -64,7 +64,7 @@ let solve (config : Config.t) pkg =
   in
   let test = if config.with_test then OpamPackage.Name.Set.singleton (OpamPackage.name pkg) else OpamPackage.Name.Set.empty in
   let context =
-    Dir_context.create ~env:(Container.std_env ~config) ~constraints ~pins ~test
+    Dir_context.create ~env:(Config.std_env ~config) ~constraints ~pins ~test
       (List.map (fun opam_repository -> Path.(opam_repository / "packages")) config.opam_repositories)
   in
   let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
@@ -204,7 +204,7 @@ let print_build_result = function
 
 let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
-  let layer_dir = Path.(config.dir / Container.os_key ~config / hash) in
+  let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
   let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
@@ -258,7 +258,7 @@ let build config package =
             (fun pkg ->
               let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
               let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
-              let layer_dir = Path.(config.dir / Container.os_key ~config / hash) in
+              let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
               Sys.file_exists layer_dir)
             ordered_installation
         else
@@ -342,7 +342,7 @@ let run_list (config : Config.t) all_versions =
   |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
 
 let output (config : Config.t) results =
-  let os_key = Container.os_key ~config in
+  let os_key = Config.os_key ~config in
   let opam_repo_sha () =
     List.map
       (fun opam_repository ->
@@ -530,6 +530,26 @@ let arch_term =
   let default = OpamStd.Sys.uname "-m" |> Option.value ~default:"unknown" |> Os.normalise_arch in
   Arg.(value & opt string default & info [ "arch" ] ~docv:"ARCH" ~doc)
 
+let os_term =
+  let doc = "Operating system (default: detected from system)" in
+  let default = OpamSysPoll.os OpamVariable.Map.empty |> Option.value ~default:"linux" in
+  Arg.(value & opt string default & info [ "os" ] ~docv:"OS" ~doc)
+
+let os_distribution_term =
+  let doc = "OS distribution (default: detected from system)" in
+  let default = OpamSysPoll.os_distribution OpamVariable.Map.empty |> Option.value ~default:"debian" in
+  Arg.(value & opt string default & info [ "os-distribution" ] ~docv:"OS_DISTRIBUTION" ~doc)
+
+let os_family_term =
+  let doc = "OS family (default: detected from system)" in
+  let default = OpamSysPoll.os_family OpamVariable.Map.empty |> Option.value ~default:"debian" in
+  Arg.(value & opt string default & info [ "os-family" ] ~docv:"OS_FAMILY" ~doc)
+
+let os_version_term =
+  let doc = "OS version (default: detected from system)" in
+  let default = OpamSysPoll.os_version OpamVariable.Map.empty |> Option.value ~default:"13" in
+  Arg.(value & opt string default & info [ "os-version" ] ~docv:"OS_VERSION" ~doc)
+
 let fork_term =
   let doc = "Process packages in parallel using fork with N parallel jobs" in
   Arg.(value & opt (some int) None & info [ "fork" ] ~docv:"N" ~doc)
@@ -547,7 +567,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run arch fork ->
+      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_ci
             {
@@ -556,6 +576,10 @@ let ci_cmd =
               opam_repositories;
               package = List.hd (find_opam_files directory);
               arch;
+              os;
+              os_distribution;
+              os_family;
+              os_version;
               directory = Some directory;
               md;
               json;
@@ -566,7 +590,7 @@ let ci_cmd =
               dry_run;
               fork;
             })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ arch_term $ fork_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -578,10 +602,10 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag arch fork ->
+      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; directory = None; md; json; dot; with_test; tag; log; dry_run; fork } package_arg)
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ arch_term $ fork_term)
+          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; tag; log; dry_run; fork } package_arg)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
@@ -589,12 +613,12 @@ let health_check_cmd =
 let list_cmd =
   let list_term =
     Term.(
-      const (fun ocaml_version opam_repositories all_versions arch ->
+      const (fun ocaml_version opam_repositories all_versions json arch os os_distribution os_family os_version ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; directory = None; md = None; json = None; dot = None; with_test = false; tag = None; log = false; dry_run = false; fork = None }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; tag = None; log = false; dry_run = false; fork = None }
             all_versions)
-      $ ocaml_version_term $ opam_repository_term $ all_versions_term $ arch_term)
+      $ ocaml_version_term $ opam_repository_term $ all_versions_term $ json_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in
   let list_info = Cmd.info "list" ~doc:"List packages in opam repositories" in
   Cmd.v list_info list_term
@@ -607,13 +631,13 @@ let main_info =
       `P "This tool provides CI testing and health checking capabilities.";
       `P "Use '$(mname) ci DIRECTORY' to run CI tests on a directory.";
       `P "Use '$(mname) health-check PACKAGE' to run health checks on a package.";
-      `P "Use '$(mname) health-check @FILENAME' to run health checks on multiple packages listed in FILENAME (one per line, # for comments).";
+      `P "Use '$(mname) health-check @FILENAME' to run health checks on multiple packages listed in FILENAME (JSON format: {\"packages\":[...]})";
       `P "Use '$(mname) list' list packages in opam repository.";
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
       `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository package --md";
-      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository @packages.txt";
+      `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository @packages.json";
       `P "$(mname) list --opam-repositories /tmp/opam-repository";
     ]
   in

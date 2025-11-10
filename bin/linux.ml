@@ -17,9 +17,6 @@ let env =
     ("OPAMPRECISETRACKING", "1");
   ]
 
-let std_env ~(config : Config.t) =
-  Util.std_env ~arch:config.arch ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"13" ~ocaml_version:config.ocaml_version ()
-
 (* This is a subset of the capabilities that Docker uses by default.
      These control what root can do in the container.
      If the init process is non-root, permitted, effective and ambient sets are cleared.
@@ -146,23 +143,11 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
     ]
 
 let init ~(config : Config.t) =
-  let running_as_root, uid, gid =
-    match (Unix.getuid (), Unix.getgid ()) with
-    | 0, _ -> (true, 1000, 1000)
-    | uid, gid -> (false, uid, gid)
-  in
-  { config; running_as_root; uid; gid }
+  let running_as_root = Unix.geteuid () = 0 in
+  { config; running_as_root; uid = 1000; gid = 1000 }
 
 let deinit ~t:_ = ()
 let config ~t = t.config
-
-let os_key ~config =
-  let os =
-    List.map
-      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
-      [ "os-family"; "os-version"; "arch" ]
-  in
-  String.concat "-" os
 
 let layer_hash ~t deps =
   let hashes =
@@ -176,54 +161,14 @@ let layer_hash ~t deps =
 
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
-  let rootfs = Path.(temp_dir / "fs") in
-  let () = Os.mkdir rootfs in
-  let _ = Os.sudo [ "/usr/bin/env"; "bash"; "-c"; "docker export $(docker run -d debian:13) | sudo tar -C " ^ rootfs ^ " -x" ] in
-  let opam = Path.(rootfs / "/usr/local/bin/opam") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-linux"; "-o"; opam ] in
-  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
-  let opam_build = Path.(rootfs / "/usr/local/bin/opam-build") in
-  let _ =
-    Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ config.arch ^ "-linux"; "-o"; opam_build ]
-  in
-  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
-  let etc_hosts = Path.(temp_dir / "hosts") in
-  let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
-  let argv =
-    [
-      "/usr/bin/env";
-      "bash";
-      "-c";
-      String.concat " && "
-        [
-          "apt update";
-          "apt upgrade -y";
-          "apt install build-essential unzip bubblewrap git sudo curl rsync -y";
-          "groupadd --gid " ^ string_of_int t.gid ^ " opam";
-          "adduser --disabled-password --gecos '@opam' --no-create-home --uid " ^ string_of_int t.uid ^ " --gid " ^ string_of_int t.gid
-          ^ " --home /home/opam opam";
-          "chown -R " ^ string_of_int t.uid ^ ":" ^ string_of_int t.gid ^ " /home/opam";
-          {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /etc/sudoers.d/opam|};
-          "su - opam -c 'opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y'";
-          "su - opam -c 'opam switch create default --empty'";
-        ];
-    ]
-  in
-  let mounts =
-    [
-      { Mount.ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
-      { ty = "bind"; src = opam_repository; dst = "/home/opam/opam-repository"; options = [ "rbind"; "rprivate" ] };
-    ]
-  in
-  let config = make ~root:rootfs ~cwd:"/home/opam" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts ~network:true in
-  let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config) in
-  let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
-  result
+  match config.os_family with
+  | "debian" -> Docker.debian ~config ~temp_dir opam_repository build_log t.uid t.gid
+  | os_family ->
+      failwith (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian" os_family)
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
-  let os_key = os_key ~config in
+  let os_key = Config.os_key ~config in
   let lowerdir = Path.(temp_dir / "lower") in
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in
@@ -254,8 +199,14 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let () =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
-    let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
-    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
+    let state_dir = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch") in
+    let state_temp = Path.(temp_dir / "switch-state") in
+    match Sys.file_exists packages_dir with
+    | false -> ()
+    | true ->
+      Opamh.dump_state packages_dir state_temp;
+      Os.mkdir ~parents:true state_dir;
+      ignore(Os.sudo ["mv"; "-f"; state_temp; state_dir])
   in
   let () =
     if t.running_as_root then

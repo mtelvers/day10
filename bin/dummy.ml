@@ -1,19 +1,8 @@
 type t = { config : Config.t }
 
-let std_env ~(config : Config.t) =
-  Util.std_env ~arch:config.arch ~os:"linux" ~os_distribution:"debian" ~os_family:"debian" ~os_version:"12" ~ocaml_version:config.ocaml_version ()
-
 let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()
 let config ~t = t.config
-
-let os_key ~config =
-  let os =
-    List.map
-      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
-      [ "os-family"; "os-version"; "arch" ]
-  in
-  String.concat "-" os
 
 let layer_hash ~t deps =
   let hashes =

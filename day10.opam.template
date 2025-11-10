@@ -1,0 +1,8 @@
+pin-depends: [
+  ["opam-client.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+  ["opam-core.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+  ["opam-format.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+  ["opam-repository.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+  ["opam-solver.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+  ["opam-state.2.3.0" "git+https://github.com/mtelvers/opam#patch"]
+]

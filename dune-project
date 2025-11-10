@@ -19,7 +19,13 @@
  (name day10)
  (synopsis "A short synopsis")
  (description "A longer description")
- (depends ocaml ppx_deriving_yojson opam-0install cmdliner)
+ (depends
+  (ocaml (>= 5.3.0))
+  dune
+  ppx_deriving_yojson
+  opam-0install
+  (cmdliner (< 2.0.0))
+  dockerfile)
  (tags
   ("add topics" "to describe" your project)))
 
