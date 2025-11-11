@@ -1,6 +1,5 @@
 type t = {
   config : Config.t;
-  running_as_root : bool;
   uid : int;
   gid : int;
 }
@@ -143,8 +142,11 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
     ]
 
 let init ~(config : Config.t) =
-  let running_as_root = Unix.geteuid () = 0 in
-  { config; running_as_root; uid = 1000; gid = 1000 }
+  (* If the effective UID is 0 but the actual UID is <> 0 then we have a SUID binary *)
+  (* Set the actual UID to 0, as SUID is not inherited *)
+  if Unix.geteuid () = 0 && Unix.getuid () <> 0 then Unix.setuid 0;
+  if Unix.getegid () = 0 && Unix.getgid () <> 0 then Unix.setgid 0;
+  { config; uid = 1000; gid = 1000 }
 
 let deinit ~t:_ = ()
 let config ~t = t.config
@@ -199,19 +201,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let () =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
-    let state_dir = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch") in
-    let state_temp = Path.(temp_dir / "switch-state") in
-    match Sys.file_exists packages_dir with
-    | false -> ()
-    | true ->
-      Opamh.dump_state packages_dir state_temp;
-      Os.mkdir ~parents:true state_dir;
-      ignore(Os.sudo ["mv"; "-f"; state_temp; state_dir])
+    let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
+    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
   in
   let () =
-    if t.running_as_root then
-      let home_dir = Path.(upperdir / "home" / "opam") in
-      if Sys.file_exists home_dir then ignore (Os.exec [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
+    let home_dir = Path.(upperdir / "home" / "opam") in
+    if Sys.file_exists home_dir then ignore (Os.sudo [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
   in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in

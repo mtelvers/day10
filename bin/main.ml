@@ -5,10 +5,10 @@ module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
 
 let container =
-  match OpamStd.Sys.os () with
-  | Linux -> (module Linux : S.CONTAINER)
-  | FreeBSD -> (module Freebsd : S.CONTAINER)
-  | Cygwin -> (module Windows : S.CONTAINER)
+  match OpamSysPoll.os OpamVariable.Map.empty with
+  | Some "linux" -> (module Linux : S.CONTAINER)
+  | Some "freebsd" -> (module Freebsd : S.CONTAINER)
+  | Some "win32" -> (module Windows : S.CONTAINER)
   | _ -> (module Dummy : S.CONTAINER)
 
 module Container = (val container)
@@ -526,8 +526,8 @@ let tag_term =
   Arg.(value & opt (some string) None & info [ "tag" ] ~docv:"TAG" ~doc)
 
 let arch_term =
-  let doc = "Architecture (default: detected from opam)" in
-  let default = OpamStd.Sys.uname "-m" |> Option.value ~default:"unknown" |> Os.normalise_arch in
+  let doc = "Architecture (default: detected from system)" in
+  let default = (OpamStd.Sys.uname ()).machine in
   Arg.(value & opt string default & info [ "arch" ] ~docv:"ARCH" ~doc)
 
 let os_term =

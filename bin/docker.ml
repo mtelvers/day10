@@ -1,29 +1,44 @@
+open Dockerfile
+
 let platform = function
-  | "x86_64"
-  | "amd64" ->
-      "linux/amd64"
-  | "i386"
-  | "i686" ->
-      "linux/386"
-  | "aarch64"
-  | "arm64" ->
-      "linux/arm64"
+  | "x86_64" | "amd64" -> "linux/amd64"
+  | "i386" | "i486" | "i586" | "i686" -> "linux/386"
+  | "aarch64" -> "linux/arm64"
   | "armv7l" -> "linux/arm/v7"
+  | "armv6l" -> "linux/arm/v6"
+  | "ppc64le" -> "linux/ppc64le"
+  | "riscv64" -> "linux/riscv64"
+  | "s390x" -> "linux/s390x"
   | arch -> "linux/" ^ arch
+
+let opam ~(config : Config.t) base_image =
+  from ~platform:(platform config.arch) ~alias:"opam-builder" base_image
+  @@ run "apt update && apt install -y build-essential git curl libcap-dev sudo"
+  @@ run "git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam"
+  @@ workdir "/tmp/opam"
+  @@ run "make cold"
+  @@ run "make install"
+
+let opam_build ~(config : Config.t) base_image =
+  from ~platform:(platform config.arch) ~alias:"opam-build-builder" base_image
+  @@ run "apt update && apt install -y build-essential git curl unzip bubblewrap"
+  @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
+  @@ run "opam init --disable-sandboxing -a --bare -y"
+  @@ run "git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build"
+  @@ workdir "/tmp/opam-build"
+  @@ run "opam switch create . 5.3.0 --deps-only -y"
+  @@ run "opam exec -- dune build --release"
+  @@ run "install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build"
 
 let debian ~(config : Config.t) ~temp_dir _opam_repository build_log uid gid =
   let base_image = Printf.sprintf "%s:%s" config.os_distribution config.os_version in
   let dockerfile =
-    let open Dockerfile in
-    from ~platform:(platform config.arch) base_image
+    (opam ~config base_image) @@ (opam_build ~config base_image)
+    @@ from ~platform:(platform config.arch) base_image
     @@ run "apt update && apt upgrade -y"
     @@ run "apt install build-essential unzip bubblewrap git sudo curl rsync -y"
-    @@ run "curl -L https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-%s-linux -o /usr/local/bin/opam && chmod +x /usr/local/bin/opam"
-         config.arch
-    @@ run
-         "curl -L https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-%s-linux -o /usr/local/bin/opam-build && chmod +x \
-          /usr/local/bin/opam-build"
-         config.arch
+    @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
+    @@ copy ~from:"opam-build-builder" ~src:[ "/usr/local/bin/opam-build" ] ~dst:"/usr/local/bin/opam-build" ()
     @@ run "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
     @@ run "if getent passwd %i; then userdel -r $(id -nu %i); fi" uid uid
     @@ run "groupadd --gid %i opam" gid

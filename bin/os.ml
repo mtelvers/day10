@@ -259,18 +259,6 @@ let copy_tree ~source ~target =
   in
   process_directory source target
 
-let normalise_arch raw =
-  match String.lowercase_ascii raw with
-  | "x86" | "i386" | "i486" | "i586" | "i686" -> "i686"
-  | "x86_64" | "amd64" -> "x86_64"
-  | "powerpc" | "ppc" | "ppcle" -> "ppc32"
-  | "ppc64" | "ppc64le" -> "ppc64le"
-  | "ppc64be" -> "ppc64be"
-  | "aarch64_be" | "aarch64" -> "arm64"
-  | a when a = "armv8b" || a = "armv8l" || List.exists (fun prefix -> OpamStd.String.starts_with ~prefix a)
-        ["armv5"; "armv6"; "earmv6"; "armv7"; "earmv7"] -> "arm32"
-  | s -> s
-
 let ls ?extn dir =
   try
     let files = Sys.readdir dir |> Array.to_list |> List.map (Filename.concat dir) in
