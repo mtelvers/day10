@@ -238,15 +238,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
     if Sys.file_exists packages_dir then begin
       Opamh.dump_state packages_dir state_file;
-      Unix.chown state_file 1000 1000
+      ignore (Os.sudo ["chown"; "-R"; "1000:1000"; upperdir])
     end
   in
-(*
-  let () =
-    let home_dir = Path.(upperdir / "home" / "opam") in
-    if Sys.file_exists home_dir then ignore (Os.sudo [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
-  in
-*)
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
   let ld = "lowerdir=" ^ String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
