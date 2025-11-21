@@ -254,15 +254,22 @@ let build config package =
       let dependencies = pkg_deps solution ordered_installation in
       let all_layers_exist =
         if config.dry_run then
-          List.for_all
-            (fun pkg ->
-              let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
-              let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
-              let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
-              Sys.file_exists layer_dir)
-            ordered_installation
-        else
-          false
+          let rec check_all prev_success = function
+            | [] -> true
+            | pkg :: rest ->
+                let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
+                let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
+                let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
+                let layer_json = Path.(layer_dir / "layer.json") in
+                let layer_exists = Sys.file_exists layer_dir in
+                if layer_exists then
+                  let exit_status = Util.load_layer_info_exit_status layer_json in
+                  check_all (prev_success && exit_status = 0) rest
+                else if prev_success then false
+                else check_all false rest
+          in
+          check_all true ordered_installation
+        else false
       in
       if config.dry_run && not all_layers_exist then (
         Container.deinit ~t;
