@@ -343,10 +343,14 @@ let run_list (config : Config.t) all_versions =
         (fun n vset base -> OpamPackage.Set.add (OpamPackage.create n (OpamPackage.Version.Set.max_elt vset)) base)
         (OpamPackage.to_map all_packages) OpamPackage.Set.empty
   in
-  packages_to_show
-  |> OpamPackage.Set.to_list_map (fun x -> (Random.bits (), x))
-  |> List.sort compare |> List.map snd
-  |> List.iter (fun x -> print_endline (OpamPackage.to_string x))
+  let package_list =
+    packages_to_show
+    |> OpamPackage.Set.to_list_map (fun x -> (Random.bits (), x))
+    |> List.sort compare |> List.map snd
+    |> List.map OpamPackage.to_string
+  in
+  List.iter print_endline package_list;
+  Option.iter (fun filename -> Json_packages.write_packages filename package_list) config.json
 
 let output (config : Config.t) results =
   let os_key = Config.os_key ~config in
