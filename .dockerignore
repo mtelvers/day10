@@ -1,0 +1,8 @@
+# Ignore everything
+*
+
+# Explicitly include only what's needed for the build
+!day10.opam
+!dune-project
+!bin/
+!dune
