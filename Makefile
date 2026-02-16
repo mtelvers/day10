@@ -9,11 +9,11 @@ SYSTEM := debian-12
 
 # Compiler versions - can be overridden on command line
 #COMPILERS := ocaml.4.08.1 ocaml.4.09.1 ocaml.4.10.2 ocaml.4.11.2 ocaml.4.12.1 ocaml.4.13.1 ocaml.4.14.2 ocaml.5.0.0 ocaml.5.1.1 ocaml.5.2.1 ocaml.5.3.0
+COMPILERS := ocaml.4.08.1
 #COMPILERS := ocaml.4.08.2 ocaml.4.09.2 ocaml.4.10.3 ocaml.4.11.3 ocaml.4.12.2 ocaml.4.13.2 ocaml.4.14.3 ocaml.5.0.1 ocaml.5.1.2 ocaml.5.2.2 ocaml.5.3.1
-COMPILERS := ocaml-base-compiler.5.4.0~beta2
+#COMPILERS := ocaml-base-compiler.5.4.0~beta1 ocaml-base-compiler.5.4.0~beta2
 
 # Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
-#OUTPUT_DIR := output
 #OUTPUT_DIR := relocatable
 OUTPUT_DIR := output
 
@@ -21,7 +21,7 @@ OUTPUT_DIR := output
 OPAM_REPO := /home/mtelvers/opam-repository
 
 # Output directory - can be overridden on command line: make OUTPUT_DIR=/path/to/output
-CACHE_DIR := /home/mtelvers/cache2
+CACHE_DIR := /home/mtelvers/cache
 
 # Get the git commit SHA of the opam repository
 OPAM_SHA := $(shell git -C "$(OPAM_REPO)" rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -147,6 +147,24 @@ next:
 	git -C $(OPAM_REPO) log --oneline -1 $$next_merge; \
 	git -C $(OPAM_REPO) checkout $$next_merge
 
+prev:
+	git -C $(OPAM_REPO) fetch --all
+	prev_merge=$$(git -C $(OPAM_REPO) log --merges --format="%H" HEAD~1 | head -1); \
+	if [ -z "$$prev_merge" ]; then \
+		echo "No merge commits found before current position"; \
+		exit 1; \
+	fi; \
+	echo "Moving to previous merge commit: $$prev_merge"; \
+	git -C $(OPAM_REPO) log --oneline -1 $$prev_merge; \
+	git -C $(OPAM_REPO) checkout $$prev_merge
+
 parquet: $(foreach dir,$(wildcard $(OUTPUT_DIR)/*),$(dir)/commit.parquet)
+
+remove_bad:
+	find $(CACHE_DIR) -maxdepth 3 -name layer.json | while read -r file; do \
+		if [ -f "$$file" ] && jq -e ".exit_status > 0" "$$file" >/dev/null 2>&1; then \
+			sudo rm -rf "$$(dirname "$$file")"; \
+		fi; \
+	done
 
 .PHONY: all clean list count parquet $(COMPILERS)
