@@ -354,19 +354,12 @@ let run_list (config : Config.t) all_versions =
 
 let output (config : Config.t) results =
   let os_key = Config.os_key ~config in
-  let opam_repo_sha () =
-    List.map
-      (fun opam_repository ->
-        let cmd = Printf.sprintf "git -C %s rev-parse HEAD" opam_repository in
-        Os.run cmd |> String.trim)
-      config.opam_repositories
-    |> String.concat ""
-  in
+  let opam_repo_sha = Util.opam_repo_sha config.opam_repositories |> Option.value ~default:"unknown" in
   let () =
     Option.iter
       (fun filename ->
         let oc = open_out_bin filename in
-        let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) (opam_repo_sha ()) config.package in
+        let () = Printf.fprintf oc "---\nstatus: %s\ncommit: %s\npackage: %s\n---\n" (build_result_to_string (List.hd results)) opam_repo_sha config.package in
         let () =
           List.rev results
           |> List.iter (function
@@ -407,7 +400,7 @@ let output (config : Config.t) results =
         in
         let j =
           `Assoc
-            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String (opam_repo_sha ())) ]
+            ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String opam_repo_sha) ]
             @ Option.fold ~none:[]
                 ~some:(fun hash ->
                   let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in

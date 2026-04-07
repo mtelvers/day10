@@ -61,6 +61,36 @@ let create_opam_repository path =
   let () = Os.write_to_file Path.(path / "repo") {|opam-version: "2.0"|} in
   path
 
+let git_sha dir =
+  let git_dir = Path.(dir / ".git") in
+  if not (Sys.file_exists git_dir) then None
+  else
+    let head = Os.read_from_file Path.(git_dir / "HEAD") |> String.trim in
+    if String.length head >= 5 && String.sub head 0 5 = "ref: " then
+      let ref_path = String.sub head 5 (String.length head - 5) in
+      let loose = Path.(git_dir / ref_path) in
+      if Sys.file_exists loose then Some (Os.read_from_file loose |> String.trim)
+      else
+        (* ref may be packed *)
+        let packed_refs = Path.(git_dir / "packed-refs") in
+        if not (Sys.file_exists packed_refs) then None
+        else
+          let packed = Os.read_from_file packed_refs in
+          let lines = String.split_on_char '\n' packed in
+          let rec find = function
+            | [] -> None
+            | line :: rest -> (
+                match String.split_on_char ' ' line with
+                | [ sha; r ] when String.equal r ref_path -> Some sha
+                | _ -> find rest)
+          in
+          find lines
+    else Some head
+
+let opam_repo_sha opam_repositories =
+  List.filter_map git_sha opam_repositories |> String.concat ""
+  |> function "" -> None | s -> Some s
+
 let opam_file opam_repositories pkg =
   List.find_map
     (fun opam_repository ->
