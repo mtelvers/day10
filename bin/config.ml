@@ -14,6 +14,7 @@ type t = {
   dot : string option;
   with_test : bool;
   tag : string option;
+  oci : string option;
   log : bool;
   dry_run : bool;
   fork : int option;
