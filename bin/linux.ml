@@ -211,6 +211,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
      Inside the namespace we are mapped to root and can use kernel overlayfs. *)
   let container_name = Filename.basename temp_dir in
   let overlay_opts = String.concat "," [ ld; ud; wd ] in
+  (* Clean up any stale runc container state from a previous crashed build *)
+  let () = ignore (Os.exec [ "runc"; "delete"; "-f"; container_name ]) in
   let result = Os.unshare_exec ~stdout:build_log ~stderr:build_log [
     "sh"; "-c";
     Printf.sprintf "mount -t overlay overlay %s -o %s && runc run -b %s %s; rc=$?; umount %s; exit $rc"
