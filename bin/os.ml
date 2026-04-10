@@ -108,10 +108,14 @@ let fork ?np f lst =
     IntSet.empty lst
   |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
 
+let rec lockf_eintr fd cmd len =
+  try Unix.lockf fd cmd len with
+  | Unix.Unix_error (Unix.EINTR, _, _) -> lockf_eintr fd cmd len
+
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
-  Unix.lockf lock_fd F_LOCK 0;
+  lockf_eintr lock_fd F_LOCK 0;
   if not (Sys.file_exists dir_name) then write_function dir_name;
   Unix.close lock_fd;
   try Unix.unlink lock_file with
