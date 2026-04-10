@@ -213,12 +213,20 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let overlay_opts = String.concat "," [ ld; ud; wd ] in
   (* Clean up any stale runc container state from a previous crashed build *)
   let () = ignore (Os.exec [ "runc"; "delete"; "-f"; container_name ]) in
+  (* Use trap to ensure umount always runs, even if runc is killed by timeout.
+     timeout --signal=KILL sends SIGKILL after the grace period. *)
+  let runc_timeout = 3600 in (* 1 hour *)
   let result = Os.unshare_exec ~stdout:build_log ~stderr:build_log [
     "sh"; "-c";
-    Printf.sprintf "mount -t overlay overlay %s -o %s && runc run -b %s %s; rc=$?; umount %s; exit $rc"
+    Printf.sprintf
+      "mount -t overlay overlay %s -o %s && \
+       trap 'umount %s 2>/dev/null' EXIT; \
+       timeout %d runc run -b %s %s; \
+       exit $?"
       (Filename.quote rootfsdir) (Filename.quote overlay_opts)
-      (Filename.quote temp_dir) (Filename.quote container_name)
       (Filename.quote rootfsdir)
+      runc_timeout
+      (Filename.quote temp_dir) (Filename.quote container_name)
   ] in
   (* Cleanup — files are user-owned, no sudo needed *)
   let () =
