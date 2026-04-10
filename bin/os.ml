@@ -102,6 +102,9 @@ let fork ?np f lst =
       in
       match Unix.fork () with
       | 0 ->
+          (* Reset SIGCHLD to default in child so that signals from sibling
+             processes don't interrupt syscalls with EINTR *)
+          Sys.set_signal Sys.sigchld Sys.Signal_default;
           f x;
           exit 0
       | child -> IntSet.add child acc)
