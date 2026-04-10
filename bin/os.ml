@@ -6,6 +6,10 @@ let sudo ?stdout ?stderr cmd =
   (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
+let unshare_exec ?stdout ?stderr cmd =
+  let () = OpamConsole.note "unshare: %s" (String.concat " " cmd) in
+  Sys.command (Filename.quote_command ?stdout ?stderr "unshare" ([ "--user"; "--map-root-user"; "--mount"; "--" ] @ cmd))
+
 let exec ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
   Sys.command (Filename.quote_command ?stdout ?stderr (List.hd cmd) (List.tl cmd))

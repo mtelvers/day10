@@ -425,13 +425,11 @@ let output (config : Config.t) results =
         in
         let () = Printf.printf "Importing layers into Docker with tag: %s\n%!" tag in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "docker-import-" "" in
-        let cp s d = [ "cp"; "--update=none"; "--archive"; "--no-dereference"; "--recursive"; "--link"; "--no-target-directory"; s; d ] in
         let () =
           List.iter
             (fun hash ->
               let layer_dir = Path.(config.dir / os_key / hash / "fs") in
-              let _ = Os.sudo (cp layer_dir temp_dir) in
-              ())
+              Os.hardlink_tree ~source:layer_dir ~target:temp_dir)
             (layers @ [ "base" ])
         in
         let () =
@@ -439,12 +437,11 @@ let output (config : Config.t) results =
           | hash :: _ ->
               let opam_repo_src = Path.(config.dir / os_key / hash / "opam-repository") in
               let opam_repo_dst = Path.(temp_dir / "home" / "opam" / ".opam" / "repo" / "default") in
-              let _ = Os.sudo (cp opam_repo_src opam_repo_dst) in
-              ()
+              Os.hardlink_tree ~source:opam_repo_src ~target:opam_repo_dst
           | _ -> ()
         in
-        let () = Os.run (String.concat " " [ "sudo"; "tar"; "-C"; temp_dir; "-c"; "."; "|"; "docker"; "import"; "-"; tag ]) |> print_string in
-        let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
+        let () = Os.run (String.concat " " [ "tar"; "-C"; temp_dir; "-c"; "."; "|"; "docker"; "import"; "-"; tag ]) |> print_string in
+        let () = Os.rm ~recursive:true temp_dir in
         ())
       config.tag
   in
