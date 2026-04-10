@@ -116,10 +116,17 @@ let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
   lockf_eintr lock_fd F_LOCK 0;
-  if not (Sys.file_exists dir_name) then write_function dir_name;
-  Unix.close lock_fd;
-  try Unix.unlink lock_file with
-  | _ -> ()
+  (try
+     if not (Sys.file_exists dir_name) then write_function dir_name
+   with exn ->
+     (* Unlink and close even on failure, then re-raise *)
+     (try Unix.unlink lock_file with _ -> ());
+     Unix.close lock_fd;
+     raise exn);
+  (* Unlink while still holding the lock so no other process can
+     acquire a lock on the file between close and unlink *)
+  (try Unix.unlink lock_file with _ -> ());
+  Unix.close lock_fd
 
 exception Copy_error of string
 
