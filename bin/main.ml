@@ -49,25 +49,48 @@ let opam_env ~(config : Config.t) pkg v =
   | "post" -> None
   | x -> Config.std_env ~config x
 
-let solve (config : Config.t) pkg =
+let rec find_opam_files dir =
+  try
+    Sys.readdir dir |> Array.to_list
+    |> List.concat_map (fun name ->
+         let path = Filename.concat dir name in
+         if Sys.is_directory path then
+           if name = "_build" || name = "_opam" || String.length name > 0 && name.[0] = '.' then []
+           else find_opam_files path
+         else if Filename.check_suffix name ".opam" then
+           [ (Filename.remove_extension name, path) ]
+         else [])
+  with
+  | Sys_error _ -> []
+
+let solve (config : Config.t) root_packages =
   let constraints =
-    OpamPackage.Name.Map.of_list
-      [ (OpamPackage.name config.ocaml_version, (`Eq, OpamPackage.version config.ocaml_version)); (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg)) ]
+    (OpamPackage.name config.ocaml_version, (`Eq, OpamPackage.version config.ocaml_version))
+    :: List.map (fun pkg -> (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg))) root_packages
+    |> OpamPackage.Name.Map.of_list
   in
   let pins =
     Option.fold ~none:OpamPackage.Name.Map.empty
       ~some:(fun directory ->
-        OpamPackage.Name.Map.empty
-        |> OpamPackage.Name.Map.add (OpamPackage.Name.of_string config.package)
-             (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw Path.((directory / config.package) ^ ".opam")))))
+        find_opam_files directory
+        |> List.fold_left
+             (fun acc (name, path) ->
+               OpamPackage.Name.Map.add (OpamPackage.Name.of_string name)
+                 (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)))
+                 acc)
+             OpamPackage.Name.Map.empty)
       config.directory
   in
-  let test = if config.with_test then OpamPackage.Name.Set.singleton (OpamPackage.name pkg) else OpamPackage.Name.Set.empty in
+  let test =
+    if config.with_test then List.map OpamPackage.name root_packages |> OpamPackage.Name.Set.of_list
+    else OpamPackage.Name.Set.empty
+  in
   let context =
     Dir_context.create ~env:(Config.std_env ~config) ~constraints ~pins ~test
       (List.map (fun opam_repository -> Path.(opam_repository / "packages")) config.opam_repositories)
   in
-  let r = Solver.solve context [ OpamPackage.name config.ocaml_version; OpamPackage.name pkg ] in
+  let roots = OpamPackage.name config.ocaml_version :: List.map OpamPackage.name root_packages in
+  let r = Solver.solve context roots in
   match r with
   | Ok out ->
       let sels = Output.to_map out in
@@ -123,7 +146,8 @@ let solve (config : Config.t) pkg =
             | false -> dfs acc p)
           deps (OpamPackage.Map.add pkg deps map)
       in
-      Ok (dfs OpamPackage.Map.empty pkg)
+      let root_pkgs = OpamPackage.Set.filter (fun p -> List.exists (fun r -> OpamPackage.name r = OpamPackage.name p) root_packages) (Solver.packages_of_result out |> OpamPackage.Set.of_list) in
+      Ok (OpamPackage.Set.fold (fun pkg acc -> dfs acc pkg) root_pkgs OpamPackage.Map.empty)
   | Error problem -> Error (Solver.diagnostics problem)
 
 let rec topological_sort pkgs =
@@ -205,9 +229,9 @@ let print_build_result = function
 let build_layer t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
   let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
-  let () = Printf.printf "Layer %s: %s\n%!" (OpamPackage.to_string pkg) layer_dir in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
+    let () = Printf.printf "Building %s\n%!" (OpamPackage.to_string pkg) in
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let opam_repo = Util.create_opam_repository temp_dir in
     let () =
@@ -243,8 +267,8 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
   | 0 -> Success hash
   | _ -> Failure hash
 
-let build config package =
-  match solve config package with
+let build config packages =
+  match solve config packages with
   | Ok solution ->
       let () = if config.log then Dot_solution.to_string solution |> print_endline in
       let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
@@ -282,7 +306,12 @@ let build config package =
       let results, _ =
         List.fold_left
           (fun (res, m) pkg ->
+            if Config.is_local_package ~config pkg then
+              (* Skip local packages — they'll be built from the workspace by dune *)
+              (res, m)
+            else
             let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
+            let ordered_deps = List.filter (fun p -> not (Config.is_local_package ~config p)) ordered_deps in
             let ordered_hashes =
               List.filter_map
                 (fun p ->
@@ -294,8 +323,6 @@ let build config package =
                 ordered_deps
             in
             let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
-            (* let ordered_deps = OpamPackage.Map.find pkg dependencies |> OpamPackage.Set.to_list |>
-                    List.sort (fun a b -> compare (OpamPackage.Map.find a positions) (OpamPackage.Map.find b positions)) in *)
             match res with
             | [] ->
                 let r = build_layer t pkg hash ordered_deps ordered_hashes in
@@ -466,14 +493,51 @@ let output (config : Config.t) results =
   in
   print_build_result (List.hd results)
 
+let run_build (config : Config.t) =
+  let build_command = Option.value ~default:"dune build" config.build_command in
+  (* Use build_command = None during dependency layer building *)
+  let dep_config = { config with build_command = None } in
+  let local_pkgs = List.map (fun name -> OpamPackage.of_string (name ^ ".dev")) config.local_packages in
+  let results = build dep_config local_pkgs in
+  let exit_code =
+    match results with
+    | Dependency_failed :: _ ->
+        List.iter (function
+          | Failure hash ->
+              let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
+              let pkg = Util.load_layer_info_package_name Path.(layer_dir / "layer.json") in
+              OpamConsole.error "Dependency %s failed:\n%s" pkg (Os.read_from_file Path.(layer_dir / "build.log"))
+          | _ -> ()) results;
+        1
+    | No_solution s :: _ -> OpamConsole.error "No solution: %s" s; 1
+    | _ ->
+        (* All dependency layers built. Now run the build command in the container. *)
+        let all_hashes =
+          List.filter_map (function Success h -> Some h | _ -> None) results
+        in
+        let build_config = { config with build_command = Some build_command } in
+        let t = Container.init ~config:build_config in
+        let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+        let _opam_repo = Util.create_opam_repository temp_dir in
+        let build_log = Path.(temp_dir / "build.log") in
+        let dummy_pkg = List.hd local_pkgs in
+        let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
+        if config.log || r <> 0 then
+          Printf.eprintf "%s\n%!" (Os.read_from_file build_log);
+        let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
+        Container.deinit ~t;
+        r
+  in
+  exit exit_code
+
 let run_ci (config : Config.t) =
   let package = OpamPackage.of_string (config.package ^ ".dev") in
-  let results = build config package in
+  let results = build config [ package ] in
   output config results
 
 let run_health_check (config : Config.t) =
   let package = OpamPackage.of_string config.package in
-  let results = build config package in
+  let results = build config [ package ] in
   output config results
 
 let run_health_check_multi (config : Config.t) package_arg =
@@ -504,15 +568,18 @@ let run_health_check_multi (config : Config.t) package_arg =
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
-  Arg.(required & opt (some string) None & info [ "cache-dir" ] ~docv:"DIR" ~doc)
+  let env = Cmd.Env.info "DAY10_CACHE_DIR" in
+  Arg.(required & opt (some string) None & info [ "cache-dir" ] ~env ~docv:"DIR" ~doc)
 
 let ocaml_version_term =
-  let doc = "OCaml version to use (default 5.3.0)" in
-  Arg.(value & opt string "ocaml.5.3.0" & info [ "ocaml-version" ] ~docv:"VERSION" ~doc)
+  let doc = "OCaml version to use (default 5.4.1)" in
+  let env = Cmd.Env.info "DAY10_OCAML_VERSION" in
+  Arg.(value & opt string "ocaml.5.4.1" & info [ "ocaml-version" ] ~env ~docv:"VERSION" ~doc)
 
 let opam_repository_term =
   let doc = "Directory containing opam repositories (required, can be specified multiple times)" in
-  Arg.(non_empty & opt_all string [] & info [ "opam-repository" ] ~docv:"OPAM-REPO" ~doc)
+  let env = Cmd.Env.info "DAY10_OPAM_REPOSITORY" in
+  Term.(Arg.(non_empty & opt_all string [] & info [ "opam-repository" ] ~env ~docv:"OPAM-REPO" ~doc) |> map (List.concat_map (String.split_on_char ',')))
 
 let md_term =
   let doc = "Output results in markdown format" in
@@ -528,7 +595,8 @@ let dot_term =
 
 let with_test_term =
   let doc = "Enable test dependencies (default false)" in
-  Arg.(value & flag & info [ "with-test" ] ~doc)
+  let env = Cmd.Env.info "DAY10_WITH_TEST" in
+  Arg.(value & flag & info [ "with-test" ] ~env ~doc)
 
 let log_term =
   let doc = "Print build logs (default false)" in
@@ -552,38 +620,94 @@ let oci_term =
 
 let arch_term =
   let doc = "Architecture (default: detected from system)" in
+  let env = Cmd.Env.info "DAY10_ARCH" in
   let default = (OpamStd.Sys.uname ()).machine in
-  Arg.(value & opt string default & info [ "arch" ] ~docv:"ARCH" ~doc)
+  Arg.(value & opt string default & info [ "arch" ] ~env ~docv:"ARCH" ~doc)
 
 let os_term =
   let doc = "Operating system (default: detected from system)" in
+  let env = Cmd.Env.info "DAY10_OS" in
   let default = OpamSysPoll.os OpamVariable.Map.empty |> Option.value ~default:"linux" in
-  Arg.(value & opt string default & info [ "os" ] ~docv:"OS" ~doc)
+  Arg.(value & opt string default & info [ "os" ] ~env ~docv:"OS" ~doc)
 
 let os_distribution_term =
   let doc = "OS distribution (default: detected from system)" in
+  let env = Cmd.Env.info "DAY10_OS_DISTRIBUTION" in
   let default = OpamSysPoll.os_distribution OpamVariable.Map.empty |> Option.value ~default:"debian" in
-  Arg.(value & opt string default & info [ "os-distribution" ] ~docv:"OS_DISTRIBUTION" ~doc)
+  Arg.(value & opt string default & info [ "os-distribution" ] ~env ~docv:"OS_DISTRIBUTION" ~doc)
 
 let os_family_term =
   let doc = "OS family (default: detected from system)" in
+  let env = Cmd.Env.info "DAY10_OS_FAMILY" in
   let default = OpamSysPoll.os_family OpamVariable.Map.empty |> Option.value ~default:"debian" in
-  Arg.(value & opt string default & info [ "os-family" ] ~docv:"OS_FAMILY" ~doc)
+  Arg.(value & opt string default & info [ "os-family" ] ~env ~docv:"OS_FAMILY" ~doc)
 
 let os_version_term =
   let doc = "OS version (default: detected from system)" in
+  let env = Cmd.Env.info "DAY10_OS_VERSION" in
   let default = OpamSysPoll.os_version OpamVariable.Map.empty |> Option.value ~default:"13" in
-  Arg.(value & opt string default & info [ "os-version" ] ~docv:"OS_VERSION" ~doc)
+  Arg.(value & opt string default & info [ "os-version" ] ~env ~docv:"OS_VERSION" ~doc)
 
 let fork_term =
   let doc = "Process packages in parallel using fork with N parallel jobs" in
-  Arg.(value & opt (some int) None & info [ "fork" ] ~docv:"N" ~doc)
+  let env = Cmd.Env.info "DAY10_FORK" in
+  Arg.(value & opt (some int) None & info [ "fork" ] ~env ~docv:"N" ~doc)
 
-let find_opam_files dir =
-  try
-    Sys.readdir dir |> Array.to_list |> List.filter_map (fun name -> if Filename.check_suffix name ".opam" then Some (Filename.remove_extension name) else None)
-  with
-  | Sys_error _ -> []
+let build_cmd =
+  let directory_arg =
+    let doc = "Directory to build" in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"DIRECTORY" ~doc)
+  in
+  let dune_args =
+    let doc = "Extra arguments passed to dune build (e.g. @runtest, @install)" in
+    Arg.(value & pos_right 0 string [] & info [] ~docv:"ARGS" ~doc)
+  in
+  let command_term =
+    let doc = "Custom build command (default: dune build)" in
+    let env = Cmd.Env.info "DAY10_COMMAND" in
+    Arg.(value & opt (some string) None & info [ "command" ] ~env ~docv:"CMD" ~doc)
+  in
+  let build_term =
+    Term.(
+      const (fun dir ocaml_version opam_repositories directory dune_extra command with_test log arch os os_distribution os_family os_version ->
+          let ocaml_version = OpamPackage.of_string ocaml_version in
+          let directory = Unix.realpath directory in
+          let packages = find_opam_files directory in
+          let build_command =
+            match command with
+            | Some _ -> command
+            | None ->
+                let cmd = "opam exec -- dune build" ^ (if dune_extra = [] then "" else " " ^ String.concat " " dune_extra) in
+                Some cmd
+          in
+          run_build
+            {
+              dir;
+              ocaml_version;
+              opam_repositories;
+              package = "";
+              arch;
+              os;
+              os_distribution;
+              os_family;
+              os_version;
+              directory = Some directory;
+              md = None;
+              json = None;
+              dot = None;
+              with_test;
+              tag = None;
+              oci = None;
+              log;
+              dry_run = false;
+              fork = None;
+              build_command;
+              local_packages = List.map fst packages;
+            })
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ command_term $ with_test_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
+  in
+  let build_info = Cmd.info "build" ~doc:"Build a project using cached dependencies" in
+  Cmd.v build_info build_term
 
 let ci_cmd =
   let directory_arg =
@@ -594,12 +718,14 @@ let ci_cmd =
     Term.(
       const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
+          let packages = find_opam_files directory in
+          let package_names = List.map fst packages in
           run_ci
             {
               dir;
               ocaml_version;
               opam_repositories;
-              package = List.hd (find_opam_files directory);
+              package = List.hd package_names;
               arch;
               os;
               os_distribution;
@@ -615,6 +741,8 @@ let ci_cmd =
               log;
               dry_run;
               fork;
+              build_command = None;
+              local_packages = package_names;
             })
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
   in
@@ -630,7 +758,7 @@ let health_check_cmd =
     Term.(
       const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; tag; oci; log; dry_run; fork } package_arg)
+          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; tag; oci; log; dry_run; fork; build_command = None; local_packages = [] } package_arg)
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
@@ -642,7 +770,7 @@ let list_cmd =
       const (fun ocaml_version opam_repositories all_versions json arch os os_distribution os_family os_version ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; tag = None; oci = None; log = false; dry_run = false; fork = None }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = [] }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ json_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in
@@ -669,7 +797,25 @@ let main_info =
   in
   Cmd.info "day10" ~version:"0.0.1" ~doc ~man
 
+let load_env_file path =
+  if Sys.file_exists path then
+    Os.read_from_file path |> String.split_on_char '\n'
+    |> List.iter (fun line ->
+      match String.split_on_char '=' line with
+      | key :: rest when key <> "" && key.[0] <> '#' ->
+          let env_key = "DAY10_" ^ key in
+          let value = String.concat "=" rest in
+          let value =
+            match Sys.getenv_opt env_key with
+            | Some existing when existing <> "" -> existing ^ "," ^ value
+            | _ -> value
+          in
+          Unix.putenv env_key value
+      | _ -> ())
+
 let () =
+  load_env_file (Filename.concat (Sys.getenv "HOME") ".day10");
+  load_env_file ".day10";
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ ci_cmd; health_check_cmd; list_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; ci_cmd; health_check_cmd; list_cmd ] in
   exit (Cmd.eval cmd)

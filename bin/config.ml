@@ -18,7 +18,12 @@ type t = {
   log : bool;
   dry_run : bool;
   fork : int option;
+  build_command : string option;
+  local_packages : string list;
 }
+
+let is_local_package ~(config : t) pkg =
+  List.mem (OpamPackage.name_to_string pkg) config.local_packages
 
 let std_env ~(config : t) =
   Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version

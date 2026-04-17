@@ -158,10 +158,11 @@ let run ~t ~temp_dir opam_repository build_log =
   let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "install"; "-y"; "pkg" ] in
   let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "upgrade"; "-y"; "-f" ] in
   let opam = Path.(rootfs / "usr" / "bin" / "opam") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-freebsd"; "-o"; opam ] in
+  let arch = if config.arch = "amd64" then "x86_64" else config.arch in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.5.1/opam-2.5.1-" ^ arch ^ "-freebsd"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
   let opam_build = Path.(rootfs / "usr" / "bin" / "opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.2.0/opam-build-1.2.0-" ^ config.arch ^ "-freebsd"; "-o"; opam_build ] in
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ arch ^ "-freebsd"; "-o"; opam_build ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
   let argv =
     [
@@ -196,9 +197,14 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let upperdir = Path.(temp_dir / "fs") in
   let workdir = Path.(temp_dir / "work") in
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir ] in
-  let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-  let with_test = if config.with_test then "--with-test " else "" in
-  let argv = pin @ [ "opam-build -v " ^ with_test ^ OpamPackage.to_string pkg ] in
+  let argv =
+    match config.build_command with
+    | Some build_cmd -> [ "cd src"; build_cmd ]
+    | None ->
+        let pin = if OpamPackage.name_to_string pkg = config.package then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
+        let with_test = if config.with_test then "--with-test " else "" in
+        pin @ [ "opam-build -v " ^ with_test ^ OpamPackage.to_string pkg ]
+  in
   let () =
     List.iter
       (fun hash ->
@@ -223,13 +229,14 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let mounts =
     match config.directory with
     | None -> mounts
-    | Some src -> mounts @ [ { ty = "nullfs"; src; dst = Path.("work" / "home" / "opam" / "src"); options = [ "rw" ] } ]
+    | Some src ->
+        let () = ignore (Os.sudo [ "mkdir"; "-p"; Path.(upperdir / "home" / "opam" / "src") ]) in
+        mounts @ [ { ty = "nullfs"; src; dst = Path.("work" / "home" / "opam" / "src"); options = [ "rw" ] } ]
   in
   let result = Os.sudo ~stdout:build_log (jail ~temp_dir ~rootfs:workdir ~mounts ~env ~argv ~network:true ~username:(Some "opam")) in
   let () =
-    if result = 0 then (
-      ignore (Os.sudo [ "umount"; Path.(workdir / "dev") ]);
-      ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]))
+    ignore (Os.sudo [ "umount"; Path.(workdir / "dev") ]);
+    ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ])
   in
   let _ =
     Os.sudo
