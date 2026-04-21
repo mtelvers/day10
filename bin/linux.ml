@@ -101,7 +101,7 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
               `List
                 (List.map
                    (fun namespace -> `Assoc [ ("type", `String namespace) ])
-                   ((if network then [] else [ "network" ]) @ [ "pid"; "ipc"; "uts"; "mount" ])) );
+                   ((if network then [] else [ "network" ]) @ [ "pid"; "ipc"; "uts"; "mount"; "user" ])) );
             ( "maskedPaths",
               strings
                 [
@@ -142,10 +142,6 @@ let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Saf
     ]
 
 let init ~(config : Config.t) =
-  (* If the effective UID is 0 but the actual UID is <> 0 then we have a SUID binary *)
-  (* Set the actual UID to 0, as SUID is not inherited *)
-  if Unix.geteuid () = 0 && Unix.getuid () <> 0 then Unix.setuid 0;
-  if Unix.getegid () = 0 && Unix.getgid () <> 0 then Unix.setgid 0;
   { config; uid = 1000; gid = 1000 }
 
 let deinit ~t:_ = ()
@@ -189,20 +185,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () =
     List.iter
       (fun hash ->
-        assert (
-          0
-          = Os.sudo
-              [
-                "cp";
-                "--update=none";
-                "--archive";
-                "--no-dereference";
-                "--recursive";
-                "--link";
-                "--no-target-directory";
-                Path.(config.dir / os_key / hash / "fs");
-                lowerdir;
-              ]))
+        Os.hardlink_tree
+          ~source:Path.(config.dir / os_key / hash / "fs")
+          ~target:lowerdir)
       ordered_hashes
   in
   let () =
@@ -210,16 +195,11 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
     if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
   in
-  let () =
-    let home_dir = Path.(upperdir / "home" / "opam") in
-    if Sys.file_exists home_dir then ignore (Os.sudo [ "chown"; "-R"; string_of_int t.uid ^ ":" ^ string_of_int t.gid; home_dir ])
-  in
   let etc_hosts = Path.(temp_dir / "hosts") in
   let () = Os.write_to_file etc_hosts ("127.0.0.1 localhost " ^ hostname) in
   let ld = "lowerdir=" ^ String.concat ":" [ lowerdir; Path.(config.dir / os_key / "base" / "fs") ] in
   let ud = "upperdir=" ^ upperdir in
   let wd = "workdir=" ^ workdir in
-  let _ = Os.sudo [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
   let mounts =
     [
       { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
@@ -233,13 +213,32 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
-  let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
-  let _ = Os.sudo [ "umount"; rootfsdir ] in
-  let _ =
-    Os.sudo
+  (* Run mount + runc + umount inside a user namespace so no sudo is needed.
+     Inside the namespace we are mapped to root and can use kernel overlayfs. *)
+  let container_name = Filename.basename temp_dir in
+  let overlay_opts = String.concat "," [ ld; ud; wd ] in
+  (* Clean up any stale runc container state from a previous crashed build *)
+  let () = ignore (Os.exec [ "runc"; "delete"; "-f"; container_name ]) in
+  (* Use trap to ensure umount always runs, even if runc is killed by timeout.
+     timeout --signal=KILL sends SIGKILL after the grace period. *)
+  let runc_timeout = 3600 in (* 1 hour *)
+  let result = Os.unshare_exec ~stdout:build_log ~stderr:build_log [
+    "sh"; "-c";
+    Printf.sprintf
+      "mount -t overlay overlay %s -o %s && \
+       trap 'umount %s 2>/dev/null' EXIT; \
+       timeout %d runc run -b %s %s; \
+       exit $?"
+      (Filename.quote rootfsdir) (Filename.quote overlay_opts)
+      (Filename.quote rootfsdir)
+      runc_timeout
+      (Filename.quote temp_dir) (Filename.quote container_name)
+  ] in
+  (* Cleanup — files are user-owned, no sudo needed *)
+  let () =
+    List.iter
+      (fun p -> if Sys.file_exists p then Os.rm ~recursive:true p)
       [
-        "rm";
-        "-rf";
         lowerdir;
         workdir;
         rootfsdir;
@@ -249,5 +248,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
       ]
   in
-  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
+  let () =
+    let repo_dir = Path.(upperdir / "home" / "opam" / ".opam" / "repo") in
+    if Sys.file_exists repo_dir then
+      Array.iter
+        (fun f -> if String.length f > 6 && String.sub f 0 6 = "state-" && Filename.check_suffix f ".cache" then
+           Sys.remove Path.(repo_dir / f))
+        (Sys.readdir repo_dir)
+  in
   result
