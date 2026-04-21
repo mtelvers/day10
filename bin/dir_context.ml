@@ -27,17 +27,44 @@ type t = {
   prefer_oldest : bool;
 }
 
+let cache : (OpamPackage.t, OpamFile.OPAM.t) Hashtbl.t = Hashtbl.create 32768
+
 let load t pkg =
   let { OpamPackage.name; version = _ } = pkg in
   match OpamPackage.Name.Map.find_opt name t.pins with
   | Some (_, opam) -> opam
-  | None ->
-      List.find_map
-        (fun packages_dir ->
-          let opam = packages_dir / OpamPackage.Name.to_string name / OpamPackage.to_string pkg / "opam" in
-          if Sys.file_exists opam then Some opam else None)
-        t.packages_dirs
-      |> Option.get |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read
+  | None -> (
+      match Hashtbl.find_opt cache pkg with
+      | Some v -> v
+      | None ->
+          let opam =
+            List.find_map
+              (fun packages_dir ->
+                let opam = packages_dir / OpamPackage.Name.to_string name / OpamPackage.to_string pkg / "opam" in
+                if Sys.file_exists opam then Some opam else None)
+              t.packages_dirs
+            |> Option.get |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read
+          in
+          Hashtbl.add cache pkg opam;
+          opam)
+
+let prefetch ~packages_dirs () =
+  List.iter
+    (fun packages_dir ->
+      Os.ls packages_dir
+      |> List.iter (fun name_path ->
+             let name_dir = Filename.basename name_path in
+             Os.ls name_path
+             |> List.iter (fun ver_path ->
+                    let pkg_ver = Filename.basename ver_path in
+                    let opam_path = ver_path / "opam" in
+                    match OpamPackage.of_string_opt pkg_ver with
+                    | Some pkg when OpamPackage.Name.to_string (OpamPackage.name pkg) = name_dir && (not (Hashtbl.mem cache pkg)) && Sys.file_exists opam_path
+                      ->
+                        let opam = OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw opam_path)) in
+                        Hashtbl.add cache pkg opam
+                    | _ -> ())))
+    packages_dirs
 
 let user_restrictions t name = OpamPackage.Name.Map.find_opt name t.constraints
 let dev = OpamPackage.Version.of_string "dev"
@@ -117,5 +144,6 @@ let pp_rejection f = function
   | UserConstraint x -> Fmt.pf f "Rejected by user-specified constraint %s" (OpamFormula.string_of_atom x)
   | Unavailable -> Fmt.string f "Availability condition not satisfied"
 
-let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(doc = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env packages_dirs =
+let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(doc = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints
+    ~env packages_dirs =
   { env; packages_dirs; pins; constraints; test; doc; prefer_oldest }

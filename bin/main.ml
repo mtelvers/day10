@@ -570,7 +570,12 @@ let run_health_check_multi (config : Config.t) package_arg =
       match config.fork with
       | Some 1
       | None -> List.iter run_with_package packages
-      | Some n -> Os.fork ~np:n run_with_package packages
+      | Some np ->
+          let packages_dirs =
+            List.map (fun r -> Path.(r / "packages")) config.opam_repositories
+          in
+          Dir_context.prefetch ~packages_dirs ();
+          Os.fork ~np run_with_package packages
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
