@@ -237,7 +237,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
   let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
-    let () = Printf.printf "Building %s\n%!" (OpamPackage.to_string pkg) in
+    let () = OpamConsole.note "Building %s" (OpamPackage.to_string pkg) in
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let opam_repo = Util.create_opam_repository temp_dir in
     let () =
@@ -456,7 +456,7 @@ let output (config : Config.t) results =
               | _ -> None)
             results
         in
-        let () = Printf.printf "Importing layers into Docker with tag: %s\n%!" tag in
+        let () = OpamConsole.note "Importing layers into Docker with tag: %s" tag in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "docker-import-" "" in
         let cp s d = [ "cp"; "--update=none"; "--archive"; "--no-dereference"; "--recursive"; "--link"; "--no-target-directory"; s; d ] in
         let () =
@@ -529,7 +529,7 @@ let run_build (config : Config.t) =
         let dummy_pkg = List.hd local_pkgs in
         let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
         if config.log || r <> 0 then
-          Printf.eprintf "%s\n%!" (Os.read_from_file build_log);
+          OpamConsole.error "%s" (Os.read_from_file build_log);
         let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
         Container.deinit ~t;
         r
@@ -585,7 +585,8 @@ let ocaml_version_term =
 let opam_repository_term =
   let doc = "Directory containing opam repositories (required, can be specified multiple times)" in
   let env = Cmd.Env.info "DAY10_OPAM_REPOSITORY" in
-  Term.(Arg.(non_empty & opt_all string [] & info [ "opam-repository" ] ~env ~docv:"OPAM-REPO" ~doc) |> map (List.concat_map (String.split_on_char ',')))
+  let arg = Arg.(non_empty & opt_all string [] & info [ "opam-repository" ] ~env ~docv:"OPAM-REPO" ~doc) in
+  Term.(const (List.concat_map (String.split_on_char ',')) $ arg)
 
 let md_term =
   let doc = "Output results in markdown format" in

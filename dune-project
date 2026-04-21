@@ -24,7 +24,7 @@
   dune
   ppx_deriving_yojson
   opam-0install
-  (cmdliner (< 2.0.0))
+  cmdliner
   dockerfile)
  (tags
   ("add topics" "to describe" your project)))
