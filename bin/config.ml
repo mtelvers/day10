@@ -13,6 +13,7 @@ type t = {
   json : string option;
   dot : string option;
   with_test : bool;
+  with_doc : bool;
   tag : string option;
   oci : string option;
   log : bool;

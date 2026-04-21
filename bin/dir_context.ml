@@ -23,6 +23,7 @@ type t = {
   pins : (OpamPackage.Version.t * OpamFile.OPAM.t) OpamPackage.Name.Map.t;
   constraints : OpamFormula.version_constraint OpamTypes.name_map; (* User-provided constraints *)
   test : OpamPackage.Name.Set.t;
+  doc : OpamPackage.Name.Set.t;
   prefer_oldest : bool;
 }
 
@@ -65,7 +66,8 @@ let env t pkg v =
 let filter_deps t pkg f =
   let dev = OpamPackage.Version.compare (OpamPackage.version pkg) dev = 0 in
   let test = OpamPackage.Name.Set.mem (OpamPackage.name pkg) t.test in
-  f |> OpamFilter.partial_filter_formula (env t pkg) |> OpamFilter.filter_deps ~build:true ~post:true ~test ~doc:false ~dev ~dev_setup:false ~default:false
+  let doc = OpamPackage.Name.Set.mem (OpamPackage.name pkg) t.doc in
+  f |> OpamFilter.partial_filter_formula (env t pkg) |> OpamFilter.filter_deps ~build:true ~post:true ~test ~doc ~dev ~dev_setup:false ~default:false
 
 let version_compare t (v1, v1_avoid, _) (v2, v2_avoid, _) =
   match (v1_avoid, v2_avoid) with
@@ -115,5 +117,5 @@ let pp_rejection f = function
   | UserConstraint x -> Fmt.pf f "Rejected by user-specified constraint %s" (OpamFormula.string_of_atom x)
   | Unavailable -> Fmt.string f "Availability condition not satisfied"
 
-let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env packages_dirs =
-  { env; packages_dirs; pins; constraints; test; prefer_oldest }
+let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(doc = OpamPackage.Name.Set.empty) ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env packages_dirs =
+  { env; packages_dirs; pins; constraints; test; doc; prefer_oldest }
