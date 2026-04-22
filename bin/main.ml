@@ -347,6 +347,31 @@ let build config packages =
 
 open Cmdliner
 
+let run_prune (config : Config.t) days =
+  let os_key = Config.os_key ~config in
+  let cache_root = Path.(config.dir / os_key) in
+  if not (Sys.file_exists cache_root) then
+    OpamConsole.warning "Cache directory %s does not exist" cache_root
+  else
+    let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
+    let to_delete =
+      Os.ls cache_root
+      |> List.filter (fun entry_dir ->
+           let layer_json = Path.(entry_dir / "layer.json") in
+           if not (Sys.file_exists layer_json) then false
+           else
+             try (Unix.stat layer_json).st_mtime < cutoff with
+             | Unix.Unix_error _ -> false)
+    in
+    match to_delete with
+    | [] -> OpamConsole.note "No cache entries older than %d day(s)" days
+    | _ ->
+        OpamConsole.note "Pruning %d cache entries" (List.length to_delete);
+        let oc = Unix.open_process_out "sudo xargs rm -rf" in
+        List.iter (fun p -> output_string oc p; output_char oc '\n') to_delete;
+        let _ = Unix.close_process_out oc in
+        ()
+
 let run_list (config : Config.t) all_versions =
   let () = Random.self_init () in
   let all_packages =
@@ -796,6 +821,22 @@ let health_check_cmd =
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
 
+let prune_cmd =
+  let days_arg =
+    let doc = "Delete cache entries whose layer.json is older than N days" in
+    Arg.(required & pos 0 (some int) None & info [] ~docv:"N" ~doc)
+  in
+  let prune_term =
+    Term.(
+      const (fun dir arch os os_distribution os_family os_version days ->
+          run_prune
+            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = [] }
+            days)
+      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg)
+  in
+  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries older than N days" in
+  Cmd.v prune_info prune_term
+
 let list_cmd =
   let list_term =
     Term.(
@@ -851,5 +892,5 @@ let () =
   load_env_file (Filename.concat (Sys.getenv "HOME") ".day10");
   load_env_file ".day10";
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; prune_cmd ] in
   exit (Cmd.eval cmd)
