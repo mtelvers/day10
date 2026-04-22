@@ -738,7 +738,7 @@ let exec_cmd =
       const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~build_command:(Some ("opam exec -- " ^ String.concat " " cmd))))
+               ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in
   let exec_info = Cmd.info "exec" ~doc:"Run a command in a container with the project's dependencies" in
@@ -756,7 +756,7 @@ let build_cmd =
   let build_term =
     Term.(
       const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version ->
-          let cmd = "opam exec -- dune build " ^ String.concat " " dune_extra in
+          let cmd = String.concat " " ([ "opam"; "exec"; "--"; "dune"; "build" ] @ List.map Filename.quote dune_extra) in
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
                ~build_command:(Some cmd)))

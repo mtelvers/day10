@@ -127,24 +127,64 @@ let layer_hash ~t deps =
   String.concat " " hashes |> Digest.string |> Digest.to_hex
 
 let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
-  let mounts =
-    let fstab = Path.(temp_dir / "fstab") in
-    let () =
-      List.map
-        (fun (m : Mount.t) ->
-          let full = Path.(temp_dir / m.dst) in
-          let () = if not (Sys.file_exists full) then ignore (Os.sudo [ "mkdir"; "-p"; full ]) in
-          String.concat " " [ m.src; full; m.ty; (if List.mem "ro" m.options then "ro" else "rw"); "0"; "0" ])
-        mounts
-      |> String.concat "\n" |> Os.write_to_file fstab
-    in
-    [ "mount.fstab=" ^ fstab ]
+  let jailname = Filename.basename temp_dir in
+  let fstab = Path.(temp_dir / "fstab") in
+  let () =
+    List.map
+      (fun (m : Mount.t) ->
+        let full = Path.(temp_dir / m.dst) in
+        let () = if not (Sys.file_exists full) then ignore (Os.sudo [ "mkdir"; "-p"; full ]) in
+        String.concat " " [ m.src; full; m.ty; (if List.mem "ro" m.options then "ro" else "rw"); "0"; "0" ])
+      mounts
+    |> String.concat "\n" |> Os.write_to_file fstab
   in
-  let env = List.map (fun (k, v) -> k ^ "='" ^ v ^ "'") env in
-  let params = String.concat " " [ (if List.is_empty env then "" else String.concat " " ("env" :: env)); String.concat " && " argv ] in
-  let network = if network then [ "ip4=inherit"; "ip6=inherit"; "host=inherit" ] else [ "exec.start=/sbin/ifconfig lo0 127.0.0.1/8"; "vnet" ] in
-  let cmd = Option.fold ~none:[ "command=/bin/sh" ] ~some:(fun u -> [ "command=/usr/bin/su"; "-l"; u ]) username in
-  [ "jail"; "-c"; "name=" ^ Filename.basename temp_dir; "path=" ^ rootfs; "mount.devfs" ] @ mounts @ network @ cmd @ [ "-c"; params ]
+  let quote_conf s =
+    let buf = Buffer.create (String.length s + 2) in
+    Buffer.add_char buf '"';
+    String.iter
+      (fun c ->
+        (match c with
+        | '"'
+        | '\\' ->
+            Buffer.add_char buf '\\'
+        | _ -> ());
+        Buffer.add_char buf c)
+      s;
+    Buffer.add_char buf '"';
+    Buffer.contents buf
+  in
+  let sh_cmd =
+    let env_prefix =
+      if env = [] then ""
+      else
+        let pairs = List.map (fun (k, v) -> k ^ "=" ^ Filename.quote v) env in
+        "export " ^ String.concat " " pairs ^ "; "
+    in
+    env_prefix ^ String.concat " && " argv
+  in
+  let command_value =
+    match username with
+    | None -> sh_cmd
+    | Some u -> "/usr/bin/su -l " ^ u ^ " -c " ^ Filename.quote sh_cmd
+  in
+  let network_lines =
+    if network then [ "ip4 = inherit;"; "ip6 = inherit;"; "host = inherit;" ]
+    else [ "vnet;"; "exec.start = " ^ quote_conf "/sbin/ifconfig lo0 127.0.0.1/8" ^ ";" ]
+  in
+  let conf =
+    let indent = List.map (fun l -> "  " ^ l) in
+    String.concat "\n"
+      ([ jailname ^ " {" ]
+      @ indent
+          ([ "path = " ^ quote_conf rootfs ^ ";"; "mount.devfs;"; "mount.fstab = " ^ quote_conf fstab ^ ";" ]
+          @ network_lines
+          @ [ "command = " ^ quote_conf command_value ^ ";" ])
+      @ [ "}" ])
+    ^ "\n"
+  in
+  let conf_file = Path.(temp_dir / "jail.conf") in
+  let () = Os.write_to_file conf_file conf in
+  [ "jail"; "-f"; conf_file; "-c"; jailname ]
 
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
