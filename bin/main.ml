@@ -553,8 +553,8 @@ let run_build (config : Config.t) =
         let build_log = Path.(temp_dir / "build.log") in
         let dummy_pkg = List.hd local_pkgs in
         let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
-        if config.log || r <> 0 then
-          OpamConsole.error "%s" (Os.read_from_file build_log);
+        if r <> 0 then OpamConsole.error "%s" (Os.read_from_file build_log)
+        else if config.log then OpamConsole.msg "%s" (Os.read_from_file build_log);
         let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
         Container.deinit ~t;
         r
@@ -888,9 +888,25 @@ let load_env_file path =
           Unix.putenv env_key value
       | _ -> ())
 
+(* Find the directory positional arg of exec/build/ci in argv so we can load
+   that project's .day10 file before cmdliner consumes DAY10_* env vars.
+   Heuristic: the first argv entry (after the subcommand, before `--`) that
+   points at a directory containing a .day10 file. *)
+let find_project_dir_from_argv () =
+  match Array.to_list Sys.argv with
+  | _ :: ("exec" | "build" | "ci") :: rest ->
+      let rec find = function
+        | [] | "--" :: _ -> None
+        | arg :: _ when Sys.file_exists (Filename.concat arg ".day10") -> Some arg
+        | _ :: rest -> find rest
+      in
+      find rest
+  | _ -> None
+
 let () =
   load_env_file (Filename.concat (Sys.getenv "HOME") ".day10");
   load_env_file ".day10";
+  Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
   let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; prune_cmd ] in
   exit (Cmd.eval cmd)
