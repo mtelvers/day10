@@ -554,7 +554,7 @@ let run_build (config : Config.t) =
         let dummy_pkg = List.hd local_pkgs in
         let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
         if r <> 0 then OpamConsole.error "%s" (Os.read_from_file build_log)
-        else if config.log then OpamConsole.msg "%s" (Os.read_from_file build_log);
+        else OpamConsole.msg "%s" (Os.read_from_file build_log);
         let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
         Container.deinit ~t;
         r
