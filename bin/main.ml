@@ -529,6 +529,11 @@ let run_build (config : Config.t) =
   (* Use build_command = None during dependency layer building *)
   let dep_config = { config with build_command = None } in
   let local_pkgs = List.map (fun name -> OpamPackage.of_string (name ^ ".dev")) config.local_packages in
+  if local_pkgs = [] then begin
+    let dir = Option.value ~default:"." config.directory in
+    OpamConsole.error "No .opam files found in %s. day10 build/exec needs at least one .opam file to determine dependencies." dir;
+    exit 1
+  end;
   let results = build dep_config local_pkgs in
   let exit_code =
     match results with
