@@ -60,9 +60,16 @@ let debian ~(config : Config.t) ~temp_dir _opam_repository build_log uid gid =
       let rootfs = Path.(temp_dir / "fs") in
       let container = Filename.basename temp_dir in
       let () = Os.mkdir rootfs in
-      let _ = Os.sudo [ "docker"; "create"; "--name"; container; tag ] in
-      let () = Os.run (String.concat " " [ "sudo"; "docker"; "export"; container; "|"; "sudo"; "tar"; "-xf"; "-"; "-C"; rootfs ]) |> print_string in
-      let _ = Os.sudo [ "docker"; "rm"; container ] in
-      let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
+      let _ = Os.exec [ "docker"; "create"; "--name"; container; tag ] in
+      let () = Os.run (String.concat " " [ "docker"; "export"; container; "|"; "tar"; "-xf"; "-"; "-C"; rootfs ]) |> print_string in
+      let _ = Os.exec [ "docker"; "rm"; container ] in
+      let () =
+        let repo_dir = Path.(rootfs / "home" / "opam" / ".opam" / "repo") in
+        if Sys.file_exists repo_dir then
+          Array.iter
+            (fun f -> if String.length f > 6 && String.sub f 0 6 = "state-" && Filename.check_suffix f ".cache" then
+               Sys.remove Path.(repo_dir / f))
+            (Sys.readdir repo_dir)
+      in
       0
   | build_result -> build_result

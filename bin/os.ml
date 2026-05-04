@@ -6,6 +6,10 @@ let sudo ?stdout ?stderr cmd =
   (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
   Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
 
+let unshare_exec ?stdout ?stderr cmd =
+  let () = OpamConsole.note "unshare: %s" (String.concat " " cmd) in
+  Sys.command (Filename.quote_command ?stdout ?stderr "unshare" ([ "--user"; "--map-root-user"; "--mount"; "--" ] @ cmd))
+
 let exec ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
   Sys.command (Filename.quote_command ?stdout ?stderr (List.hd cmd) (List.tl cmd))
@@ -98,20 +102,34 @@ let fork ?np f lst =
       in
       match Unix.fork () with
       | 0 ->
+          (* Reset SIGCHLD to default in child so that signals from sibling
+             processes don't interrupt syscalls with EINTR *)
+          Sys.set_signal Sys.sigchld Sys.Signal_default;
           f x;
           exit 0
       | child -> IntSet.add child acc)
     IntSet.empty lst
   |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
 
+let rec lockf_eintr fd cmd len =
+  try Unix.lockf fd cmd len with
+  | Unix.Unix_error (Unix.EINTR, _, _) -> lockf_eintr fd cmd len
+
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
-  Unix.lockf lock_fd F_LOCK 0;
-  if not (Sys.file_exists dir_name) then write_function dir_name;
-  Unix.close lock_fd;
-  try Unix.unlink lock_file with
-  | _ -> ()
+  lockf_eintr lock_fd F_LOCK 0;
+  (try
+     if not (Sys.file_exists dir_name) then write_function dir_name
+   with exn ->
+     (* Unlink and close even on failure, then re-raise *)
+     (try Unix.unlink lock_file with _ -> ());
+     Unix.close lock_fd;
+     raise exn);
+  (* Unlink while still holding the lock so no other process can
+     acquire a lock on the file between close and unlink *)
+  (try Unix.unlink lock_file with _ -> ());
+  Unix.close lock_fd
 
 exception Copy_error of string
 
