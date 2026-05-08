@@ -347,30 +347,53 @@ let build config packages =
 
 open Cmdliner
 
-let run_prune (config : Config.t) days =
+type prune_mode =
+  | Keep_days of int     (* keep entries newer than N days *)
+  | Keep_percent of int  (* keep newest N% of entries, by count *)
+
+let run_prune (config : Config.t) mode =
   let os_key = Config.os_key ~config in
   let cache_root = Path.(config.dir / os_key) in
   if not (Sys.file_exists cache_root) then
     OpamConsole.warning "Cache directory %s does not exist" cache_root
   else
-    let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
-    let to_delete =
+    let entries =
       Os.ls cache_root
-      |> List.filter (fun entry_dir ->
+      |> List.filter_map (fun entry_dir ->
            let layer_json = Path.(entry_dir / "layer.json") in
-           if not (Sys.file_exists layer_json) then false
+           if not (Sys.file_exists layer_json) then None
            else
-             try (Unix.stat layer_json).st_mtime < cutoff with
-             | Unix.Unix_error _ -> false)
+             try Some (entry_dir, (Unix.stat layer_json).st_mtime) with
+             | Unix.Unix_error _ -> None)
+    in
+    let to_delete, summary =
+      match mode with
+      | Keep_days days ->
+          let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
+          let stale = List.filter (fun (_, mtime) -> mtime < cutoff) entries in
+          (List.map fst stale, Printf.sprintf "older than %d day(s)" days)
+      | Keep_percent pct ->
+          let total = List.length entries in
+          let drop = total - (total * pct / 100) in
+          let oldest =
+            entries
+            |> List.sort (fun (_, a) (_, b) -> compare a b)
+            |> List.filteri (fun i _ -> i < drop)
+            |> List.map fst
+          in
+          (oldest, Printf.sprintf "keeping newest %d%% (%d of %d)" pct (total - drop) total)
     in
     match to_delete with
-    | [] -> OpamConsole.note "No cache entries older than %d day(s)" days
+    | [] -> OpamConsole.note "No cache entries to prune (%s)" summary
     | _ ->
-        OpamConsole.note "Pruning %d cache entries" (List.length to_delete);
+        OpamConsole.note "Pruning %d cache entries (%s)" (List.length to_delete) summary;
         let oc = Unix.open_process_out "sudo xargs rm -rf" in
         List.iter (fun p -> output_string oc p; output_char oc '\n') to_delete;
-        let _ = Unix.close_process_out oc in
-        ()
+        match Unix.close_process_out oc with
+        | Unix.WEXITED 0 -> ()
+        | Unix.WEXITED n -> OpamConsole.error "sudo xargs rm -rf exited with status %d" n
+        | Unix.WSIGNALED n -> OpamConsole.error "sudo xargs rm -rf killed by signal %d" n
+        | Unix.WSTOPPED n -> OpamConsole.error "sudo xargs rm -rf stopped by signal %d" n
 
 let run_list (config : Config.t) all_versions =
   let () = Random.self_init () in
@@ -828,18 +851,39 @@ let health_check_cmd =
 
 let prune_cmd =
   let days_arg =
-    let doc = "Delete cache entries whose layer.json is older than N days" in
-    Arg.(required & pos 0 (some int) None & info [] ~docv:"N" ~doc)
+    let doc = "Keep cache entries from the last $(docv) days; delete older ones." in
+    Arg.(value & opt (some int) None & info [ "days" ] ~docv:"N" ~doc)
+  in
+  let percent_arg =
+    let doc = "Keep the newest $(docv)% of cache entries; delete the rest." in
+    Arg.(value & opt (some int) None & info [ "percent" ] ~docv:"N" ~doc)
   in
   let prune_term =
     Term.(
-      const (fun dir arch os os_distribution os_family os_version days ->
+      const (fun dir arch os os_distribution os_family os_version days percent ->
+          let mode =
+            match days, percent with
+            | Some d, None when d >= 0 -> Keep_days d
+            | None, Some p when p >= 0 && p <= 100 -> Keep_percent p
+            | Some _, Some _ ->
+                OpamConsole.error "--days and --percent are mutually exclusive";
+                exit 1
+            | None, None ->
+                OpamConsole.error "Specify one of --days N or --percent N";
+                exit 1
+            | Some _, None ->
+                OpamConsole.error "--days must be >= 0";
+                exit 1
+            | None, Some _ ->
+                OpamConsole.error "--percent must be between 0 and 100";
+                exit 1
+          in
           run_prune
             { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = [] }
-            days)
-      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg)
+            mode)
+      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg $ percent_arg)
   in
-  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries older than N days" in
+  let prune_info = Cmd.info "prune" ~doc:"Prune cache entries by age (--days) or by count (--percent)" in
   Cmd.v prune_info prune_term
 
 let list_cmd =
@@ -865,12 +909,14 @@ let main_info =
       `P "Use '$(mname) health-check PACKAGE' to run health checks on a package.";
       `P "Use '$(mname) health-check @FILENAME' to run health checks on multiple packages listed in FILENAME (JSON format: {\"packages\":[...]})";
       `P "Use '$(mname) list' list packages in opam repository.";
+      `P "Use '$(mname) prune --days N' to delete cache entries older than N days, or '$(mname) prune --percent N' to keep only the newest N% of entries.";
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
       `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository package --md";
       `P "$(mname) health-check --cache-dir /tmp/cache --opam-repositories /tmp/opam-repository @packages.json";
       `P "$(mname) list --opam-repositories /tmp/opam-repository";
+      `P "$(mname) prune --cache-dir /tmp/cache --percent 90";
     ]
   in
   Cmd.info "day10" ~version:"0.0.1" ~doc ~man
