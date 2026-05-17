@@ -1,6 +1,11 @@
 (executable
  (public_name day10)
  (name main)
- (libraries opam-0install yojson ppx_deriving_yojson.runtime cmdliner dockerfile)
+ (libraries
+  opam-0install
+  yojson
+  ppx_deriving_yojson.runtime
+  cmdliner
+  dockerfile)
  (preprocess
   (pps ppx_deriving_yojson)))
