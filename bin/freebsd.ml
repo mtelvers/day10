@@ -116,16 +116,6 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let layer_hash ~t deps =
-  let hashes =
-    List.map
-      (fun opam ->
-        opam |> Util.opam_file t.config.opam_repositories |> Option.get |> OpamFile.OPAM.effective_part |> OpamFile.OPAM.write_to_string
-        |> OpamHash.compute_from_string |> OpamHash.to_string)
-      deps
-  in
-  String.concat " " hashes |> Digest.string |> Digest.to_hex
-
 let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   let jailname = Filename.basename temp_dir in
   let fstab = Path.(temp_dir / "fstab") in

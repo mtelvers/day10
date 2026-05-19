@@ -1,8 +1,16 @@
-module Solver = Opam_0install.Solver.Make (Dir_context)
+module Solver = Opam_0install.Solver.Make (Repo_context)
 module Input = Solver.Input
 module Output = Solver.Solver.Output
 module Role = Solver.Input.Role
 module Role_map = Output.RoleMap
+
+let resolve_opam ctx pkg =
+  match Repo_context.opam_file ctx pkg with
+  | Some o -> o
+  | None -> failwith (Printf.sprintf "opam not found for %s" (OpamPackage.to_string pkg))
+
+let layer_hash_of ctx pkgs =
+  Util.layer_hash (List.map (resolve_opam ctx) pkgs)
 
 let container =
   match OpamSysPoll.os OpamVariable.Map.empty with
@@ -65,7 +73,10 @@ let rec find_opam_files dir =
   with
   | Sys_error _ -> []
 
-let solve (config : Config.t) root_packages =
+let make_repo (config : Config.t) =
+  Repo.create (List.map Repo.parse_source config.opam_repositories)
+
+let solve ~repo (config : Config.t) root_packages =
   let constraints =
     (OpamPackage.name config.ocaml_version, (`Eq, OpamPackage.version config.ocaml_version))
     :: List.map (fun pkg -> (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg))) root_packages
@@ -91,13 +102,9 @@ let solve (config : Config.t) root_packages =
     if config.with_doc then List.map OpamPackage.name root_packages |> OpamPackage.Name.Set.of_list
     else OpamPackage.Name.Set.empty
   in
-  let context =
-    Dir_context.create ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc
-      (List.map (fun opam_repository -> Path.(opam_repository / "packages")) config.opam_repositories)
-  in
+  let context = Repo_context.create ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc ~repo () in
   let roots = OpamPackage.name config.ocaml_version :: List.map OpamPackage.name root_packages in
-  let r = Solver.solve context roots in
-  match r with
+  match Solver.solve context roots with
   | Ok out ->
       let sels = Output.to_map out in
       let depends = Hashtbl.create 100 in
@@ -128,7 +135,7 @@ let solve (config : Config.t) root_packages =
       let deptree =
         OpamPackage.Set.fold
           (fun pkg acc ->
-            let opam = Dir_context.load context pkg in
+            let opam = Repo_context.load context pkg in
             let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (opam_env ~config pkg) in
             let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
             let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
@@ -153,7 +160,7 @@ let solve (config : Config.t) root_packages =
           deps (OpamPackage.Map.add pkg deps map)
       in
       let root_pkgs = OpamPackage.Set.filter (fun p -> List.exists (fun r -> OpamPackage.name r = OpamPackage.name p) root_packages) (Solver.packages_of_result out |> OpamPackage.Set.of_list) in
-      Ok (OpamPackage.Set.fold (fun pkg acc -> dfs acc pkg) root_pkgs OpamPackage.Map.empty)
+      Ok (context, OpamPackage.Set.fold (fun pkg acc -> dfs acc pkg) root_pkgs OpamPackage.Map.empty)
   | Error problem -> Error (Solver.diagnostics problem)
 
 let rec topological_sort pkgs =
@@ -232,7 +239,7 @@ let print_build_result = function
   | Failure _ -> OpamConsole.error "failure"
   | Success _ -> OpamConsole.note "success"
 
-let build_layer t pkg hash ordered_deps ordered_hashes =
+let build_layer ctx t pkg hash ordered_deps ordered_hashes =
   let config = Container.config ~t in
   let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
   let layer_json = Path.(layer_dir / "layer.json") in
@@ -240,26 +247,7 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
     let () = OpamConsole.note "Building %s" (OpamPackage.to_string pkg) in
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     let opam_repo = Util.create_opam_repository temp_dir in
-    let () =
-      List.iter
-        (fun pkg ->
-          let opam_relative_path = Path.("packages" / OpamPackage.name_to_string pkg / OpamPackage.to_string pkg) in
-          List.find_map
-            (fun opam_repository ->
-              let opam = Path.(opam_repository / opam_relative_path) in
-              if Sys.file_exists opam then Some opam else None)
-            config.opam_repositories
-          |> Option.iter (fun src ->
-                 let dst = Path.(opam_repo / opam_relative_path) in
-                 let () = Os.mkdir ~parents:true dst in
-                 let () = Os.cp Path.(src / "opam") Path.(dst / "opam") in
-                 let src_files = Path.(src / "files") in
-                 if Sys.file_exists src_files then
-                   let dst_files = Path.(dst / "files") in
-                   let () = Os.mkdir dst_files in
-                   Sys.readdir src_files |> Array.iter (fun f -> Os.cp Path.(src_files / f) Path.(dst_files / f))))
-        (pkg :: ordered_deps)
-    in
+    let () = Repo.materialise (Repo_context.repo ctx) (pkg :: ordered_deps) ~dest:opam_repo in
     let build_log = Path.(temp_dir / "build.log") in
     let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
     let () = Unix.rename temp_dir target_dir in
@@ -273,9 +261,9 @@ let build_layer t pkg hash ordered_deps ordered_hashes =
   | 0 -> Success hash
   | _ -> Failure hash
 
-let build config packages =
-  match solve config packages with
-  | Ok solution ->
+let build ~repo config packages =
+  match solve ~repo config packages with
+  | Ok (ctx, solution) ->
       let () = if config.log then Dot_solution.to_string solution |> print_endline in
       let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
       let t = Container.init ~config in
@@ -288,7 +276,7 @@ let build config packages =
             | [] -> true
             | pkg :: rest ->
                 let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
-                let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
+                let hash = layer_hash_of ctx (pkg :: ordered_deps) in
                 let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
                 let layer_json = Path.(layer_dir / "layer.json") in
                 let layer_exists = Sys.file_exists layer_dir in
@@ -306,9 +294,6 @@ let build config packages =
         [ Solution solution ]
       )
       else
-      (* let solution = reduce dependencies solution in
-      let positions = List.mapi (fun i x -> (x, i)) ordered_installation |> List.fold_left (fun acc (x, i) -> OpamPackage.Map.add x i acc) OpamPackage.Map.empty in *)
-      (* let _ = Dot_solution.save ((OpamPackage.to_string package) ^ ".reduced.dot") solution in *)
       let results, _ =
         List.fold_left
           (fun (res, m) pkg ->
@@ -328,13 +313,13 @@ let build config packages =
                   | _ -> None)
                 ordered_deps
             in
-            let hash = Container.layer_hash ~t (pkg :: ordered_deps) in
+            let hash = layer_hash_of ctx (pkg :: ordered_deps) in
             match res with
             | [] ->
-                let r = build_layer t pkg hash ordered_deps ordered_hashes in
+                let r = build_layer ctx t pkg hash ordered_deps ordered_hashes in
                 ([ r ], OpamPackage.Map.add pkg r m)
             | Success _ :: _ ->
-                let r = build_layer t pkg hash ordered_deps ordered_hashes in
+                let r = build_layer ctx t pkg hash ordered_deps ordered_hashes in
                 (r :: res, OpamPackage.Map.add pkg r m)
             | _ -> (Dependency_failed :: res, OpamPackage.Map.add pkg Dependency_failed m))
           ([], OpamPackage.Map.empty) ordered_installation
@@ -557,7 +542,8 @@ let run_build (config : Config.t) =
     OpamConsole.error "No .opam files found in %s. day10 build/exec needs at least one .opam file to determine dependencies." dir;
     exit 1
   end;
-  let results = build dep_config local_pkgs in
+  let repo = make_repo dep_config in
+  let results = build ~repo dep_config local_pkgs in
   let exit_code =
     match results with
     | Dependency_failed :: _ ->
@@ -589,14 +575,16 @@ let run_build (config : Config.t) =
   in
   exit exit_code
 
-let run_ci (config : Config.t) =
+let run_ci ?repo (config : Config.t) =
+  let repo = match repo with Some r -> r | None -> make_repo config in
   let package = OpamPackage.of_string (config.package ^ ".dev") in
-  let results = build config [ package ] in
+  let results = build ~repo config [ package ] in
   output config results
 
-let run_health_check (config : Config.t) =
+let run_health_check ?repo (config : Config.t) =
+  let repo = match repo with Some r -> r | None -> make_repo config in
   let package = OpamPackage.of_string config.package in
-  let results = build config [ package ] in
+  let results = build ~repo config [ package ] in
   output config results
 
 let run_health_check_multi (config : Config.t) package_arg =
@@ -613,21 +601,21 @@ let run_health_check_multi (config : Config.t) package_arg =
       let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.md in
       let () = Option.iter (fun path -> Os.mkdir ~parents:true path) config.dot in
       let () = Option.iter (fun path -> Os.mkdir ~parents:true Path.(path / "blobs" / "sha256")) config.oci in
+      (* One repo shared across all packages. For [--fork np], warm the
+         parsed memo in the parent so children inherit it via CoW. *)
+      let repo = make_repo config in
       let run_with_package pkg_name =
         let json = Option.map (fun path -> Path.(path / pkg_name ^ ".json")) config.json in
         let md = Option.map (fun path -> Path.(path / pkg_name ^ ".md")) config.md in
         let dot = Option.map (fun path -> Path.(path / pkg_name ^ ".dot")) config.dot in
         let config = { config with package = pkg_name; json; md; dot } in
-        run_health_check config
+        run_health_check ~repo config
       in
       match config.fork with
       | Some 1
       | None -> List.iter run_with_package packages
       | Some np ->
-          let packages_dirs =
-            List.map (fun r -> Path.(r / "packages")) config.opam_repositories
-          in
-          Dir_context.prefetch ~packages_dirs ();
+          Repo.warm repo;
           Os.fork ~np run_with_package packages
 
 let cache_dir_term =

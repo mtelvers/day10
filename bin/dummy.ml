@@ -4,16 +4,6 @@ let init ~(config : Config.t) = { config }
 let deinit ~t:_ = ()
 let config ~t = t.config
 
-let layer_hash ~t deps =
-  let hashes =
-    List.map
-      (fun opam ->
-        opam |> Util.opam_file t.config.opam_repositories |> Option.get |> OpamFile.OPAM.effective_part |> OpamFile.OPAM.write_to_string
-        |> OpamHash.compute_from_string |> OpamHash.to_string)
-      deps
-  in
-  String.concat " " hashes |> Digest.string |> Digest.to_hex
-
 let run ~t:_ ~temp_dir:_ _opam_repository _build_log = 0
 
 let build ~t ~temp_dir _build_log _pkg ordered_hashes =

@@ -91,9 +91,11 @@ let opam_repo_sha opam_repositories =
   List.filter_map git_sha opam_repositories |> String.concat ""
   |> function "" -> None | s -> Some s
 
-let opam_file opam_repositories pkg =
-  List.find_map
-    (fun opam_repository ->
-      let opam = Path.(opam_repository / "packages" / OpamPackage.name_to_string pkg / OpamPackage.to_string pkg / "opam") in
-      if Sys.file_exists opam then Some (OpamFilename.raw opam |> OpamFile.make |> OpamFile.OPAM.read) else None)
-    opam_repositories
+let layer_hash opams =
+  let hashes =
+    List.map
+      (fun opam ->
+        opam |> OpamFile.OPAM.effective_part |> OpamFile.OPAM.write_to_string |> OpamHash.compute_from_string |> OpamHash.to_string)
+      opams
+  in
+  String.concat " " hashes |> Digest.string |> Digest.to_hex

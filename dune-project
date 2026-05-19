@@ -25,7 +25,8 @@
   ppx_deriving_yojson
   opam-0install
   cmdliner
-  dockerfile)
+  dockerfile
+  tar)
  (tags
   ("add topics" "to describe" your project)))
 

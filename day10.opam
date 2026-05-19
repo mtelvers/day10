@@ -16,6 +16,7 @@ depends: [
   "opam-0install"
   "cmdliner"
   "dockerfile"
+  "tar"
   "odoc" {with-doc}
 ]
 build: [

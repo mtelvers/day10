@@ -38,16 +38,6 @@ let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
 
-let layer_hash ~t deps =
-  let hashes =
-    List.map
-      (fun opam ->
-        opam |> Util.opam_file t.config.opam_repositories |> Option.get |> OpamFile.OPAM.effective_part |> OpamFile.OPAM.write_to_string
-        |> OpamHash.compute_from_string |> OpamHash.to_string)
-      deps
-  in
-  String.concat " " hashes |> Digest.string |> Digest.to_hex
-
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
