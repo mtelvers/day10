@@ -32,25 +32,33 @@ let run buf ~pos t =
   let len = Bytes.length buf in
   let rec run : type a. (a, _ as 'err, t) Tar.t -> (a, 'err) result = function
     | Tar.Read n ->
-        let avail = len - !pos in
-        if avail = 0 then Error `Unexpected_end_of_file
+        if Int64.of_int Sys.max_string_length < n then Error (`Msg "Tar_bytes: read length exceeds maximum string length")
         else
-          let take = if n < avail then n else avail in
-          let s = Bytes.sub_string buf !pos take in
-          pos := !pos + take;
-          Ok s
+          let n = Int64.to_int n in
+          let avail = len - !pos in
+          if avail = 0 then Error `Unexpected_end_of_file
+          else
+            let take = if n < avail then n else avail in
+            let s = Bytes.sub_string buf !pos take in
+            pos := !pos + take;
+            Ok s
     | Tar.Really_read n ->
-        if len - !pos < n then Error `Unexpected_end_of_file
+        if Int64.of_int Sys.max_string_length < n then Error (`Msg "Tar_bytes: read length exceeds maximum string length")
         else
-          let s = Bytes.sub_string buf !pos n in
-          pos := !pos + n;
-          Ok s
+          let n = Int64.to_int n in
+          if len - !pos < n then Error `Unexpected_end_of_file
+          else
+            let s = Bytes.sub_string buf !pos n in
+            pos := !pos + n;
+            Ok s
     | Tar.Seek n ->
-        let p = !pos + n in
-        if p < 0 || p > len then Error `Unexpected_end_of_file
-        else (
-          pos := p;
-          Ok ())
+        if Int64.of_int max_int < n then Error (`Msg "Tar_bytes: seek offset exceeds maximum integer")
+        else
+          let p = !pos + Int64.to_int n in
+          if p < 0 || p > len then Error `Unexpected_end_of_file
+          else (
+            pos := p;
+            Ok ())
     | Tar.Write _ -> Error (`Msg "Tar_bytes: archive is read-only")
     | Tar.Return v -> v
     | Tar.High v -> High.prj v

@@ -68,7 +68,7 @@ let index_buffer ~buf ~index ~versions_acc =
         | None -> ())
     | _ -> ());
     let open Tar.Syntax in
-    let* () = Tar.seek size in
+    let* () = Tar.seek hdr.Tar.Header.file_size in
     Tar.return (Ok ())
   in
   match Tar_bytes.run buf ~pos (Tar.fold f ()) with
