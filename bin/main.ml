@@ -382,25 +382,17 @@ let run_prune (config : Config.t) mode =
 
 let run_list (config : Config.t) all_versions =
   let () = Random.self_init () in
+  let repo = make_repo config in
   let all_packages =
-    List.fold_left
-      (fun set opam_repository ->
-        let packages = Path.(opam_repository / "packages") in
-        Array.fold_left
-          (fun acc name ->
-            Filename.concat packages name |> Sys.readdir
-            |> Array.fold_left
-                 (fun acc package ->
-                   if package.[0] = '.' then acc
-                   else
-                     let pkg = OpamPackage.of_string package in
-                     let opam = Path.(packages / name / package / "opam") |> OpamFilename.raw |> OpamFile.make |> OpamFile.OPAM.read in
-                     match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
-                     | true -> OpamPackage.Set.add pkg acc
-                     | false -> acc)
-                 acc)
-          set (Sys.readdir packages))
-      OpamPackage.Set.empty config.opam_repositories
+    Repo.fold
+      (fun pkg set ->
+        match Repo.opam repo pkg with
+        | None -> set
+        | Some opam -> (
+            match OpamFilter.eval_to_bool ~default:false (opam_env ~config pkg) (OpamFile.OPAM.available opam) with
+            | true -> OpamPackage.Set.add pkg set
+            | false -> set))
+      repo OpamPackage.Set.empty
   in
   let packages_to_show =
     if all_versions then all_packages

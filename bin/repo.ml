@@ -25,8 +25,15 @@ let resolve_git_dir path =
   if Sys.file_exists candidate then candidate else path
 
 let resolve_commit ~git_dir rev =
-  Os.run (Printf.sprintf "git --git-dir=%s rev-parse --verify %s^{commit}" (Filename.quote git_dir) (Filename.quote rev))
-  |> String.trim
+  let commit =
+    Os.run (Printf.sprintf "git --git-dir=%s rev-parse --verify --quiet %s^{commit}" (Filename.quote git_dir) (Filename.quote rev))
+    |> String.trim
+  in
+  if commit = "" then begin
+    OpamConsole.error "cannot resolve revision '%s' in opam-repository %s" rev git_dir;
+    exit 1
+  end;
+  commit
 
 let git_archive ~git_dir ~commit =
   Os.run (Printf.sprintf "git --git-dir=%s archive --format=tar %s packages" (Filename.quote git_dir) (Filename.quote commit))
@@ -145,6 +152,7 @@ let create sources =
 let source_ids t = t.source_ids
 let mem t pkg = Hashtbl.mem t.index pkg
 let versions t name = try Hashtbl.find t.versions name with Not_found -> []
+let fold f t acc = Hashtbl.fold (fun pkg _ acc -> f pkg acc) t.index acc
 
 let opam_bytes t pkg =
   match Hashtbl.find_opt t.index pkg with
