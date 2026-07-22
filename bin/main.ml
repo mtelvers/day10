@@ -943,7 +943,7 @@ let find_project_dir_from_argv () =
   | _ -> None
 
 let () =
-  load_env_file (Filename.concat (Sys.getenv "HOME") ".day10");
+  Option.iter (fun home -> load_env_file (Filename.concat home ".day10")) (Sys.getenv_opt "HOME");
   load_env_file ".day10";
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
