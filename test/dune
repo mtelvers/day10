@@ -1,0 +1,21 @@
+; Golden tests for the generated Dockerfiles.  Dockerfile_gen is copied from
+; bin/ rather than shared through a library so that bin/ stays a single
+; executable; the copy keeps the tests honest because it is the same source.
+
+(executable
+ (name dump)
+ (modules dump dockerfile_gen)
+ (libraries dockerfile))
+
+(copy_files#
+ (files ../bin/dockerfile_gen.ml))
+
+(rule
+ (with-stdout-to
+  debian-13.Dockerfile.actual
+  (run ./dump.exe debian 13)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff debian-13.Dockerfile debian-13.Dockerfile.actual)))
