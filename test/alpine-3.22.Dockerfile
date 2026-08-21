@@ -16,8 +16,7 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build
 
 FROM --platform=linux/amd64 alpine:3.22
-RUN apk update && apk upgrade
-RUN apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap
+RUN apk update && apk upgrade && apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=opam-build-builder [ "/usr/local/bin/opam-build", "/usr/local/bin/opam-build" ]
 RUN addgroup -g 1000 opam

@@ -33,8 +33,9 @@ let opam_build ~(dist : Dist.t) ~arch base_image =
 let dockerfile ~(dist : Dist.t) ~arch ~base_image ~uid ~gid =
   (opam ~dist ~arch base_image) @@ (opam_build ~dist ~arch base_image)
   @@ from ~platform:(platform arch) base_image
-  @@ run "%s && %s" dist.update dist.upgrade
-  @@ run "%s" (dist.install dist.deps_runtime)
+  (* One RUN, so the package index cannot be served from a stale cached layer
+     while the mirror has moved on -- that combination 404s on every package. *)
+  @@ run "%s && %s && %s" dist.update dist.upgrade (dist.install dist.deps_runtime)
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ copy ~from:"opam-build-builder" ~src:[ "/usr/local/bin/opam-build" ] ~dst:"/usr/local/bin/opam-build" ()
   @@ dist.noninteractive
