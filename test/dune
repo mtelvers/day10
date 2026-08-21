@@ -6,7 +6,7 @@
 (executable
  (name dump)
  (modules dump dockerfile_gen dist)
- (libraries dockerfile))
+ (libraries dockerfile dockerfile-opam ocaml-version))
 
 (copy_files#
  (files ../bin/dockerfile_gen.ml))
@@ -17,9 +17,49 @@
 (rule
  (with-stdout-to
   debian-13.Dockerfile.actual
-  (run ./dump.exe debian 13)))
+  (run ./dump.exe debian 13 debian)))
+
+(rule
+ (with-stdout-to
+  fedora-42.Dockerfile.actual
+  (run ./dump.exe fedora 42 fedora)))
+
+(rule
+ (with-stdout-to
+  alpine-3.22.Dockerfile.actual
+  (run ./dump.exe alpine 3.22 alpine)))
+
+(rule
+ (with-stdout-to
+  opensuse-15.6.Dockerfile.actual
+  (run ./dump.exe opensuse 15.6 suse)))
+
+(rule
+ (with-stdout-to
+  archlinux.Dockerfile.actual
+  (run ./dump.exe archlinux latest arch)))
 
 (rule
  (alias runtest)
  (action
   (diff debian-13.Dockerfile debian-13.Dockerfile.actual)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff fedora-42.Dockerfile fedora-42.Dockerfile.actual)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff alpine-3.22.Dockerfile alpine-3.22.Dockerfile.actual)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff opensuse-15.6.Dockerfile opensuse-15.6.Dockerfile.actual)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff archlinux.Dockerfile archlinux.Dockerfile.actual)))

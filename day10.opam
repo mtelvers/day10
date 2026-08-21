@@ -16,6 +16,8 @@ depends: [
   "opam-0install"
   "cmdliner"
   "dockerfile"
+  "dockerfile-opam"
+  "ocaml-version"
   "tar"
   "odoc" {with-doc}
 ]

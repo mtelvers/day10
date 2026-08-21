@@ -153,10 +153,11 @@ let config ~t = t.config
 
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
-  match config.os_family with
-  | "debian" -> Docker.debian ~config ~temp_dir opam_repository build_log t.uid t.gid
-  | os_family ->
-      failwith (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian" os_family)
+  match Dist.of_config ~os_family:config.os_family ~distribution:config.os_distribution ~version:config.os_version with
+  | Some dist -> Docker.build ~config ~dist ~temp_dir opam_repository build_log t.uid t.gid
+  | None ->
+      failwith
+        (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in

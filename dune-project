@@ -26,6 +26,8 @@
   opam-0install
   cmdliner
   dockerfile
+  dockerfile-opam
+  ocaml-version
   tar)
  (tags
   ("add topics" "to describe" your project)))
