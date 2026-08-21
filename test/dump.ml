@@ -5,4 +5,5 @@
 let () =
   let distribution = Sys.argv.(1) in
   let version = Sys.argv.(2) in
-  print_string (Dockerfile.string_of_t (Dockerfile_gen.debian ~arch:"x86_64" ~distribution ~version ~uid:1000 ~gid:1000))
+  let base_image = Printf.sprintf "%s:%s" distribution version in
+  print_string (Dockerfile.string_of_t (Dockerfile_gen.dockerfile ~dist:Dist.apt ~arch:"x86_64" ~base_image ~uid:1000 ~gid:1000))

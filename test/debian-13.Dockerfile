@@ -17,7 +17,7 @@ RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build
 
 FROM --platform=linux/amd64 debian:13
 RUN apt update && apt upgrade -y
-RUN apt install build-essential unzip bubblewrap git sudo curl rsync -y
+RUN apt install -y build-essential unzip bubblewrap git sudo curl rsync
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=opam-build-builder [ "/usr/local/bin/opam-build", "/usr/local/bin/opam-build" ]
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections

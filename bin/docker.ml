@@ -1,5 +1,6 @@
 let debian ~(config : Config.t) ~temp_dir _opam_repository build_log uid gid =
-  let dockerfile = Dockerfile_gen.debian ~arch:config.arch ~distribution:config.os_distribution ~version:config.os_version ~uid ~gid in
+  let base_image = Printf.sprintf "%s:%s" config.os_distribution config.os_version in
+  let dockerfile = Dockerfile_gen.dockerfile ~dist:Dist.apt ~arch:config.arch ~base_image ~uid ~gid in
   let dockerfile_path = Path.(temp_dir / "Dockerfile") in
   let () = Os.write_to_file dockerfile_path (Dockerfile.string_of_t dockerfile) in
   let tag = Printf.sprintf "day10-%s:%s" config.os_distribution config.os_version in

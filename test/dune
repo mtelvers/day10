@@ -1,14 +1,18 @@
-; Golden tests for the generated Dockerfiles.  Dockerfile_gen is copied from
-; bin/ rather than shared through a library so that bin/ stays a single
-; executable; the copy keeps the tests honest because it is the same source.
+; Golden tests for the generated Dockerfiles.  Dist and Dockerfile_gen are
+; copied from bin/ rather than shared through a library so that bin/ stays a
+; single executable; the copy keeps the tests honest because it is the same
+; source.
 
 (executable
  (name dump)
- (modules dump dockerfile_gen)
+ (modules dump dockerfile_gen dist)
  (libraries dockerfile))
 
 (copy_files#
  (files ../bin/dockerfile_gen.ml))
+
+(copy_files#
+ (files ../bin/dist.ml))
 
 (rule
  (with-stdout-to
