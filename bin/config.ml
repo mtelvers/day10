@@ -20,6 +20,10 @@ type t = {
   dry_run : bool;
   fork : int option;
   build_command : string option;
+  (* The packages built from the workspace by dune, so never installed into the
+     switch as well.  Defaults to every .opam file in the directory; a caller
+     that has already worked out which packages it wants, as OCaml-CI has, names
+     them with --only-packages instead. *)
   local_packages : string list;
 }
 

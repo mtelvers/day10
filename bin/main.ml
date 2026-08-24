@@ -698,15 +698,36 @@ let os_version_term =
   let default = OpamSysPoll.os_version OpamVariable.Map.empty |> Option.value ~default:"13" in
   Arg.(value & opt string default & info [ "os-version" ] ~env ~docv:"OS_VERSION" ~doc)
 
+let only_packages_term =
+  let doc = "Treat only these packages as local, rather than every .opam file found in DIRECTORY (can be specified multiple times)" in
+  let env = Cmd.Env.info "DAY10_ONLY_PACKAGES" in
+  let arg = Arg.(value & opt_all string [] & info [ "only-packages" ] ~env ~docv:"PACKAGE" ~doc) in
+  Term.(const (List.concat_map (String.split_on_char ',')) $ arg)
+
 let fork_term =
   let doc = "Process packages in parallel using fork with N parallel jobs" in
   let env = Cmd.Env.info "DAY10_FORK" in
   Arg.(value & opt (some int) None & info [ "fork" ] ~env ~docv:"N" ~doc)
 
-let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~build_command =
+let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
+    ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
   let directory = Unix.realpath directory in
-  let packages = find_opam_files directory in
+  let found = find_opam_files directory |> List.map fst in
+  (* An empty --only-packages means every .opam file in the directory.  Naming
+     them instead is for a caller that has already decided which are buildable,
+     so the names have to be a subset: anything else is a typo, and left to the
+     solver it would surface as an unrelated-looking failure to resolve. *)
+  let local_packages =
+    match only_packages with
+    | [] -> found
+    | packages -> (
+        match List.filter (fun p -> not (List.mem p found)) packages with
+        | [] -> packages
+        | unknown ->
+            OpamConsole.error "--only-packages named packages with no .opam file in %s: %s" directory (String.concat ", " unknown);
+            exit 1)
+  in
   {
     Config.dir;
     ocaml_version;
@@ -729,7 +750,7 @@ let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_tes
     dry_run = false;
     fork = None;
     build_command;
-    local_packages = List.map fst packages;
+    local_packages;
   }
 
 let exec_cmd =
@@ -743,11 +764,11 @@ let exec_cmd =
   in
   let exec_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version ->
+      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
+               ~only_packages ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term)
   in
   let exec_info = Cmd.info "exec" ~doc:"Run a command in a container with the project's dependencies" in
   Cmd.v exec_info exec_term
@@ -763,12 +784,12 @@ let build_cmd =
   in
   let build_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version ->
+      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages ->
           let cmd = String.concat " " ([ "opam"; "exec"; "--"; "dune"; "build" ] @ List.map Filename.quote dune_extra) in
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~build_command:(Some cmd)))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
+               ~only_packages ~build_command:(Some cmd)))
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term)
   in
   let build_info = Cmd.info "build" ~doc:"Build a project using cached dependencies (alias for: exec . -- dune build)" in
   Cmd.v build_info build_term
