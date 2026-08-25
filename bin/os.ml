@@ -2,13 +2,67 @@ let read_from_file filename = In_channel.with_open_text filename @@ fun ic -> In
 let write_to_file filename str = Out_channel.with_open_text filename @@ fun oc -> Out_channel.output_string oc str
 let append_to_file filename str = Out_channel.with_open_gen [ Open_text; Open_append; Open_creat ] 0o644 filename @@ fun oc -> Out_channel.output_string oc str
 
-let sudo ?stdout ?stderr cmd =
-  (*  let () = OpamConsole.note "%s" (String.concat " " cmd) in *)
-  Sys.command (Filename.quote_command ?stdout ?stderr "sudo" cmd)
+let status_code = function
+  | Unix.WEXITED code -> code
+  (* Sys.command got these back from the shell as 128 + n.  OCaml numbers
+     signals itself, negatively, so there is no n worth reporting: say only that
+     the child did not exit of its own accord. *)
+  | Unix.WSIGNALED _
+  | Unix.WSTOPPED _ ->
+      128
+
+let rec wait pid =
+  match Unix.waitpid [] pid with
+  | _, status -> status_code status
+  | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait pid
+  | exception e ->
+      (* A signal handler raised while we were waiting.  Take the child down on
+         the way out rather than orphan a container build nobody is waiting for. *)
+      (try Unix.kill pid Sys.sigterm with
+       | Unix.Unix_error _ -> ());
+      (try ignore (Unix.waitpid [] pid) with
+       | Unix.Unix_error _ -> ());
+      raise e
+
+(* Spawn the child directly rather than through Sys.command, which is system():
+   that ignores SIGINT in the parent for as long as the child runs, so day10
+   could not be interrupted while a container was building.  Waiting here means
+   the signal arrives promptly instead.  Passing an argv also removes the trip
+   through the shell, so nothing depends on quoting any more. *)
+let spawn ?stdout ?stderr prog args =
+  let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
+  let out_fd = Option.map redirect stdout in
+  (* One descriptor when both streams go to the same file.  The shell
+     redirection opened it twice, and the two offsets then overwrote each
+     other's output. *)
+  let err_fd =
+    match (stderr, stdout) with
+    | None, _ -> None
+    | Some err, Some out when String.equal err out -> out_fd
+    | Some err, _ -> Some (redirect err)
+  in
+  let opened =
+    match (out_fd, err_fd) with
+    | Some out, Some err when out = err -> [ out ]
+    | out, err -> List.filter_map Fun.id [ out; err ]
+  in
+  Fun.protect
+    ~finally:(fun () ->
+      List.iter
+        (fun fd ->
+          try Unix.close fd with
+          | Unix.Unix_error _ -> ())
+        opened)
+    (fun () ->
+      let stdout = Option.value ~default:Unix.stdout out_fd in
+      let stderr = Option.value ~default:Unix.stderr err_fd in
+      wait (Unix.create_process prog (Array.of_list (prog :: args)) Unix.stdin stdout stderr))
+
+let sudo ?stdout ?stderr cmd = spawn ?stdout ?stderr "sudo" cmd
 
 let exec ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  Sys.command (Filename.quote_command ?stdout ?stderr (List.hd cmd) (List.tl cmd))
+  spawn ?stdout ?stderr (List.hd cmd) (List.tl cmd)
 
 let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
   let rec loop n =
