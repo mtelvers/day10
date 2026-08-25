@@ -211,6 +211,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let ud = "upperdir=" ^ upperdir in
   let wd = "workdir=" ^ workdir in
   let _ = Os.sudo [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
+  Cleanup.with_resource (Cleanup.Mount rootfsdir) @@ fun () ->
   let mounts =
     [
       { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
@@ -224,7 +225,11 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
-  let result = Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ] in
+  let result =
+    Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
+    Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+  in
+  (* Unmount before the rm below, or rm would delete through the overlay. *)
   let _ = Os.sudo [ "umount"; rootfsdir ] in
   let _ =
     Os.sudo

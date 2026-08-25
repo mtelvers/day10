@@ -29,6 +29,7 @@ let init t =
   if not (Sys.file_exists root) then
     Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+    Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
     let opam_repository = Util.create_opam_repository temp_dir in
     let build_log = Path.(temp_dir / "build.log") in
     let _ = Container.run ~t ~temp_dir opam_repository build_log in
@@ -44,8 +45,7 @@ let opam_env ~(config : Config.t) pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
   else *)
   let is_target_pkg =
-    String.equal (OpamPackage.to_string pkg) config.package
-    || List.mem (OpamPackage.name_to_string pkg) config.local_packages
+    String.equal (OpamPackage.to_string pkg) config.package || Config.is_local_package ~config pkg
   in
   match OpamVariable.Full.to_string v with
   | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
@@ -246,6 +246,7 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
   let write_layer target_dir =
     let () = OpamConsole.note "Building %s" (OpamPackage.to_string pkg) in
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+    Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
     let opam_repo = Util.create_opam_repository temp_dir in
     let () = Repo.materialise (Repo_context.repo ctx) (pkg :: ordered_deps) ~dest:opam_repo in
     let build_log = Path.(temp_dir / "build.log") in
@@ -555,13 +556,16 @@ let run_build (config : Config.t) =
         let build_config = { config with build_command = Some build_command } in
         let t = Container.init ~config:build_config in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-        let _opam_repo = Util.create_opam_repository temp_dir in
-        let build_log = Path.(temp_dir / "build.log") in
-        let dummy_pkg = List.hd local_pkgs in
-        let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
-        if r <> 0 then OpamConsole.error "%s" (Os.read_from_file build_log)
-        else OpamConsole.msg "%s" (Os.read_from_file build_log);
-        let _ = Os.sudo [ "rm"; "-rf"; temp_dir ] in
+        let r =
+          Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
+          let _opam_repo = Util.create_opam_repository temp_dir in
+          let build_log = Path.(temp_dir / "build.log") in
+          let dummy_pkg = List.hd local_pkgs in
+          let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
+          if r <> 0 then OpamConsole.error "%s" (Os.read_from_file build_log)
+          else OpamConsole.msg "%s" (Os.read_from_file build_log);
+          r
+        in
         Container.deinit ~t;
         r
   in
@@ -844,7 +848,7 @@ let health_check_cmd =
     Term.(
       const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = [] } package_arg)
+          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = []; } package_arg)
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
@@ -880,7 +884,7 @@ let prune_cmd =
                 exit 1
           in
           run_prune
-            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = [] }
+            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; }
             mode)
       $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg $ percent_arg)
   in
@@ -893,7 +897,7 @@ let list_cmd =
       const (fun ocaml_version opam_repositories all_versions json arch os os_distribution os_family os_version ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = [] }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ json_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in
@@ -959,6 +963,7 @@ let () =
   Option.iter (fun home -> load_env_file (Filename.concat home ".day10")) (Sys.getenv_opt "HOME");
   load_env_file ".day10";
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
+  Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
   let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; prune_cmd ] in
-  exit (Cmd.eval cmd)
+  exit (Cleanup.main (fun () -> Cmd.eval ~catch:false cmd))
