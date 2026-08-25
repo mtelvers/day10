@@ -34,7 +34,7 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~networ
           ] );
     ]
 
-let init ~(config : Config.t) = { config; network = Os.run "hcn-namespace create" |> String.trim; username = "ContainerAdministrator" }
+let init ~(config : Config.t) = { config; network = Os.capture "hcn-namespace" [ "create" ] |> String.trim; username = "ContainerAdministrator" }
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
 

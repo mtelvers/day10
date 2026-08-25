@@ -26,7 +26,9 @@ let resolve_git_dir path =
 
 let resolve_commit ~git_dir rev =
   let commit =
-    Os.run (Printf.sprintf "git --git-dir=%s rev-parse --verify --quiet %s^{commit}" (Filename.quote git_dir) (Filename.quote rev))
+    (* --verify --quiet exits non-zero when the revision does not exist, which
+       is the question being asked, so empty output is the answer. *)
+    Os.capture ~check:false "git" [ "--git-dir=" ^ git_dir; "rev-parse"; "--verify"; "--quiet"; rev ^ "^{commit}" ]
     |> String.trim
   in
   if commit = "" then begin
@@ -36,8 +38,7 @@ let resolve_commit ~git_dir rev =
   commit
 
 let git_archive ~git_dir ~commit =
-  Os.run (Printf.sprintf "git --git-dir=%s archive --format=tar %s packages" (Filename.quote git_dir) (Filename.quote commit))
-  |> Bytes.unsafe_of_string
+  Os.capture "git" [ "--git-dir=" ^ git_dir; "archive"; "--format=tar"; commit; "packages" ] |> Bytes.unsafe_of_string
 
 let classify_tar_path path =
   match String.split_on_char '/' path with

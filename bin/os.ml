@@ -24,45 +24,67 @@ let rec wait pid =
        | Unix.Unix_error _ -> ());
       raise e
 
-(* Spawn the child directly rather than through Sys.command, which is system():
-   that ignores SIGINT in the parent for as long as the child runs, so day10
-   could not be interrupted while a container was building.  Waiting here means
-   the signal arrives promptly instead.  Passing an argv also removes the trip
-   through the shell, so nothing depends on quoting any more. *)
-let spawn ?stdout ?stderr prog args =
+(* The one way day10 runs a program.  Not Sys.command, which is system(): that
+   ignores SIGINT in the parent for as long as the child runs, so day10 could
+   not be interrupted while a container was building.  Waiting here means the
+   signal arrives promptly instead, and passing an argv removes the trip through
+   the shell, so nothing depends on quoting any more.
+
+   [stdout] and [stderr] name files to redirect to; [capture] hands stdout back
+   to the caller instead, and takes precedence over [stdout]. *)
+let spawn ?stdout ?stderr ?(capture = false) prog args =
+  let close fd =
+    try Unix.close fd with
+    | Unix.Unix_error _ -> ()
+  in
   let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
-  let out_fd = Option.map redirect stdout in
+  let captured = if capture then Some (Unix.pipe ()) else None in
+  let out_fd =
+    match (captured, stdout) with
+    | Some (_, write), _ -> Some write
+    | None, Some path -> Some (redirect path)
+    | None, None -> None
+  in
   (* One descriptor when both streams go to the same file.  The shell
      redirection opened it twice, and the two offsets then overwrote each
      other's output. *)
   let err_fd =
     match (stderr, stdout) with
     | None, _ -> None
-    | Some err, Some out when String.equal err out -> out_fd
+    | Some err, Some out when Option.is_none captured && String.equal err out -> out_fd
     | Some err, _ -> Some (redirect err)
   in
-  let opened =
-    match (out_fd, err_fd) with
-    | Some out, Some err when out = err -> [ out ]
-    | out, err -> List.filter_map Fun.id [ out; err ]
+  let pid =
+    Unix.create_process prog
+      (Array.of_list (prog :: args))
+      Unix.stdin
+      (Option.value ~default:Unix.stdout out_fd)
+      (Option.value ~default:Unix.stderr err_fd)
   in
-  Fun.protect
-    ~finally:(fun () ->
-      List.iter
-        (fun fd ->
-          try Unix.close fd with
-          | Unix.Unix_error _ -> ())
-        opened)
-    (fun () ->
-      let stdout = Option.value ~default:Unix.stdout out_fd in
-      let stderr = Option.value ~default:Unix.stderr err_fd in
-      wait (Unix.create_process prog (Array.of_list (prog :: args)) Unix.stdin stdout stderr))
+  (* Let go of whatever the child now owns -- the write end especially, or the
+     read below would never see end of file. *)
+  let () = List.iter close (List.filter_map Fun.id [ out_fd; (if err_fd = out_fd then None else err_fd) ]) in
+  let output =
+    match captured with
+    | None -> ""
+    | Some (read, _) ->
+        let inp = Unix.in_channel_of_descr read in
+        let () = set_binary_mode_in inp true in
+        (* Read to end of file before waiting: git archive produces far more
+           than a pipe will hold, and waiting first would deadlock. *)
+        Fun.protect
+          ~finally:(fun () ->
+            try close_in inp with
+            | Sys_error _ -> ())
+          (fun () -> In_channel.input_all inp)
+  in
+  (wait pid, output)
 
-let sudo ?stdout ?stderr cmd = spawn ?stdout ?stderr "sudo" cmd
+let sudo ?stdout ?stderr cmd = fst (spawn ?stdout ?stderr "sudo" cmd)
 
 let exec ?stdout ?stderr cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  spawn ?stdout ?stderr (List.hd cmd) (List.tl cmd)
+  fst (spawn ?stdout ?stderr (List.hd cmd) (List.tl cmd))
 
 let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
   let rec loop n =
@@ -87,11 +109,33 @@ let retry_rename ?(tries = 10) src dst =
   in
   loop tries
 
+(* Still goes through a shell, because its caller pipes docker export into tar,
+   which spawn deliberately cannot express.  Reap with close_process_in rather
+   than closing the channel: closing left the child unwaited for, and discarded
+   its status along with it, so a failed export produced an empty rootfs and no
+   complaint. *)
+(* [check:false] is for a command whose failure is an answer rather than a
+   fault, such as asking git whether a revision exists. *)
+let capture ?(check = true) prog args =
+  match spawn ~capture:true prog args with
+  | 0, output -> output
+  | _, output when not check -> output
+  | code, _ -> failwith (Printf.sprintf "%s exited with status %i" prog code)
+
+(* The one exception to spawn, for the two callers that genuinely need a shell
+   to pipe one command into another.  Reap with close_process_in rather than
+   closing the channel: closing left the child unwaited for and discarded its
+   status along with it, so a failed export produced an empty rootfs and no
+   complaint. *)
 let run cmd =
   let inp = Unix.open_process_in cmd in
-  let r = In_channel.input_all inp in
-  In_channel.close inp;
-  r
+  let output = In_channel.input_all inp in
+  match Unix.close_process_in inp with
+  | Unix.WEXITED 0 -> output
+  | Unix.WEXITED code -> failwith (Printf.sprintf "%s exited with status %i" cmd code)
+  | Unix.WSIGNALED _
+  | Unix.WSTOPPED _ ->
+      failwith (Printf.sprintf "%s did not exit of its own accord" cmd)
 
 let nproc () = run "nproc" |> String.trim |> int_of_string
 

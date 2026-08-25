@@ -49,7 +49,7 @@ let create_layer ~oci_dir ~layer_dir =
         in
         let _ = Os.sudo ~stdout:temp_tar [ "tar"; "-C"; temp_fs; "--numeric-owner"; "-c"; "." ] in
         let diff_id = sha256_file temp_tar in
-        let _ = Sys.command (Filename.quote_command "gzip" [ "-n"; temp_tar ]) in
+        let _ = Os.exec [ "gzip"; "-n"; temp_tar ] in
         let temp_gz = temp_tar ^ ".gz" in
         let digest = sha256_file temp_gz in
         let size = (Unix.stat temp_gz).st_size in
