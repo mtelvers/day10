@@ -11,18 +11,17 @@ let status_code = function
   | Unix.WSTOPPED _ ->
       128
 
+(* A signal handler raising while we wait propagates untouched, deliberately.
+   Taking the child down is the business of the finalisers the exception is on
+   its way to, and they are the only ones who can: signalling sudo does not
+   reach the container it started, so trying to reap the child here would wait
+   for a runc delete -f that cannot run until we return.  That deadlocked day10
+   with its own signals already masked.  The child is left unreaped, which is
+   what abandoning it means; day10 is on its way out and init will collect it. *)
 let rec wait pid =
   match Unix.waitpid [] pid with
   | _, status -> status_code status
   | exception Unix.Unix_error (Unix.EINTR, _, _) -> wait pid
-  | exception e ->
-      (* A signal handler raised while we were waiting.  Take the child down on
-         the way out rather than orphan a container build nobody is waiting for. *)
-      (try Unix.kill pid Sys.sigterm with
-       | Unix.Unix_error _ -> ());
-      (try ignore (Unix.waitpid [] pid) with
-       | Unix.Unix_error _ -> ());
-      raise e
 
 (* The one way day10 runs a program.  Not Sys.command, which is system(): that
    ignores SIGINT in the parent for as long as the child runs, so day10 could
