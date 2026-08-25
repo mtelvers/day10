@@ -373,13 +373,19 @@ let run_prune (config : Config.t) mode =
     | [] -> OpamConsole.note "No cache entries to prune (%s)" summary
     | _ ->
         OpamConsole.note "Pruning %d cache entries (%s)" (List.length to_delete) summary;
-        let oc = Unix.open_process_out "sudo xargs rm -rf" in
-        List.iter (fun p -> output_string oc p; output_char oc '\n') to_delete;
-        match Unix.close_process_out oc with
-        | Unix.WEXITED 0 -> ()
-        | Unix.WEXITED n -> OpamConsole.error "sudo xargs rm -rf exited with status %d" n
-        | Unix.WSIGNALED n -> OpamConsole.error "sudo xargs rm -rf killed by signal %d" n
-        | Unix.WSTOPPED n -> OpamConsole.error "sudo xargs rm -rf stopped by signal %d" n
+        (* A batch at a time rather than piped into xargs, which was only ever
+           keeping each command line inside the kernel's limit. *)
+        let rec remove = function
+          | [] -> ()
+          | paths ->
+              let batch = List.filteri (fun i _ -> i < 500) paths in
+              let rest = List.filteri (fun i _ -> i >= 500) paths in
+              (match Os.sudo ("rm" :: "-rf" :: batch) with
+              | 0 -> ()
+              | code -> OpamConsole.error "rm -rf exited with status %d" code);
+              remove rest
+        in
+        remove to_delete
 
 let run_list (config : Config.t) all_versions =
   let () = Random.self_init () in
