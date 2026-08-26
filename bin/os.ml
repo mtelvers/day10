@@ -36,8 +36,14 @@ let spawn ?stdout ?stderr ?(capture = false) prog args =
     try Unix.close fd with
     | Unix.Unix_error _ -> ()
   in
-  let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC ] 0o644 in
-  let captured = if capture then Some (Unix.pipe ()) else None in
+  let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o644 in
+  (* Close on exec, or the child inherits a stray copy of each end alongside the
+     one create_process dups onto its stdout -- dup2 clears the flag, so the
+     descriptor it actually uses survives.  A child holding the read end of its
+     own output pipe never gets EPIPE when we let go, so killing day10 mid-read
+     left git archive blocked in pipe_write for good, waiting on a pipe only it
+     could have drained. *)
+  let captured = if capture then Some (Unix.pipe ~cloexec:true ()) else None in
   let out_fd =
     match (captured, stdout) with
     | Some (_, write), _ -> Some write
