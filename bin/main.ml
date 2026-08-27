@@ -59,16 +59,28 @@ let opam_env ~(config : Config.t) pkg v =
   | "post" -> None
   | x -> Config.std_env ~config x
 
-let rec find_opam_files dir =
+(* Every package the project defines, read.  Reading is part of finding them: a
+   file that will not parse is not a package we can do anything with, and a
+   project is entitled to keep broken ones around deliberately.  Skipping one is
+   worth saying out loud, though, in case it is a package the caller expected us
+   to build rather than a fixture. *)
+let rec find_local_packages dir =
   try
     Sys.readdir dir |> Array.to_list
     |> List.concat_map (fun name ->
          let path = Filename.concat dir name in
          if Sys.is_directory path then
-           if name = "_build" || name = "_opam" || String.length name > 0 && name.[0] = '.' then []
-           else find_opam_files path
-         else if Filename.check_suffix name ".opam" then
-           [ (Filename.remove_extension name, path) ]
+           (* A directory ending in .t is a cram test by dune's convention.  What
+              is inside it is fixture, not project: ocsigen-dune-rules keeps
+              empty .opam files there for its tests to generate over. *)
+           if name = "_build" || name = "_opam" || Filename.check_suffix name ".t" || (String.length name > 0 && name.[0] = '.') then []
+           else find_local_packages path
+         else if Filename.check_suffix name ".opam" then (
+           match OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) with
+           | opam -> [ (Filename.remove_extension name, opam) ]
+           | exception e ->
+               OpamConsole.warning "Ignoring %s: %s" path (Printexc.to_string e);
+               [])
          else [])
   with
   | Sys_error _ -> []
@@ -85,12 +97,9 @@ let solve ~repo (config : Config.t) root_packages =
   let pins =
     Option.fold ~none:OpamPackage.Name.Map.empty
       ~some:(fun directory ->
-        find_opam_files directory
+        find_local_packages directory
         |> List.fold_left
-             (fun acc (name, path) ->
-               OpamPackage.Name.Map.add (OpamPackage.Name.of_string name)
-                 (OpamPackage.Version.of_string "dev", OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)))
-                 acc)
+             (fun acc (name, opam) -> OpamPackage.Name.Map.add (OpamPackage.Name.of_string name) (OpamPackage.Version.of_string "dev", opam) acc)
              OpamPackage.Name.Map.empty)
       config.directory
   in
@@ -723,7 +732,7 @@ let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_tes
     ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
   let directory = Unix.realpath directory in
-  let found = find_opam_files directory |> List.map fst in
+  let found = find_local_packages directory |> List.map fst in
   (* An empty --only-packages means every .opam file in the directory.  Naming
      them instead is for a caller that has already decided which are buildable,
      so the names have to be a subset: anything else is a typo, and left to the
@@ -813,8 +822,7 @@ let ci_cmd =
     Term.(
       const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          let packages = find_opam_files directory in
-          let package_names = List.map fst packages in
+          let package_names = find_local_packages directory |> List.map fst in
           run_ci
             {
               dir;
