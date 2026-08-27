@@ -717,11 +717,20 @@ let os_version_term =
   let default = OpamSysPoll.os_version OpamVariable.Map.empty |> Option.value ~default:"13" in
   Arg.(value & opt string default & info [ "os-version" ] ~env ~docv:"OS_VERSION" ~doc)
 
+(* OCaml-CI names packages the way its solver does, with the version attached:
+   sherlodoc.dev rather than sherlodoc.  Take either, since a name is what
+   everything downstream compares against -- and appending ".dev" to one that
+   already carries a version would ask for sherlodoc.dev.dev. *)
+let package_name package =
+  match OpamPackage.of_string_opt package with
+  | Some package -> OpamPackage.name_to_string package
+  | None -> package
+
 let only_packages_term =
   let doc = "Treat only these packages as local, rather than every .opam file found in DIRECTORY (can be specified multiple times)" in
   let env = Cmd.Env.info "DAY10_ONLY_PACKAGES" in
   let arg = Arg.(value & opt_all string [] & info [ "only-packages" ] ~env ~docv:"PACKAGE" ~doc) in
-  Term.(const (List.concat_map (String.split_on_char ',')) $ arg)
+  Term.(const (fun packages -> List.concat_map (String.split_on_char ',') packages |> List.map package_name) $ arg)
 
 let fork_term =
   let doc = "Process packages in parallel using fork with N parallel jobs" in
