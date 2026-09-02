@@ -9,12 +9,15 @@ type t = {
   test : OpamPackage.Name.Set.t;
   doc : OpamPackage.Name.Set.t;
   prefer_oldest : bool;
+  (* Whether a package whose every available version carries avoid-version may
+     be part of the solution.  See [candidates]. *)
+  allow_all_avoid : bool;
   env_fn : string -> OpamVariable.variable_contents option;
 }
 
-let create ?(prefer_oldest = false) ?(test = OpamPackage.Name.Set.empty) ?(doc = OpamPackage.Name.Set.empty)
+let create ?(prefer_oldest = false) ?(allow_all_avoid = false) ?(test = OpamPackage.Name.Set.empty) ?(doc = OpamPackage.Name.Set.empty)
     ?(pins = OpamPackage.Name.Map.empty) ~constraints ~env ~repo () =
-  { repo; pins; constraints; test; doc; prefer_oldest; env_fn = env }
+  { repo; pins; constraints; test; doc; prefer_oldest; allow_all_avoid; env_fn = env }
 
 let repo t = t.repo
 let opam_file t pkg = Repo.opam t.repo pkg
@@ -68,7 +71,18 @@ let candidates t name =
                  let avoid = OpamFile.OPAM.has_flag Pkgflag_AvoidVersion opam in
                  let available = OpamFile.OPAM.available opam in
                  if OpamFilter.eval_to_bool ~default:false (env t pkg) available then Some (v, avoid, opam) else None)
-      |> (fun l -> if List.for_all (fun (_, avoid, _) -> avoid) l then [] else l)
+      (* A package whose every available version carries avoid-version is left
+         out unless [allow_all_avoid], which is how solve asks for the second of
+         its two passes.  opam counts such packages and minimises the count
+         rather than refusing them (see
+         https://github.com/ocaml-opam/opam-0install-cudf/issues/5, still open,
+         and the criteria at opamBuiltinMccs.real.ml:15): it prefers a solution
+         without one, and installs it when there is no other way.  Candidate
+         ordering cannot say that -- version_compare only sorts flagged versions
+         last within a single package -- so solve approximates it by trying
+         without first, and again with, rather than dropping them outright and
+         calling a package that has no unflagged release uninstallable. *)
+      |> (fun l -> if t.allow_all_avoid then l else if List.for_all (fun (_, avoid, _) -> avoid) l then [] else l)
       |> List.sort (version_compare t)
       |> List.map (fun (v, _, opam) ->
              match user_constraints with

@@ -116,9 +116,23 @@ let solve ~repo (config : Config.t) root_packages =
     if config.with_doc then List.map OpamPackage.name root_packages |> OpamPackage.Name.Set.of_list
     else OpamPackage.Name.Set.empty
   in
-  let context = Repo_context.create ~prefer_oldest:config.prefer_oldest ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc ~repo () in
   let roots = OpamPackage.name config.ocaml_version :: List.map OpamPackage.name root_packages in
-  match Solver.solve context roots with
+  let attempt allow_all_avoid =
+    let context = Repo_context.create ~prefer_oldest:config.prefer_oldest ~allow_all_avoid ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc ~repo () in
+    (context, Solver.solve context roots)
+  in
+  (* Prefer a solution that leaves out any package whose every version carries
+     avoid-version, and settle for one that includes it rather than reporting no
+     solution at all -- which is what opam does, minimising how many such
+     packages a solution contains.  If the second pass fails too, its
+     diagnostics are the ones worth reporting: the first can only say the
+     package has no known implementations. *)
+  let context, solution =
+    match attempt false with
+    | context, Ok out -> (context, Ok out)
+    | _, Error _ -> attempt true
+  in
+  match solution with
   | Ok out ->
       let sels = Output.to_map out in
       let depends = Hashtbl.create 100 in
