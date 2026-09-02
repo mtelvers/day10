@@ -59,6 +59,10 @@ let add_version versions_acc pkg =
 
 let index_buffer ~buf ~index ~versions_acc =
   let pos = ref 0 in
+  (* git archive emits tree entries in bytewise name order, and "files" sorts
+     before "opam", so an extra always arrives before there is an entry to hang
+     it on.  Collect them as they come and attach them once the pass is done. *)
+  let extras_acc : (OpamPackage.t, (string * reader) list) Hashtbl.t = Hashtbl.create 1024 in
   let f ?global:_ (hdr : Tar.Header.t) () =
     let size = Int64.to_int hdr.Tar.Header.file_size in
     let entry_off = !pos in
@@ -69,21 +73,30 @@ let index_buffer ~buf ~index ~versions_acc =
         | Some (pkg, `Opam) ->
             if not (Hashtbl.mem index pkg) then Hashtbl.add index pkg { opam = read; extras = [] };
             add_version versions_acc pkg
-        | Some (pkg, `Extra rel) -> (
-            match Hashtbl.find_opt index pkg with
-            | Some e -> Hashtbl.replace index pkg { e with extras = (rel, read) :: e.extras }
-            | None -> ())
+        | Some (pkg, `Extra rel) ->
+            let prior = try Hashtbl.find extras_acc pkg with Not_found -> [] in
+            Hashtbl.replace extras_acc pkg ((rel, read) :: prior)
         | None -> ())
     | _ -> ());
     let open Tar.Syntax in
     let* () = Tar.seek hdr.Tar.Header.file_size in
     Tar.return (Ok ())
   in
-  match Tar_bytes.run buf ~pos (Tar.fold f ()) with
-  | Ok () -> ()
-  | Error e ->
-      let msg = Format.asprintf "%a" Tar_bytes.pp_error e in
-      failwith (Printf.sprintf "tar fold failed at offset %d: %s" !pos msg)
+  let () =
+    match Tar_bytes.run buf ~pos (Tar.fold f ()) with
+    | Ok () -> ()
+    | Error e ->
+        let msg = Format.asprintf "%a" Tar_bytes.pp_error e in
+        failwith (Printf.sprintf "tar fold failed at offset %d: %s" !pos msg)
+  in
+  (* A package carrying extras but no opam file of its own is left out, rather
+     than becoming an entry with nothing to say what the package is. *)
+  Hashtbl.iter
+    (fun pkg extras ->
+      match Hashtbl.find_opt index pkg with
+      | Some entry -> Hashtbl.replace index pkg { entry with extras = entry.extras @ extras }
+      | None -> ())
+    extras_acc
 
 let rec collect_extras_rec ~pkg_dir ~rel acc =
   let dir = if rel = "" then pkg_dir else Filename.concat pkg_dir rel in
