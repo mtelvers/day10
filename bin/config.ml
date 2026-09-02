@@ -25,6 +25,9 @@ type t = {
      that has already worked out which packages it wants, as OCaml-CI has, names
      them with --only-packages instead. *)
   local_packages : string list;
+  (* Solve for the lowest version of each dependency that the constraints allow
+     rather than the highest, which is how a missing lower bound shows itself. *)
+  prefer_oldest : bool;
 }
 
 let is_local_package ~(config : t) pkg =

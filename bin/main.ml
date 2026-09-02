@@ -116,7 +116,7 @@ let solve ~repo (config : Config.t) root_packages =
     if config.with_doc then List.map OpamPackage.name root_packages |> OpamPackage.Name.Set.of_list
     else OpamPackage.Name.Set.empty
   in
-  let context = Repo_context.create ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc ~repo () in
+  let context = Repo_context.create ~prefer_oldest:config.prefer_oldest ~env:(Config.std_env ~config) ~constraints ~pins ~test ~doc ~repo () in
   let roots = OpamPackage.name config.ocaml_version :: List.map OpamPackage.name root_packages in
   match Solver.solve context roots with
   | Ok out ->
@@ -741,6 +741,11 @@ let package_name package =
   | Some package -> OpamPackage.name_to_string package
   | None -> package
 
+let prefer_oldest_term =
+  let doc = "Solve for the lowest version of each dependency the constraints allow, rather than the highest" in
+  let env = Cmd.Env.info "DAY10_PREFER_OLDEST" in
+  Arg.(value & flag & info [ "prefer-oldest" ] ~env ~doc)
+
 let only_packages_term =
   let doc = "Treat only these packages as local, rather than every .opam file found in DIRECTORY (can be specified multiple times)" in
   let env = Cmd.Env.info "DAY10_ONLY_PACKAGES" in
@@ -753,7 +758,7 @@ let fork_term =
   Arg.(value & opt (some int) None & info [ "fork" ] ~env ~docv:"N" ~doc)
 
 let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
-    ~build_command =
+    ~prefer_oldest ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
   let directory = Unix.realpath directory in
   let found = find_local_packages directory |> List.map fst in
@@ -794,6 +799,7 @@ let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_tes
     fork = None;
     build_command;
     local_packages;
+    prefer_oldest;
   }
 
 let exec_cmd =
@@ -807,11 +813,12 @@ let exec_cmd =
   in
   let exec_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages ->
+      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term)
+               ~only_packages ~prefer_oldest ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
+      $ prefer_oldest_term)
   in
   let exec_info = Cmd.info "exec" ~doc:"Run a command in a container with the project's dependencies" in
   Cmd.v exec_info exec_term
@@ -827,12 +834,13 @@ let build_cmd =
   in
   let build_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages ->
+      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest ->
           let cmd = String.concat " " ([ "opam"; "exec"; "--"; "dune"; "build" ] @ List.map Filename.quote dune_extra) in
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~build_command:(Some cmd)))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term)
+               ~only_packages ~prefer_oldest ~build_command:(Some cmd)))
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
+      $ prefer_oldest_term)
   in
   let build_info = Cmd.info "build" ~doc:"Build a project using cached dependencies (alias for: exec . -- dune build)" in
   Cmd.v build_info build_term
@@ -844,7 +852,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork ->
+      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork prefer_oldest ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           let package_names = find_local_packages directory |> List.map fst in
           run_ci
@@ -871,8 +879,10 @@ let ci_cmd =
               fork;
               build_command = None;
               local_packages = package_names;
+              prefer_oldest;
             })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term
+      $ prefer_oldest_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -884,10 +894,13 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork ->
+      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork prefer_oldest ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
-          run_health_check_multi { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = []; } package_arg)
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term)
+          run_health_check_multi
+            { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = []; prefer_oldest }
+            package_arg)
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term
+      $ prefer_oldest_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
@@ -922,7 +935,7 @@ let prune_cmd =
                 exit 1
           in
           run_prune
-            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; }
+            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false }
             mode)
       $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg $ percent_arg)
   in
@@ -935,7 +948,7 @@ let list_cmd =
       const (fun ocaml_version opam_repositories all_versions json arch os os_distribution os_family os_version ->
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ json_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in
