@@ -275,15 +275,24 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
      this build, so say which under --log.  Between them the two notes list
      everything used, built or not.  --markdown and --json still record every
      layer's log in full for a post mortem. *)
+  let cached = Sys.file_exists layer_dir in
   let () =
-    if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer
+    if not cached then Os.create_directory_exclusively layer_dir write_layer
     else if config.log then OpamConsole.note "Using %s" (OpamPackage.to_string pkg)
   in
   let () = Unix.utimes layer_json 0.0 0.0 in
   let exit_status = Util.load_layer_info_exit_status layer_json in
   match exit_status with
   | 0 -> Success hash
-  | _ -> Failure hash
+  | _ ->
+      (* The log is the whole explanation of a failure, and whatever reads
+         day10's output classifies it by matching on that text -- an unavailable
+         system package, say -- so it has to be there even when the layer failed
+         weeks ago and all we are reporting is the cached verdict.  Streaming
+         has already shown it if we built it just now. *)
+      let streamed = (not cached) && config.log in
+      if not streamed then OpamConsole.error "%s failed:\n%s" (OpamPackage.to_string pkg) (Os.read_from_file Path.(layer_dir / "build.log"));
+      Failure hash
 
 let build ~repo config packages =
   match solve ~repo config packages with
@@ -568,14 +577,8 @@ let run_build (config : Config.t) =
   let results = build ~repo dep_config local_pkgs in
   let exit_code =
     match results with
-    | Dependency_failed :: _ ->
-        List.iter (function
-          | Failure hash ->
-              let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
-              let pkg = Util.load_layer_info_package_name Path.(layer_dir / "layer.json") in
-              OpamConsole.error "Dependency %s failed:\n%s" pkg (Os.read_from_file Path.(layer_dir / "build.log"))
-          | _ -> ()) results;
-        1
+    (* build_layer has already reported whichever layer failed, and its log. *)
+    | Dependency_failed :: _ -> 1
     | No_solution s :: _ -> OpamConsole.error "No solution: %s" s; 1
     | _ ->
         (* All dependency layers built. Now run the build command in the container. *)
