@@ -28,7 +28,7 @@
   dockerfile
   dockerfile-opam
   ocaml-version
-  tar)
+  (tar (>= 3.5.0)))
  (tags
   ("add topics" "to describe" your project)))
 

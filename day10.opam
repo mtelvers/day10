@@ -18,7 +18,7 @@ depends: [
   "dockerfile"
   "dockerfile-opam"
   "ocaml-version"
-  "tar"
+  "tar" {>= "3.5.0"}
   "odoc" {with-doc}
 ]
 build: [
