@@ -69,11 +69,16 @@ let rec find_local_packages dir =
     Sys.readdir dir |> Array.to_list
     |> List.concat_map (fun name ->
          let path = Filename.concat dir name in
-         if Sys.is_directory path then
+         (* Nothing whose name starts with a dot belongs to the project, file or
+            directory.  macOS leaves AppleDouble copies of everything it puts in
+            a tarball, so ._foo.opam turns up beside foo.opam and is not an opam
+            file at all -- it starts with a binary header. *)
+         if String.length name > 0 && name.[0] = '.' then []
+         else if Sys.is_directory path then
            (* A directory ending in .t is a cram test by dune's convention.  What
               is inside it is fixture, not project: ocsigen-dune-rules keeps
               empty .opam files there for its tests to generate over. *)
-           if name = "_build" || name = "_opam" || Filename.check_suffix name ".t" || (String.length name > 0 && name.[0] = '.') then []
+           if name = "_build" || name = "_opam" || Filename.check_suffix name ".t" then []
            else find_local_packages path
          else if Filename.check_suffix name ".opam" then (
            match OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) with
