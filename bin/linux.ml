@@ -225,9 +225,13 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
   let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
+  (* Show the output as it happens for the command the user asked for, since
+     that is the one they are waiting on.  A dependency layer is someone else's
+     package being compiled, so it only speaks up when asked with --log. *)
+  let tee = Option.is_some config.build_command || config.log in
   let result =
     Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
-    Os.sudo ~stdout:build_log ~stderr:build_log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+    Os.sudo ~stdout:build_log ~stderr:build_log ~tee [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
   in
   (* Unmount before the rm below, or rm would delete through the overlay. *)
   let _ = Os.sudo [ "umount"; rootfsdir ] in

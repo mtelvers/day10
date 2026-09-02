@@ -29,9 +29,13 @@ let rec wait pid =
    signal arrives promptly instead, and passing an argv removes the trip through
    the shell, so nothing depends on quoting any more.
 
-   [stdout] and [stderr] name files to redirect to; [capture] hands stdout back
-   to the caller instead, and takes precedence over [stdout]. *)
-let spawn ?stdout ?stderr ?(capture = false) prog args =
+   [stdout] and [stderr] name files to redirect to.  [capture] hands stdout back
+   to the caller instead, and takes precedence over [stdout].  [tee] writes it to
+   the file and passes it on as it arrives, so that a long build says something
+   while it is still running instead of only once it is over.  Either of those
+   sends the child's output through a pipe rather than straight to the file, and
+   [tee] merges stderr into the same pipe to keep the two in order. *)
+let spawn ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
   let close fd =
     try Unix.close fd with
     | Unix.Unix_error _ -> ()
@@ -43,9 +47,11 @@ let spawn ?stdout ?stderr ?(capture = false) prog args =
      own output pipe never gets EPIPE when we let go, so killing day10 mid-read
      left git archive blocked in pipe_write for good, waiting on a pipe only it
      could have drained. *)
-  let captured = if capture then Some (Unix.pipe ~cloexec:true ()) else None in
+  let piped = if capture || tee then Some (Unix.pipe ~cloexec:true ()) else None in
+  (* Teeing makes the log file ours to write rather than the child's. *)
+  let log_fd = if tee then Option.map redirect stdout else None in
   let out_fd =
-    match (captured, stdout) with
+    match (piped, stdout) with
     | Some (_, write), _ -> Some write
     | None, Some path -> Some (redirect path)
     | None, None -> None
@@ -55,8 +61,9 @@ let spawn ?stdout ?stderr ?(capture = false) prog args =
      other's output. *)
   let err_fd =
     match (stderr, stdout) with
+    | _ when tee -> out_fd
     | None, _ -> None
-    | Some err, Some out when Option.is_none captured && String.equal err out -> out_fd
+    | Some err, Some out when Option.is_none piped && String.equal err out -> out_fd
     | Some err, _ -> Some (redirect err)
   in
   let pid =
@@ -70,26 +77,40 @@ let spawn ?stdout ?stderr ?(capture = false) prog args =
      read below would never see end of file. *)
   let () = List.iter close (List.filter_map Fun.id [ out_fd; (if err_fd = out_fd then None else err_fd) ]) in
   let output =
-    match captured with
+    match piped with
     | None -> ""
     | Some (read, _) ->
-        let inp = Unix.in_channel_of_descr read in
-        let () = set_binary_mode_in inp true in
+        let collected = Buffer.create 4096 in
+        let chunk = Bytes.create 65536 in
+        let rec write_all fd pos len = if len > 0 then let written = Unix.write fd chunk pos len in write_all fd (pos + written) (len - written) in
         (* Read to end of file before waiting: git archive produces far more
            than a pipe will hold, and waiting first would deadlock. *)
+        let rec drain () =
+          match Unix.read read chunk 0 (Bytes.length chunk) with
+          | 0 -> ()
+          | read_bytes ->
+              if capture then Buffer.add_subbytes collected chunk 0 read_bytes;
+              Option.iter (fun fd -> write_all fd 0 read_bytes) log_fd;
+              if tee then (
+                print_string (Bytes.sub_string chunk 0 read_bytes);
+                flush Stdlib.stdout);
+              drain ()
+          | exception Unix.Unix_error (Unix.EINTR, _, _) -> drain ()
+        in
         Fun.protect
           ~finally:(fun () ->
-            try close_in inp with
-            | Sys_error _ -> ())
-          (fun () -> In_channel.input_all inp)
+            close read;
+            Option.iter close log_fd)
+          drain;
+        Buffer.contents collected
   in
   (wait pid, output)
 
-let sudo ?stdout ?stderr cmd = fst (spawn ?stdout ?stderr "sudo" cmd)
+let sudo ?stdout ?stderr ?tee cmd = fst (spawn ?stdout ?stderr ?tee "sudo" cmd)
 
-let exec ?stdout ?stderr cmd =
+let exec ?stdout ?stderr ?tee cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  fst (spawn ?stdout ?stderr (List.hd cmd) (List.tl cmd))
+  fst (spawn ?stdout ?stderr ?tee (List.hd cmd) (List.tl cmd))
 
 let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
   let rec loop n =

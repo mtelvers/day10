@@ -263,8 +263,17 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
     let () = Unix.rename temp_dir target_dir in
     Util.save_layer_info layer_json pkg ordered_deps ordered_hashes r
   in
-  let () = if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer in
-  let () = if config.log then Os.read_from_file Path.(layer_dir / "build.log") |> print_endline in
+  (* A layer built just now streamed its output as it went and announced itself
+     as it started.  One taken from the cache was compiled weeks ago by somebody
+     building something else, so replaying its log under --log buried the build
+     the caller actually asked about -- but it is still a package that went into
+     this build, so say which under --log.  Between them the two notes list
+     everything used, built or not.  --markdown and --json still record every
+     layer's log in full for a post mortem. *)
+  let () =
+    if not (Sys.file_exists layer_dir) then Os.create_directory_exclusively layer_dir write_layer
+    else if config.log then OpamConsole.note "Using %s" (OpamPackage.to_string pkg)
+  in
   let () = Unix.utimes layer_json 0.0 0.0 in
   let exit_status = Util.load_layer_info_exit_status layer_json in
   match exit_status with
@@ -577,8 +586,9 @@ let run_build (config : Config.t) =
           let build_log = Path.(temp_dir / "build.log") in
           let dummy_pkg = List.hd local_pkgs in
           let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
-          if r <> 0 then OpamConsole.error "%s" (Os.read_from_file build_log)
-          else OpamConsole.msg "%s" (Os.read_from_file build_log);
+          (* The output arrived as it was produced, so there is nothing left to
+             print but the verdict. *)
+          if r <> 0 then OpamConsole.error "build failed with exit code %i" r;
           r
         in
         Container.deinit ~t;
