@@ -196,6 +196,26 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
               ]))
       ordered_hashes
   in
+  (* Only one layer's dpkg status survives the merge above, so opam reports the
+     depexts installed by the others as no longer found.  Write the union of
+     them over it, in the merged lower layer, which is discarded with the rest
+     of the build. *)
+  let () =
+    let status = "var/lib/dpkg/status" in
+    let layer_files = List.filter_map (fun hash -> let file = Path.(config.dir / os_key / hash / "fs" / status) in if Sys.file_exists file then Some file else None) ordered_hashes in
+    if layer_files <> [] then begin
+      let contents = List.map Os.read_from_file (layer_files @ [ Path.(config.dir / os_key / "base" / "fs" / status) ]) in
+      let merged = Path.(temp_dir / "dpkg-status") in
+      let target = Path.(lowerdir / status) in
+      let () = Os.write_to_file merged (Dpkg.union contents) in
+      (* The copy in lowerdir is hardlinked to the layer's own, so replace it
+         rather than write through it. *)
+      let _ = Os.sudo [ "mkdir"; "-p"; Filename.dirname target ] in
+      let _ = Os.sudo [ "rm"; "-f"; target ] in
+      let _ = Os.sudo [ "cp"; merged; target ] in
+      ()
+    end
+  in
   let () =
     let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
     let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
