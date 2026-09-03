@@ -24,21 +24,27 @@ let resolve_git_dir path =
   let candidate = Filename.concat path ".git" in
   if Sys.file_exists candidate then candidate else path
 
-let resolve_commit ~git_dir rev =
-  let commit =
+(* Peel to a tree, which is what git archive takes, so a branch, tag, commit or
+   bare tree all resolve. *)
+let resolve_tree ~git_dir rev =
+  let tree =
     (* --verify --quiet exits non-zero when the revision does not exist, which
        is the question being asked, so empty output is the answer. *)
-    Os.capture ~check:false "git" [ "--git-dir=" ^ git_dir; "rev-parse"; "--verify"; "--quiet"; rev ^ "^{commit}" ]
+    Os.capture ~check:false "git" [ "--git-dir=" ^ git_dir; "rev-parse"; "--verify"; "--quiet"; rev ^ "^{tree}" ]
     |> String.trim
   in
-  if commit = "" then begin
+  if tree = "" then begin
     OpamConsole.error "cannot resolve revision '%s' in opam-repository %s" rev git_dir;
     exit 1
   end;
-  commit
+  tree
 
-let git_archive ~git_dir ~commit =
-  Os.capture "git" [ "--git-dir=" ^ git_dir; "archive"; "--format=tar"; commit; "packages" ] |> Bytes.unsafe_of_string
+let git_archive ~git_dir ~tree =
+  match Os.capture "git" [ "--git-dir=" ^ git_dir; "archive"; "--format=tar"; tree; "packages" ] with
+  | tar -> Bytes.unsafe_of_string tar
+  | exception Failure _ ->
+      OpamConsole.error "cannot read packages from %s in opam-repository %s" tree git_dir;
+      exit 1
 
 let classify_tar_path path =
   match String.split_on_char '/' path with
@@ -151,9 +157,8 @@ let create sources =
       (function
         | Git { path; rev } ->
             let git_dir = resolve_git_dir path in
-            let commit = resolve_commit ~git_dir rev in
-            index_buffer ~buf:(git_archive ~git_dir ~commit) ~index ~versions_acc;
-            commit
+            index_buffer ~buf:(git_archive ~git_dir ~tree:(resolve_tree ~git_dir rev)) ~index ~versions_acc;
+            rev
         | Dir root ->
             index_dir ~root ~index ~versions_acc;
             root)
