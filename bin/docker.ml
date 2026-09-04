@@ -4,7 +4,10 @@ let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir _opam_repository build
   let dockerfile_path = Path.(temp_dir / "Dockerfile") in
   let () = Os.write_to_file dockerfile_path (Dockerfile.string_of_t dockerfile) in
   let tag = Printf.sprintf "day10-%s:%s" config.os_distribution config.os_version in
-  let build_result = Os.exec ~stdout:build_log ~stderr:build_log ~tee:config.log [ "docker"; "build"; "-t"; tag; temp_dir ] in
+  (* --pull because the default is to prefer whatever the builder has already
+     cached for the tag, so a base image can otherwise be rebuilt from a
+     resolution made months ago. *)
+  let build_result = Os.exec ~stdout:build_log ~stderr:build_log ~tee:config.log [ "docker"; "build"; "--pull"; "-t"; tag; temp_dir ] in
   match build_result with
   | 0 ->
       let rootfs = Path.(temp_dir / "fs") in
