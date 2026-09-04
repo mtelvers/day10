@@ -9,6 +9,7 @@ FROM --platform=linux/amd64 debian:13 AS opam-build-builder
 RUN apt update && apt install -y build-essential git curl unzip bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
+ADD [ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master", "/tmp/opam-build.ref" ]
 RUN git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build
 WORKDIR /tmp/opam-build
 RUN opam switch create . 5.3.0 --deps-only -y

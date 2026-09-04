@@ -9,6 +9,7 @@ FROM --platform=linux/amd64 archlinux:latest AS opam-build-builder
 RUN pacman -Sy --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl diffutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
+ADD [ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master", "/tmp/opam-build.ref" ]
 RUN git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build
 WORKDIR /tmp/opam-build
 RUN opam switch create . 5.3.0 --deps-only -y

@@ -24,6 +24,11 @@ let opam_build ~(dist : Dist.t) ~arch base_image =
   @@ run "%s && %s" dist.update (dist.install dist.deps_opam_build)
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ run "opam init --disable-sandboxing -a --bare -y"
+  (* Docker keys a RUN on its text, so cloning master is cached forever and the
+     image keeps whichever opam-build it was first built with.  A remote ADD is
+     fetched and checksummed on every build, so naming the ref here rebuilds
+     from the clone down whenever master moves. *)
+  @@ add ~src:[ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master" ] ~dst:"/tmp/opam-build.ref" ()
   @@ run "git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build"
   @@ workdir "/tmp/opam-build"
   @@ run "opam switch create . 5.3.0 --deps-only -y"
