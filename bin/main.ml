@@ -320,6 +320,11 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
          has already shown it if we built it just now. *)
       let streamed = (not cached) && config.log in
       if not streamed then OpamConsole.error "%s failed:\n%s" (OpamPackage.to_string pkg) (Os.read_from_file Path.(layer_dir / "build.log"));
+      (* A failure the maintainer has already declared expected here.  day10
+         knows which platform was asked for, so it does the matching and emits
+         the marker on its own line; the failure above says which package. *)
+      let accepted = Util.accept_failures (resolve_opam ctx pkg) in
+      if List.exists (fun p -> String.equal p (Config.platform ~config) || String.equal p config.os_distribution) accepted then OpamConsole.note "accept_failures";
       Failure hash
 
 let build ~repo config packages =

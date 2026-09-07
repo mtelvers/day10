@@ -43,6 +43,10 @@ let std_env ~(config : t) =
   Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
     ~ocaml_version:config.ocaml_version ()
 
+(* The platform as x-ci-accept-failures names it: distribution and version,
+   without the architecture that os_key carries. *)
+let platform ~(config : t) = config.os_distribution ^ "-" ^ config.os_version
+
 let os_key ~(config : t) =
   let os =
     List.map

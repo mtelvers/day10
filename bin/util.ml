@@ -19,6 +19,19 @@ let std_env ?(ocaml_native = true) ?opam_version ~arch ~os ~os_distribution ~os_
       OpamConsole.warning "Unknown variable %S" v;
       None
 
+(* The platforms on which the maintainer has declared a failure expected, from
+   the x-ci-accept-failures extension field.  Entries name a distribution and
+   version ("debian-11") or, where the distribution has no meaningful version,
+   just the distribution ("archlinux"). *)
+let accept_failures opam =
+  let open OpamParserTypes.FullPos in
+  OpamFile.OPAM.extended opam "x-ci-accept-failures" (fun v ->
+      match v.pelem with
+      | List l -> List.filter_map (fun e -> match e.pelem with String s -> Some s | _ -> None) l.pelem
+      | String s -> [ s ]
+      | _ -> [])
+  |> Option.value ~default:[]
+
 let save_layer_info name pkg deps hashes rc =
   Yojson.Safe.to_file name
     (`Assoc
