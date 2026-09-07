@@ -9,8 +9,11 @@ let resolve_opam ctx pkg =
   | Some o -> o
   | None -> failwith (Printf.sprintf "opam not found for %s" (OpamPackage.to_string pkg))
 
-let layer_hash_of ctx pkgs =
-  Util.layer_hash (List.map (resolve_opam ctx) pkgs)
+(* The flags only apply to the package under test: a dependency is built the
+   same way whether or not the caller asked for tests. *)
+let layer_hash_of ~(config : Config.t) ctx pkg pkgs =
+  let target = Config.is_target_package ~config pkg in
+  Util.layer_hash ~with_test:(config.with_test && target) ~with_doc:(config.with_doc && target) (List.map (resolve_opam ctx) pkgs)
 
 let container =
   match OpamSysPoll.os OpamVariable.Map.empty with
@@ -44,9 +47,7 @@ let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamS
 let opam_env ~(config : Config.t) pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
   else *)
-  let is_target_pkg =
-    String.equal (OpamPackage.to_string pkg) config.package || Config.is_local_package ~config pkg
-  in
+  let is_target_pkg = Config.is_target_package ~config pkg in
   match OpamVariable.Full.to_string v with
   | "version" -> Some (OpamTypes.S (OpamPackage.Version.to_string (OpamPackage.version pkg)))
   | "with-test" -> Some (OpamTypes.B (config.with_test && is_target_pkg))
@@ -323,7 +324,7 @@ let build ~repo config packages =
             | [] -> true
             | pkg :: rest ->
                 let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
-                let hash = layer_hash_of ctx (pkg :: ordered_deps) in
+                let hash = layer_hash_of ~config ctx pkg (pkg :: ordered_deps) in
                 let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
                 let layer_json = Path.(layer_dir / "layer.json") in
                 let layer_exists = Sys.file_exists layer_dir in
@@ -360,7 +361,7 @@ let build ~repo config packages =
                   | _ -> None)
                 ordered_deps
             in
-            let hash = layer_hash_of ctx (pkg :: ordered_deps) in
+            let hash = layer_hash_of ~config ctx pkg (pkg :: ordered_deps) in
             match res with
             | [] ->
                 let r = build_layer ctx t pkg hash ordered_deps ordered_hashes in

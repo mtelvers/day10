@@ -91,11 +91,16 @@ let opam_repo_sha opam_repositories =
   List.filter_map git_sha opam_repositories |> String.concat ""
   |> function "" -> None | s -> Some s
 
-let layer_hash opams =
+(* [with_test] and [with_doc] change what gets run rather than what gets
+   solved, so a package with no test-only dependencies hashes the same either
+   way and a tested run would be answered from an untested layer.  Only append
+   when set, so a layer built without them keeps the hash it already had. *)
+let layer_hash ?(with_test = false) ?(with_doc = false) opams =
   let hashes =
     List.map
       (fun opam ->
         opam |> OpamFile.OPAM.effective_part |> OpamFile.OPAM.write_to_string |> OpamHash.compute_from_string |> OpamHash.to_string)
       opams
   in
-  String.concat " " hashes |> Digest.string |> Digest.to_hex
+  let flags = (if with_test then [ "with-test" ] else []) @ if with_doc then [ "with-doc" ] else [] in
+  String.concat " " (hashes @ flags) |> Digest.string |> Digest.to_hex

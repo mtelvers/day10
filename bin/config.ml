@@ -33,6 +33,12 @@ type t = {
 let is_local_package ~(config : t) pkg =
   List.mem (OpamPackage.name_to_string pkg) config.local_packages
 
+(* The package the caller asked about, as opposed to something it depends on.
+   [package] is name.version for health-check and a bare name for ci, so it is
+   compared as a package rather than by name. *)
+let is_target_package ~(config : t) pkg =
+  String.equal (OpamPackage.to_string pkg) config.package || is_local_package ~config pkg
+
 let std_env ~(config : t) =
   Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
     ~ocaml_version:config.ocaml_version ()

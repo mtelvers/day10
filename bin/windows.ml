@@ -97,9 +97,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let os_key = Config.os_key ~config in
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
-  (* config.package is name.version for health-check and a bare name for ci, so
-     compare it as a package rather than by name. *)
-  let is_target = String.equal (OpamPackage.to_string pkg) config.package || Config.is_local_package ~config pkg in
+  let is_target = Config.is_target_package ~config pkg in
   let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
   let with_test = if config.with_test && is_target then "--with-test " else "" in
   let argv =
