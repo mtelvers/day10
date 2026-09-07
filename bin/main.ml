@@ -9,11 +9,24 @@ let resolve_opam ctx pkg =
   | Some o -> o
   | None -> failwith (Printf.sprintf "opam not found for %s" (OpamPackage.to_string pkg))
 
+(* Whether a variable appears in any of the commands the package will run.  A
+   package that never mentions with-test cannot run anything different when
+   tests are asked for, so it keeps the hash it would have had and an existing
+   layer is reused.  Mentioning it counts, without resolving the filter: a
+   filter can depend on variables that are only known inside the container, and
+   guessing that it would not fire risks answering a tested run from an
+   untested layer. *)
+let mentions ~variable opam =
+  [ OpamFile.OPAM.build opam; OpamFile.OPAM.install opam; OpamFile.OPAM.run_test opam; OpamFile.OPAM.deprecated_build_test opam ]
+  |> List.concat_map OpamFilter.commands_variables
+  |> List.exists (fun v -> String.equal (OpamVariable.Full.to_string v) variable)
+
 (* The flags only apply to the package under test: a dependency is built the
    same way whether or not the caller asked for tests. *)
 let layer_hash_of ~(config : Config.t) ctx pkg pkgs =
   let target = Config.is_target_package ~config pkg in
-  Util.layer_hash ~with_test:(config.with_test && target) ~with_doc:(config.with_doc && target) (List.map (resolve_opam ctx) pkgs)
+  let matters requested variable = requested && target && mentions ~variable (resolve_opam ctx pkg) in
+  Util.layer_hash ~with_test:(matters config.with_test "with-test") ~with_doc:(matters config.with_doc "with-doc") (List.map (resolve_opam ctx) pkgs)
 
 let container =
   match OpamSysPoll.os OpamVariable.Map.empty with
