@@ -28,6 +28,10 @@ type t = {
   (* Solve for the lowest version of each dependency that the constraints allow
      rather than the highest, which is how a missing lower bound shows itself. *)
   prefer_oldest : bool;
+  (* Let the solver choose the ocaml version when [ocaml_version] cannot be
+     honoured, as opam's --update-invariant does for a switch.  Needed to test a
+     compiler package, which determines the ocaml version itself. *)
+  update_invariant : bool;
 }
 
 let is_local_package ~(config : t) pkg =
