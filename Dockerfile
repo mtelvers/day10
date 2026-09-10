@@ -1,9 +1,9 @@
 ARG BASE_OS=debian
 ARG BASE_VERSION=13
-FROM ocaml/opam:${BASE_OS}-${BASE_VERSION}-ocaml-5.3 AS build
-RUN sudo ln -f /usr/bin/opam-2.3 /usr/bin/opam && opam init --reinit -ni
+FROM ocaml/opam:${BASE_OS}-${BASE_VERSION}-ocaml-5.5 AS build
+RUN sudo ln -f /usr/bin/opam-2.5 /usr/bin/opam && opam init --reinit -ni
 RUN sudo apt update && sudo apt install libgmp-dev libffi-dev pkg-config m4 -y --no-install-recommends
-RUN cd ~/opam-repository && git fetch origin master && opam update
+RUN cd ~/opam-repository && git fetch origin master && git reset --hard FETCH_HEAD && opam update
 COPY --chown=opam day10.opam /src/
 WORKDIR /src
 RUN opam install -y --deps-only .
