@@ -420,60 +420,6 @@ let build ~repo config packages =
 
 open Cmdliner
 
-type prune_mode =
-  | Keep_days of int     (* keep entries newer than N days *)
-  | Keep_percent of int  (* keep newest N% of entries, by count *)
-
-let run_prune (config : Config.t) mode =
-  let os_key = Config.os_key ~config in
-  let cache_root = Path.(config.dir / os_key) in
-  if not (Sys.file_exists cache_root) then
-    OpamConsole.warning "Cache directory %s does not exist" cache_root
-  else
-    let entries =
-      Os.ls cache_root
-      |> List.filter_map (fun entry_dir ->
-           let layer_json = Path.(entry_dir / "layer.json") in
-           if not (Sys.file_exists layer_json) then None
-           else
-             try Some (entry_dir, (Unix.stat layer_json).st_mtime) with
-             | Unix.Unix_error _ -> None)
-    in
-    let to_delete, summary =
-      match mode with
-      | Keep_days days ->
-          let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
-          let stale = List.filter (fun (_, mtime) -> mtime < cutoff) entries in
-          (List.map fst stale, Printf.sprintf "older than %d day(s)" days)
-      | Keep_percent pct ->
-          let total = List.length entries in
-          let drop = total - (total * pct / 100) in
-          let oldest =
-            entries
-            |> List.sort (fun (_, a) (_, b) -> compare a b)
-            |> List.filteri (fun i _ -> i < drop)
-            |> List.map fst
-          in
-          (oldest, Printf.sprintf "keeping newest %d%% (%d of %d)" pct (total - drop) total)
-    in
-    match to_delete with
-    | [] -> OpamConsole.note "No cache entries to prune (%s)" summary
-    | _ ->
-        OpamConsole.note "Pruning %d cache entries (%s)" (List.length to_delete) summary;
-        (* A batch at a time rather than piped into xargs, which was only ever
-           keeping each command line inside the kernel's limit. *)
-        let rec remove = function
-          | [] -> ()
-          | paths ->
-              let batch = List.filteri (fun i _ -> i < 500) paths in
-              let rest = List.filteri (fun i _ -> i >= 500) paths in
-              (match Os.sudo ("rm" :: "-rf" :: batch) with
-              | 0 -> ()
-              | code -> OpamConsole.error "rm -rf exited with status %d" code);
-              remove rest
-        in
-        remove to_delete
-
 let run_list (config : Config.t) all_versions =
   let () = Random.self_init () in
   let repo = make_repo config in
@@ -970,41 +916,91 @@ let health_check_cmd =
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
 
+(* The cache-wide commands take these instead of the detected defaults the rest
+   of day10 uses: a platform is something to select here, not something to
+   assume, and only a component actually given should narrow the search. *)
+let platform_filter_terms =
+  let distribution =
+    let doc = "Restrict to platforms of this OS distribution (default: every platform in the cache)" in
+    Arg.(value & opt (some string) None & info [ "os-distribution" ] ~docv:"OS_DISTRIBUTION" ~doc)
+  in
+  let version =
+    let doc = "Restrict to platforms of this OS version (default: every platform in the cache)" in
+    Arg.(value & opt (some string) None & info [ "os-version" ] ~docv:"OS_VERSION" ~doc)
+  in
+  let arch =
+    let doc = "Restrict to platforms of this architecture (default: every platform in the cache)" in
+    Arg.(value & opt (some string) None & info [ "arch" ] ~docv:"ARCH" ~doc)
+  in
+  (distribution, version, arch)
+
+let cache_info_cmd =
+  let distribution_arg, version_arg, arch_arg = platform_filter_terms in
+  let cache_info_term =
+    Term.(
+      const (fun dir distribution version arch np -> Cache.info ~dir ~distribution ~version ~arch ~np)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term)
+  in
+  let cache_info_info =
+    Cmd.info "cache-info" ~doc:"Report what the cache holds, by platform, age and outcome"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Reports every platform in the cache, broken down by how long ago each layer was last used and by whether it built. Age is time since \
+             last use, not since the layer was created, which is what prune sorts on too.";
+          `P
+            "A layer's size is recorded beside it the first time it is measured, so the first run over an existing cache walks it and later runs do \
+             not. Use --fork to measure in parallel. Directories that cannot be read unprivileged are skipped, which undercounts by whatever is \
+             inside them.";
+        ]
+  in
+  Cmd.v cache_info_info cache_info_term
+
 let prune_cmd =
   let days_arg =
-    let doc = "Keep cache entries from the last $(docv) days; delete older ones." in
+    let doc = "Delete cache entries unused for more than $(docv) days." in
     Arg.(value & opt (some int) None & info [ "days" ] ~docv:"N" ~doc)
   in
   let percent_arg =
-    let doc = "Keep the newest $(docv)% of cache entries; delete the rest." in
+    let doc = "Keep the newest $(docv)% of the cache by size; delete least recently used entries beyond that." in
     Arg.(value & opt (some int) None & info [ "percent" ] ~docv:"N" ~doc)
   in
+  let max_size_arg =
+    let doc = "Delete least recently used entries until the cache is within $(docv), which must carry a unit: 40G, 500M." in
+    Arg.(value & opt (some string) None & info [ "max-size" ] ~docv:"SIZE" ~doc)
+  in
+  let distribution_arg, version_arg, arch_arg = platform_filter_terms in
   let prune_term =
     Term.(
-      const (fun dir arch os os_distribution os_family os_version days percent ->
+      const (fun dir distribution version arch np days percent max_size ->
           let mode =
-            match days, percent with
-            | Some d, None when d >= 0 -> Keep_days d
-            | None, Some p when p >= 0 && p <= 100 -> Keep_percent p
-            | Some _, Some _ ->
-                OpamConsole.error "--days and --percent are mutually exclusive";
+            match days, percent, max_size with
+            | Some d, None, None when d >= 0 -> Cache.Keep_days d
+            | None, Some p, None when p >= 0 && p <= 100 -> Cache.Keep_percent p
+            | None, None, Some size -> (
+                match Cache.size_of_string size with
+                | Some bytes when bytes >= 0 -> Cache.Max_size bytes
+                | _ ->
+                    OpamConsole.error "--max-size wants a size with a unit, such as 40G or 500M, not %S" size;
+                    exit 1)
+            | None, None, None ->
+                OpamConsole.error "Specify one of --days N, --percent N or --max-size SIZE";
                 exit 1
-            | None, None ->
-                OpamConsole.error "Specify one of --days N or --percent N";
-                exit 1
-            | Some _, None ->
+            | Some _, None, None ->
                 OpamConsole.error "--days must be >= 0";
                 exit 1
-            | None, Some _ ->
+            | None, Some _, None ->
                 OpamConsole.error "--percent must be between 0 and 100";
                 exit 1
+            | _ ->
+                OpamConsole.error "--days, --percent and --max-size are mutually exclusive";
+                exit 1
           in
-          run_prune
-            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false }
-            mode)
-      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ days_arg $ percent_arg)
+          Cache.prune ~dir ~distribution ~version ~arch ?np mode)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg)
   in
-  let prune_info = Cmd.info "prune" ~doc:"Prune cache entries by age (--days) or by count (--percent)" in
+  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries by age (--days), by count (--percent) or to fit a size (--max-size)" in
   Cmd.v prune_info prune_term
 
 let list_cmd =
@@ -1081,5 +1077,5 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; prune_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; cache_info_cmd; prune_cmd ] in
   exit (Cleanup.main (fun () -> Cmd.eval ~catch:false cmd))

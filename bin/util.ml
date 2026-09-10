@@ -43,6 +43,42 @@ let save_layer_info name pkg deps hashes rc =
          ("created", `Float (Unix.time ()));
        ])
 
+(* A layer records its own size so that reporting on the cache does not mean
+   walking all of it again.  The file sits beside layer.json rather than in it:
+   layer.json's mtime is when the layer was last used, which is what prune
+   sorts on, and rewriting that file would reset it. *)
+let size_file dir = Path.(dir / "size")
+
+let load_layer_size dir =
+  match Os.read_from_file (size_file dir) with
+  | s -> int_of_string_opt (String.trim s)
+  | exception _ -> None
+
+(* Best effort: a size that cannot be recorded is measured again next time,
+   which is slow rather than wrong, and a cache gone read-only should not stop
+   a build. *)
+let save_layer_size dir size =
+  try Os.write_to_file (size_file dir) (string_of_int size) with
+  | _ -> ()
+
+let layer_size dir =
+  match load_layer_size dir with
+  | Some size -> size
+  | None ->
+      let size = Os.tree_size dir in
+      save_layer_size dir size;
+      size
+
+(* Measuring a layer means walking it, so measure the ones with no recorded
+   size in parallel.  Each child writes its own file, which is how the result
+   reaches the parent -- a forked child cannot return anything. *)
+let warm_layer_sizes ?np dirs =
+  match List.filter (fun dir -> Option.is_none (load_layer_size dir)) dirs with
+  | [] -> 0
+  | missing ->
+      Os.fork ?np (fun dir -> ignore (layer_size dir)) missing;
+      List.length missing
+
 let load_layer_info_exit_status name =
   let json = Yojson.Safe.from_file name in
   Yojson.Safe.Util.(json |> member "exit_status" |> to_int)

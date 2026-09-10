@@ -228,6 +228,38 @@ let fork ?np f lst =
     IntSet.empty lst
   |> IntSet.iter (fun pid -> ignore (Unix.waitpid [] pid))
 
+(* Bytes a tree occupies.  Unix.stats has no st_blocks, so each file is rounded
+   up to a block the way the filesystem allocates it and a directory counts as
+   one; the answer is close to du rather than equal to it.  A hardlinked file is
+   counted once, as du does.  Directories that cannot be read are skipped: the
+   container leaves a few root-only ones such as /var/cache/ldconfig behind, so
+   running unprivileged undercounts by whatever is inside them. *)
+let tree_size path =
+  let block = 4096 in
+  let allocated n = (n + block - 1) / block * block in
+  let seen = Hashtbl.create 64 in
+  let rec walk path =
+    match Unix.lstat path with
+    | exception Unix.Unix_error _ -> 0
+    | stat -> (
+        match stat.st_kind with
+        | Unix.S_DIR ->
+            let entries =
+              match Sys.readdir path with
+              | entries -> entries
+              | exception Sys_error _ -> [||]
+            in
+            Array.fold_left (fun acc entry -> acc + walk (Filename.concat path entry)) block entries
+        | Unix.S_REG ->
+            let key = (stat.st_dev, stat.st_ino) in
+            if stat.st_nlink > 1 && Hashtbl.mem seen key then 0
+            else (
+              if stat.st_nlink > 1 then Hashtbl.add seen key ();
+              allocated stat.st_size)
+        | _ -> 0)
+  in
+  walk path
+
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
