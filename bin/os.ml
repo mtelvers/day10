@@ -260,14 +260,24 @@ let tree_size path =
   in
   walk path
 
+(* Returns whether this call was the one that wrote the directory.  A second
+   process asking for the same directory waits here and comes back having
+   written nothing, which is not something it can tell by looking: by then the
+   directory exists either way. *)
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
   Unix.lockf lock_fd F_LOCK 0;
-  if not (Sys.file_exists dir_name) then write_function dir_name;
+  let wrote =
+    if Sys.file_exists dir_name then false
+    else (
+      write_function dir_name;
+      true)
+  in
   Unix.close lock_fd;
-  try Unix.unlink lock_file with
-  | _ -> ()
+  (try Unix.unlink lock_file with
+  | _ -> ());
+  wrote
 
 exception Copy_error of string
 

@@ -43,7 +43,7 @@ let init t =
   let () = Os.mkdir ~parents:true os_dir in
   let root = Path.(os_dir / "base") in
   if not (Sys.file_exists root) then
-    Os.create_directory_exclusively root @@ fun target_dir ->
+    ignore @@ Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
     let opam_repository = Util.create_opam_repository temp_dir in
@@ -325,11 +325,12 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
      this build, so say which under --log.  Between them the two notes list
      everything used, built or not.  --markdown and --json still record every
      layer's log in full for a post mortem. *)
-  let cached = Sys.file_exists layer_dir in
-  let () =
-    if not cached then Os.create_directory_exclusively layer_dir write_layer
-    else if config.log then OpamConsole.note "Using %s" (OpamPackage.to_string pkg)
-  in
+  (* Whether this process built the layer, which is not the same as whether it
+     was missing when we looked: a job wanting a layer another job is already
+     building waits inside create_directory_exclusively and returns having
+     built nothing. *)
+  let built = if Sys.file_exists layer_dir then false else Os.create_directory_exclusively layer_dir write_layer in
+  let () = if (not built) && config.log then OpamConsole.note "Using %s" (OpamPackage.to_string pkg) in
   let () = Unix.utimes layer_json 0.0 0.0 in
   let exit_status = Util.load_layer_info_exit_status layer_json in
   match exit_status with
@@ -340,7 +341,7 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
          system package, say -- so it has to be there even when the layer failed
          weeks ago and all we are reporting is the cached verdict.  Streaming
          has already shown it if we built it just now. *)
-      let streamed = (not cached) && config.log in
+      let streamed = built && config.log in
       if not streamed then OpamConsole.error "%s failed:\n%s" (OpamPackage.to_string pkg) (Os.read_from_file Path.(layer_dir / "build.log"));
       (* A failure the maintainer has already declared expected here.  day10
          knows which platform was asked for, so it does the matching and emits

@@ -31,7 +31,7 @@ let create_layer ~oci_dir ~layer_dir =
   let fs_dir = Path.(layer_dir / "fs") in
   let oci_cache = Path.(layer_dir / "oci") in
   if not (Sys.file_exists oci_cache) then
-    Os.create_directory_exclusively oci_cache (fun target_dir ->
+    ignore @@ Os.create_directory_exclusively oci_cache (fun target_dir ->
         let temp_dir = Filename.temp_dir ~temp_dir:(Filename.dirname layer_dir) ~perms:0o755 "oci-" "" in
         let temp_fs = Path.(temp_dir / "fs") in
         let temp_tar = Path.(temp_dir / "layer.tar") in
