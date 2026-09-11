@@ -267,17 +267,23 @@ let tree_size path =
 let create_directory_exclusively dir_name write_function =
   let lock_file = dir_name ^ ".lock" in
   let lock_fd = Unix.openfile lock_file [ O_CREAT; O_WRONLY ] 0o644 in
-  Unix.lockf lock_fd F_LOCK 0;
-  let wrote =
-    if Sys.file_exists dir_name then false
-    else (
-      write_function dir_name;
-      true)
-  in
-  Unix.close lock_fd;
-  (try Unix.unlink lock_file with
-  | _ -> ());
-  wrote
+  Fun.protect
+    ~finally:(fun () ->
+      (* Closing is what releases the lock, so it has to happen however we
+         leave -- a build that raises or is interrupted would otherwise hold it
+         until the process died, and leave the lock file behind.  Neither step
+         may raise: a finaliser that does becomes Finally_raised and loses the
+         reason we are unwinding for. *)
+      (try Unix.close lock_fd with
+      | _ -> ());
+      try Unix.unlink lock_file with
+      | _ -> ())
+    (fun () ->
+      Unix.lockf lock_fd F_LOCK 0;
+      if Sys.file_exists dir_name then false
+      else (
+        write_function dir_name;
+        true))
 
 exception Copy_error of string
 
