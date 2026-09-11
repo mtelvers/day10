@@ -26,7 +26,7 @@
   dune
   ppx_deriving_yojson
   opam-0install
-  cmdliner
+  (cmdliner (>= 2.0.0))
   dockerfile
   dockerfile-opam
   ocaml-version
