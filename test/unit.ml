@@ -1,8 +1,9 @@
 open Day10
 
-(* Assertions over the parts of day10 that need neither a container nor a
-   repository: the layer lock, tree sizes, size parsing and formatting, platform
-   selection, the layer hash, the accept-failures field and the dpkg merge.
+(* Assertions over the parts of day10 that need no container: the layer lock,
+   tree sizes, size parsing and formatting, platform selection, the layer hash,
+   the command each backend runs, reading a git-backed repository, the
+   accept-failures field and the dpkg merge.
 
    Several of these guard a bug that has already been fixed once, and say so
    where it is not obvious what the assertion is for. *)
@@ -206,6 +207,48 @@ x-ci-accept-failures: "archlinux"
 |}) = [ "archlinux" ]
   && Util.accept_failures (opam_of_string {|opam-version: "2.0"|}) = []
 
+let git dir args = ignore (Os.capture "git" ([ "-C"; dir ] @ args))
+let rev_parse dir name = String.trim (Os.capture "git" [ "-C"; dir; "rev-parse"; name ])
+
+(* A one-package repository in git, the package carrying a patch in files/. *)
+let git_fixture () =
+  let dir = Filename.concat (scratch ()) "repo" in
+  let pkg_dir = Filename.concat dir "packages/p/p.1.0" in
+  let () = Os.mkdir ~parents:true (Filename.concat pkg_dir "files") in
+  let () = Os.write_to_file (Filename.concat dir "repo") "opam-version: \"2.0\"\n" in
+  let () = Os.write_to_file (Filename.concat pkg_dir "opam") "opam-version: \"2.0\"\npatches: [ \"fix.patch\" ]\n" in
+  let () = Os.write_to_file (Filename.concat pkg_dir "files/fix.patch") "the patch\n" in
+  (* The identity comes through the environment rather than git -c so the
+     fixture does not depend on what is configured, and the commit skips hooks:
+     a throwaway repository under /tmp is not what a policy on authorship is
+     for, and a global hooksPath would otherwise reach it. *)
+  let () = List.iter (fun (k, v) -> Unix.putenv k v) [ ("GIT_AUTHOR_NAME", "day10 test"); ("GIT_AUTHOR_EMAIL", "test@day10.invalid"); ("GIT_COMMITTER_NAME", "day10 test"); ("GIT_COMMITTER_EMAIL", "test@day10.invalid") ] in
+  let () = git dir [ "init"; "-q" ] in
+  let () = git dir [ "add"; "-A" ] in
+  let () = git dir [ "commit"; "-q"; "--no-verify"; "-m"; "fixture" ] in
+  let () = git dir [ "tag"; "fixture-tag" ] in
+  dir
+
+(* A git-backed repository is read out of the tree rather than the working copy,
+   and a package's files/ has to come with it: patches named in the opam file
+   are applied from there, so losing them fails the build in a way that reads as
+   a fault in the package. *)
+let git_repo_keeps_files () =
+  let dir = git_fixture () in
+  let repo = Repo.create [ Repo.parse_source (dir ^ ":" ^ rev_parse dir "HEAD") ] in
+  let dest = scratch () in
+  let () = Repo.materialise repo [ OpamPackage.of_string "p.1.0" ] ~dest in
+  let patch = Filename.concat dest "packages/p/p.1.0/files/fix.patch" in
+  Sys.file_exists patch && String.equal (Os.read_from_file patch) "the patch\n"
+
+(* A revision may be a commit, a tag or a tree, since a caller hands over
+   whichever of those it happens to hold. *)
+let any_treeish_resolves () =
+  let dir = git_fixture () in
+  let pkg = OpamPackage.of_string "p.1.0" in
+  [ rev_parse dir "HEAD"; "fixture-tag"; rev_parse dir "HEAD^{tree}" ]
+  |> List.for_all (fun rev -> Repo.opam (Repo.create [ Repo.parse_source (dir ^ ":" ^ rev) ]) pkg <> None)
+
 (* Merging layers keeps the first copy of a path, so without this only one
    layer's dpkg status survived and every depext the others installed looked
    uninstalled. *)
@@ -236,6 +279,8 @@ let checks =
     ("with-test reaches only the target", with_test_reaches_only_the_target);
     ("a local package is pinned", a_local_package_is_pinned);
     ("accept-failures is read", accept_failures_is_read);
+    ("git repo keeps files", git_repo_keeps_files);
+    ("any treeish resolves", any_treeish_resolves);
     ("dpkg status merges", dpkg_status_merges);
   ]
 
