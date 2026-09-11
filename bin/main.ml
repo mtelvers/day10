@@ -1,3 +1,7 @@
+(* The modules this drives are a library, so that they can be tested without
+   being copied into a test executable one at a time. *)
+open Day10
+
 module Solver = Opam_0install.Solver.Make (Repo_context)
 module Input = Solver.Input
 module Output = Solver.Solver.Output

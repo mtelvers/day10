@@ -1,3 +1,5 @@
+open Day10
+
 (* Print the Dockerfile day10 would build for a distribution, so that changes to
    the generator show up as a diff in the expected output rather than silently
    altering the images.  The architecture defaults to x86_64 so that the checked

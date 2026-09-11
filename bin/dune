@@ -1,6 +1,23 @@
-(executable
- (public_name day10)
- (name main)
+; Everything but main is a library so that the tests can reach it directly.
+; Copying modules into a test executable one at a time stops being workable as
+; soon as a module has more than a couple of dependencies: testing the command
+; that linux.ml builds would have meant copying half of this directory.
+;
+; Private -- no public_name -- so the tests may use it while the opam package
+; publishes only the executable and commits to no API.
+;
+; Wrapped, which is the default, because these module names are far too generic
+; to put in a global namespace: Cache, Config, Os, Path, Repo, S, Util.
+
+(library
+ (name day10)
+ (modules :standard \ main)
  (libraries opam-0install yojson ppx_deriving_yojson.runtime cmdliner dockerfile dockerfile-opam ocaml-version tar)
  (preprocess
   (pps ppx_deriving_yojson)))
+
+(executable
+ (public_name day10)
+ (name main)
+ (modules main)
+ (libraries day10 opam-0install yojson cmdliner))
