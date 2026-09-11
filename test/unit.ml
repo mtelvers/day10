@@ -148,6 +148,55 @@ let hash_separates_the_flags () =
   && plain <> Util.layer_hash ~with_doc:true [ opam ]
   && Util.layer_hash ~with_test:true [ opam ] <> Util.layer_hash ~with_doc:true [ opam ]
 
+(* A Config.t with only the fields these checks turn on set away from their
+   defaults. *)
+let config ?(with_test = false) ?(package = "a.1.0") ?(local_packages = []) () =
+  {
+    Config.dir = "";
+    ocaml_version = OpamPackage.of_string "ocaml.5.4.1";
+    opam_repositories = [];
+    package;
+    arch = "x86_64";
+    os = "linux";
+    os_distribution = "debian";
+    os_family = "debian";
+    os_version = "13";
+    directory = None;
+    md = None;
+    json = None;
+    dot = None;
+    with_test;
+    with_doc = false;
+    tag = None;
+    oci = None;
+    log = false;
+    dry_run = false;
+    fork = None;
+    build_command = None;
+    local_packages;
+    prefer_oldest = false;
+    update_invariant = false;
+  }
+
+let commands config pkg = Build_command.for_package ~config ~opam_build:"opam-build" (OpamPackage.of_string pkg)
+
+(* Asking for tests applies to the package under test and to nothing else.  This
+   went wrong in both directions at once: the flag never reached the Linux build
+   at all, while the Windows backend passed it for every package in the
+   solution, dependencies included. *)
+let with_test_reaches_only_the_target () =
+  let asked = config ~with_test:true () in
+  commands asked "a.1.0" = [ "opam-build -v --with-test a.1.0" ]
+  && commands asked "b.2.0" = [ "opam-build -v b.2.0" ]
+  && commands (config ()) "a.1.0" = [ "opam-build -v a.1.0" ]
+
+(* A package of the project's own is pinned to the sources first, and counts as
+   a target even though the version is not the one named on the command line. *)
+let a_local_package_is_pinned () =
+  let mine = config ~with_test:true ~package:"mine" ~local_packages:[ "mine" ] () in
+  commands mine "mine.dev" = [ "opam pin -yn mine.dev $HOME/src/"; "cd src"; "opam-build -v --with-test mine.dev" ]
+  && commands mine "b.2.0" = [ "opam-build -v b.2.0" ]
+
 let accept_failures_is_read () =
   Util.accept_failures (opam_of_string {|opam-version: "2.0"
 x-ci-accept-failures: ["debian-11" "ubuntu-24.04"]
@@ -184,6 +233,8 @@ let checks =
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("hash separates the flags", hash_separates_the_flags);
+    ("with-test reaches only the target", with_test_reaches_only_the_target);
+    ("a local package is pinned", a_local_package_is_pinned);
     ("accept-failures is read", accept_failures_is_read);
     ("dpkg status merges", dpkg_status_merges);
   ]

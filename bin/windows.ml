@@ -97,9 +97,6 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let os_key = Config.os_key ~config in
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
-  let is_target = Config.is_target_package ~config pkg in
-  let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-  let with_test = if config.with_test && is_target then "--with-test " else "" in
   let argv =
     [
       "cmd";
@@ -109,8 +106,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
            "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
            "opam option sys-pkg-manager-cmd";
          ]
-        @ pin
-        @ [ "c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe -v " ^ with_test ^ OpamPackage.to_string pkg ]);
+        @ Build_command.for_package ~config ~opam_build:("c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe") pkg);
     ]
   in
   let sources = ordered_hashes @ [ "base" ] in

@@ -1,0 +1,19 @@
+(* The commands that build one package inside the container.
+
+   Shared by the backends because the decisions here were previously made in
+   three places, and a change to them was once applied to only one: --with-test
+   reached the Linux build but not FreeBSD's, and Windows passed it for every
+   package rather than the one under test. *)
+
+(* [opam_build] is how the driver is invoked, which differs per platform: on
+   the path for Linux and FreeBSD, an explicit path under the user's profile on
+   Windows. *)
+let for_package ~(config : Config.t) ~opam_build pkg =
+  let name = OpamPackage.to_string pkg in
+  (* A package built from the project's own sources has to be pinned to them
+     first, and the build run from there. *)
+  let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ name ^ " $HOME/src/"; "cd src" ] else [] in
+  (* Tests are asked for the package under test, not for the things it depends
+     on: a dependency is built the same way either way. *)
+  let with_test = if config.with_test && Config.is_target_package ~config pkg then "--with-test " else "" in
+  pin @ [ opam_build ^ " -v " ^ with_test ^ name ]

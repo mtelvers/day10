@@ -230,11 +230,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let argv =
     match config.build_command with
     | Some build_cmd -> [ "cd src"; build_cmd ]
-    | None ->
-        let is_target = Config.is_target_package ~config pkg in
-        let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ OpamPackage.to_string pkg ^ " $HOME/src/"; "cd src" ] else [] in
-        let with_test = if config.with_test && is_target then "--with-test " else "" in
-        pin @ [ "opam-build -v " ^ with_test ^ OpamPackage.to_string pkg ]
+    | None -> Build_command.for_package ~config ~opam_build:"opam-build" pkg
   in
   let () =
     List.iter
