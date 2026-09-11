@@ -48,4 +48,6 @@ let dockerfile ~(dist : Dist.t) ~arch ~base_image ~uid ~gid =
   @@ copy ~chown:(string_of_int uid ^ ":" ^ string_of_int gid) ~src:[ "opam-repository" ] ~dst:"/home/opam/opam-repository" ()
   @@ user "%i:%i" uid gid @@ workdir "/home/opam"
   @@ run "opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y"
+  (* Fall back to opam's cache when a package's upstream sources are gone. *)
+  @@ run "%s" {|echo 'archive-mirrors: "https://opam.ocaml.org/cache"' >> /home/opam/.opam/config|}
   @@ run "opam switch create default --empty"

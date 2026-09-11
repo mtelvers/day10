@@ -32,4 +32,5 @@ COPY --chown=1000:1000 [ "opam-repository", "/home/opam/opam-repository" ]
 USER 1000:1000
 WORKDIR /home/opam
 RUN opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y
+RUN echo 'archive-mirrors: "https://opam.ocaml.org/cache"' >> /home/opam/.opam/config
 RUN opam switch create default --empty
