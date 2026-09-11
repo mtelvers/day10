@@ -21,6 +21,17 @@
 ; The command line itself, driven against fixture caches and repositories.
 
 (cram
+ (applies_to cache solver project)
+ (deps %{bin:day10}))
+
+; Tests that drive a real container.  Held out of runtest because they need
+; runc, sudo, a base image and a warm cache: run them with dune build @container
+; on a builder that has them.
+
+(cram
+ (applies_to container)
+ (alias container)
+ (runtest_alias false)
  (deps %{bin:day10}))
 
 (rule
