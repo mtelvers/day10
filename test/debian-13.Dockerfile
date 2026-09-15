@@ -23,8 +23,8 @@ COPY --from=opam-build-builder [ "/usr/local/bin/opam-build", "/usr/local/bin/op
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi
 RUN groupadd --gid 1000 opam
-RUN adduser --disabled-password --gecos '@opam' --no-create-home --uid 1000 --gid 1000 --home /home/opam opam
-RUN mkdir -p /home/opam && chown -R 1000:1000 /home/opam
+RUN useradd --uid 1000 --gid 1000 --home-dir /home/opam --create-home --shell /bin/bash opam
+RUN chown -R 1000:1000 /home/opam
 RUN echo 'opam ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opam
 RUN chmod 440 /etc/sudoers.d/opam
 RUN chown root:root /etc/sudoers.d/opam

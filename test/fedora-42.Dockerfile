@@ -1,12 +1,12 @@
 FROM --platform=linux/amd64 fedora:42 AS opam-builder
-RUN yum makecache && yum install -y gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel
+RUN yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel
 RUN git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam
 WORKDIR /tmp/opam
 RUN make cold
 RUN make install
 
 FROM --platform=linux/amd64 fedora:42 AS opam-build-builder
-RUN yum makecache && yum install -y gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap
+RUN yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
 ADD [ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master", "/tmp/opam-build.ref" ]
@@ -17,7 +17,7 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build
 
 FROM --platform=linux/amd64 fedora:42
-RUN yum makecache && yum update -y && yum install -y gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap
+RUN yum makecache && yum update -y && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=opam-build-builder [ "/usr/local/bin/opam-build", "/usr/local/bin/opam-build" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi

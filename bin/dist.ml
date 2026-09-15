@@ -45,20 +45,16 @@ let apt =
     deps_opam_build = "build-essential git curl unzip bubblewrap";
     deps_runtime = "build-essential unzip bubblewrap git sudo curl rsync";
     noninteractive = run "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections";
-    add_user =
-      (fun ~uid ~gid ->
-        run "if getent passwd %i; then userdel -r $(id -nu %i); fi" uid uid
-        @@ run "groupadd --gid %i opam" gid
-        @@ run "adduser --disabled-password --gecos '@opam' --no-create-home --uid %i --gid %i --home /home/opam opam" uid gid
-        @@ run "mkdir -p /home/opam && chown -R %i:%i /home/opam" uid gid
-        @@ sudoers);
+    add_user = useradd;
   }
 
 let yum =
   {
     update = "yum makecache";
     upgrade = "yum update -y";
-    install = (fun packages -> "yum install -y " ^ packages);
+    (* --allowerasing so a package may replace one the image already has:
+       RHEL 9 ships curl-minimal, which conflicts with curl. *)
+    install = (fun packages -> "yum install -y --allowerasing " ^ packages);
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
     deps_opam_build = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
