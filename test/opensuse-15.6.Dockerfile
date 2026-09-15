@@ -1,5 +1,5 @@
 FROM --platform=linux/amd64 opensuse/leap:15.6 AS opam-builder
-RUN zypper refresh && zypper install -y gcc make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip
+RUN zypper refresh && zypper install -y gcc gcc-c++ make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip
 RUN git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam
 WORKDIR /tmp/opam
 RUN make cold
