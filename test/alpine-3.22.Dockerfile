@@ -1,5 +1,5 @@
 FROM --platform=linux/amd64 alpine:3.22 AS opam-builder
-RUN apk update && apk add build-base patch unzip bzip2 tar git curl sudo linux-headers libcap-dev
+RUN apk update && apk add build-base patch unzip bzip2 tar git curl openssl sudo linux-headers libcap-dev
 RUN git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam
 WORKDIR /tmp/opam
 RUN make cold

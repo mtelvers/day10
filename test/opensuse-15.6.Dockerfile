@@ -6,7 +6,7 @@ RUN make cold
 RUN make install
 
 FROM --platform=linux/amd64 opensuse/leap:15.6 AS opam-build-builder
-RUN zypper refresh && zypper install -y gcc make patch unzip bzip2 tar git curl diffutils findutils gzip
+RUN zypper refresh && zypper install -y gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
 ADD [ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master", "/tmp/opam-build.ref" ]
