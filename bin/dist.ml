@@ -61,7 +61,7 @@ let yum =
     install = (fun packages -> "yum install -y " ^ packages);
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel";
     deps_opam_build = "gcc make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
-    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl sudo rsync diffutils findutils m4 gawk which bubblewrap";
+    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
     noninteractive = empty;
     add_user = useradd;
   }
@@ -92,7 +92,7 @@ let zypper =
     install = (fun packages -> "zypper install -y " ^ packages);
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip";
     deps_opam_build = "gcc make patch unzip bzip2 tar git curl diffutils findutils gzip";
-    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl sudo rsync diffutils findutils m4 gawk which gzip";
+    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip";
     noninteractive = empty;
     add_user = useradd;
   }
