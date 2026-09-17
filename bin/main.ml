@@ -204,10 +204,27 @@ let solve ~repo (config : Config.t) root_packages =
         OpamPackage.Set.fold
           (fun pkg acc ->
             let opam = Repo_context.load context pkg in
-            let deps = OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula (opam_env ~config pkg) in
-            let with_post = OpamFilter.filter_deps ~build:true ~post:true deps |> OpamFormula.all_names in
-            let without_post = OpamFilter.filter_deps ~build:true ~post:false deps |> OpamFormula.all_names in
-            let deppost = OpamPackage.Name.Set.diff with_post without_post in
+            (* The names this package depends on, as the environment resolves
+               them.  [tests:false] asks the same question with with-test turned
+               off, whatever the caller requested. *)
+            let depends_names ~tests ~post =
+              let env v =
+                if (not tests) && String.equal (OpamVariable.Full.to_string v) "with-test" then Some (OpamTypes.B false) else opam_env ~config pkg v
+              in
+              OpamFile.OPAM.depends opam |> OpamFilter.partial_filter_formula env |> OpamFilter.filter_deps ~build:true ~post |> OpamFormula.all_names
+            in
+            let reached_only_through_post =
+              OpamPackage.Name.Set.diff (depends_names ~tests:true ~post:true) (depends_names ~tests:true ~post:false)
+            in
+            let there_only_for_tests = OpamPackage.Name.Set.diff (depends_names ~tests:true ~post:true) (depends_names ~tests:false ~post:true) in
+            (* A post dependency must not become an ordering edge: that is what
+               post is for, and what lets a cycle through one resolve at all.
+               But with-test trumps post -- a dependency that is there only
+               because tests were asked for has to be in the switch that runs
+               them, so it is kept.  Written {with-test & post} by melange,
+               ocamlformat, printbox-text and re, and by nothing else in
+               opam-repository. *)
+            let deppost = OpamPackage.Name.Set.diff reached_only_through_post there_only_for_tests in
             let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
             let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
             let name = OpamPackage.name pkg in

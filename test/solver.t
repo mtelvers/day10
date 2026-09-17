@@ -87,7 +87,9 @@ called uninstallable, which is what opam does.  This needs the second pass.
   [NOTE] solution
 
 A package that depends on nothing still appears, or a solution of one package
-would be an empty graph.
+would be an empty graph.  ocaml is solved for as well, but does not show up
+here: the solution holds what the requested package reaches, not everything the
+solver resolved.
 
   $ solve --ocaml-version ocaml.5.4.1 b.1.0
   digraph opam {
@@ -124,6 +126,112 @@ version that was asked for, so passing the flag on every job is safe.
   $ solve --ocaml-version ocaml.5.4.1 --update-invariant a.1.0
   digraph opam {
     "a.1.0" -> "b.2.0";
+  }
+  
+  [NOTE] solution
+
+A post dependency is required but does not constrain build order.  It is
+therefore not an ordering edge, and a package reached only through one does not
+appear in the solution at all.
+
+  $ pkg plain-post 1.0
+  $ pkg needs-post 1.0 'depends: [ "b" "plain-post" {post} ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 needs-post.1.0
+  digraph opam {
+    "needs-post.1.0" -> "b.2.0";
+  }
+  
+  [NOTE] solution
+
+That exclusion is what lets a cycle through a post dependency resolve, which is
+what post is for: without it the ordering has no starting point.
+
+  $ pkg cyc-a 1.0 'depends: [ "cyc-b" ]'
+  $ pkg cyc-b 1.0 'depends: [ "cyc-a" {post} ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 cyc-a.1.0
+  digraph opam {
+    "cyc-a.1.0" -> "cyc-b.1.0";
+  }
+  
+  [NOTE] solution
+
+But with-test trumps post.  A dependency that is only there because tests were
+asked for has to be in the switch that runs them, so it is kept as an ordinary
+dependency -- absent when tests are not requested, an ordering edge when they
+are.  melange, ocamlformat, printbox-text and re write this.
+
+  $ pkg tester 1.0
+  $ pkg test-post 1.0 'depends: [ "b" "tester" {with-test & post} ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 test-post.1.0
+  digraph opam {
+    "test-post.1.0" -> "b.2.0";
+  }
+  
+  [NOTE] solution
+
+  $ solve --ocaml-version ocaml.5.4.1 --with-test test-post.1.0
+  digraph opam {
+    "test-post.1.0" -> {"b.2.0" "tester.1.0"}
+  }
+  
+  [NOTE] solution
+
+An optional dependency is an edge only when the solver included it anyway.  Here
+one package reaches it through an ordinary dependency, so the package that
+merely lists it as optional gains an edge to it too.
+
+  $ pkg optional-extra 1.0
+  $ pkg mid 1.0 'depends: [ "optional-extra" ]'
+  $ pkg uses-depopt 1.0 'depends: [ "mid" ]' 'depopts: [ "optional-extra" ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 uses-depopt.1.0
+  digraph opam {
+    "mid.1.0" -> "optional-extra.1.0";
+    "uses-depopt.1.0" -> {"mid.1.0" "optional-extra.1.0"}
+  }
+  
+  [NOTE] solution
+
+Nothing pulls it in here, so it stays out and the optional dependency is not an
+edge at all.
+
+  $ pkg ignores-depopt 1.0 'depends: [ "b" ]' 'depopts: [ "optional-extra" ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 ignores-depopt.1.0
+  digraph opam {
+    "ignores-depopt.1.0" -> "b.2.0";
+  }
+  
+  [NOTE] solution
+
+An ordinary test dependency appears only when tests are asked for, and then for
+the package under test alone -- never for something it depends on.
+
+  $ pkg only-for-tests 1.0
+  $ pkg has-tests 1.0 'depends: [ "b" "only-for-tests" {with-test} ]'
+  $ pkg needs-tested 1.0 'depends: [ "has-tests" ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 has-tests.1.0
+  digraph opam {
+    "has-tests.1.0" -> "b.2.0";
+  }
+  
+  [NOTE] solution
+
+  $ solve --ocaml-version ocaml.5.4.1 --with-test has-tests.1.0
+  digraph opam {
+    "has-tests.1.0" -> {"b.2.0" "only-for-tests.1.0"}
+  }
+  
+  [NOTE] solution
+
+  $ solve --ocaml-version ocaml.5.4.1 --with-test needs-tested.1.0
+  digraph opam {
+    "has-tests.1.0" -> "b.2.0";
+    "needs-tested.1.0" -> "has-tests.1.0";
   }
   
   [NOTE] solution
