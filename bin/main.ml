@@ -867,10 +867,9 @@ let build_cmd =
   let build_term =
     Term.(
       const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant ->
-          let cmd = String.concat " " ([ "opam"; "exec"; "--"; "dune"; "build" ] @ List.map Filename.quote dune_extra) in
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some cmd)))
+               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some (Build_command.dune ~only_packages dune_extra))))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
       $ prefer_oldest_term $ update_invariant_term)
   in

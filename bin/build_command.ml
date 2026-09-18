@@ -1,4 +1,4 @@
-(* The commands that build one package inside the container.
+(* The commands day10 builds to run inside the container.
 
    Shared by the backends because the decisions here were previously made in
    three places, and a change to them was once applied to only one: --with-test
@@ -17,3 +17,12 @@ let for_package ~(config : Config.t) ~opam_build pkg =
      on: a dependency is built the same way either way. *)
   let with_test = if config.with_test && Config.is_target_package ~config pkg then "--with-test " else "" in
   pin @ [ opam_build ^ " -v " ^ with_test ^ name ]
+
+(* The dune invocation that [day10 build] stands for.  Packages the caller named
+   are passed on to dune, not merely used to decide what to solve for: dune
+   builds every package in the workspace unless told otherwise, and the ones
+   left out were never solved for, so it would build them anyway and fail for
+   want of their dependencies. *)
+let dune ~only_packages args =
+  let only = match only_packages with [] -> [] | packages -> [ "--only-packages"; String.concat "," packages ] in
+  String.concat " " ([ "opam"; "exec"; "--"; "dune"; "build" ] @ only @ List.map Filename.quote args)

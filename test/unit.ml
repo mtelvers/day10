@@ -198,6 +198,14 @@ let a_local_package_is_pinned () =
   commands mine "mine.dev" = [ "opam pin -yn mine.dev $HOME/src/"; "cd src"; "opam-build -v --with-test mine.dev" ]
   && commands mine "b.2.0" = [ "opam-build -v b.2.0" ]
 
+(* Naming the packages has to reach dune, not just the solver: dune builds every
+   package in the workspace otherwise, including ones that were left out and so
+   never solved for. *)
+let only_packages_reaches_dune () =
+  Build_command.dune ~only_packages:[] [ "@runtest" ] = "opam exec -- dune build '@runtest'"
+  && Build_command.dune ~only_packages:[ "a" ] [] = "opam exec -- dune build --only-packages a"
+  && Build_command.dune ~only_packages:[ "a"; "b" ] [ "@install" ] = "opam exec -- dune build --only-packages a,b '@install'"
+
 let accept_failures_is_read () =
   Util.accept_failures (opam_of_string {|opam-version: "2.0"
 x-ci-accept-failures: ["debian-11" "ubuntu-24.04"]
@@ -278,6 +286,7 @@ let checks =
     ("hash separates the flags", hash_separates_the_flags);
     ("with-test reaches only the target", with_test_reaches_only_the_target);
     ("a local package is pinned", a_local_package_is_pinned);
+    ("only-packages reaches dune", only_packages_reaches_dune);
     ("accept-failures is read", accept_failures_is_read);
     ("git repo keeps files", git_repo_keeps_files);
     ("any treeish resolves", any_treeish_resolves);
