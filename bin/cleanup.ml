@@ -18,8 +18,14 @@ type t =
 exception Killed of int
 
 (* Sys.sigint and friends are OCaml's own numbering, which is negative and no
-   use for reporting, so pair each with the number the shell knows it by. *)
-let signals = [ (Sys.sigint, 2); (Sys.sighup, 1); (Sys.sigterm, 15) ]
+   use for reporting, so pair each with the number the shell knows it by.
+
+   SIGPIPE among them because day10 writes its progress to stdout, and piping
+   that into head or less closes the pipe as soon as the reader has had enough.
+   Its default action is to kill the process, which skips every finaliser and
+   can leave an overlay mounted and a container running -- an ordinary thing for
+   an operator to cause by accident. *)
+let signals = [ (Sys.sigint, 2); (Sys.sighup, 1); (Sys.sigterm, 15); (Sys.sigpipe, 13) ]
 
 (* Releasing must not itself be interrupted.  It waits for children of its own,
    which is a safe point where a pending signal would raise, and a finaliser
