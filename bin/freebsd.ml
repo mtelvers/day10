@@ -281,3 +281,5 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
   result
+
+let refresh ~t:_ ~temp_dir:_ _log = failwith "refresh-base is implemented for Linux only, not FreeBSD"

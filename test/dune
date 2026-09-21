@@ -21,7 +21,7 @@
 ; The command line itself, driven against fixture caches and repositories.
 
 (cram
- (applies_to cache solver project)
+ (applies_to cache solver project refresh)
  (deps %{bin:day10}))
 
 ; Tests that drive a real container.  Held out of runtest because they need

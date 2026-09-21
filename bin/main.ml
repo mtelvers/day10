@@ -627,6 +627,55 @@ let run_build (config : Config.t) =
   in
   exit exit_code
 
+(* Bring the base image's package index up to date without rebuilding the base.
+   A stale index is what makes a depext install fetch a version the mirror has
+   withdrawn, which reads as a 404 and looks like the package's fault.
+
+   [max_age] makes this safe to call on every idle window: it is a no-op unless
+   the index is older than that.  The caller decides when -- an ocluster worker
+   knows when it is idle and can pause -- and day10 knows how. *)
+let run_refresh_base (config : Config.t) max_age =
+  let base = Path.(config.dir / Config.os_key ~config / "base") in
+  let marker = Path.(base / "refreshed") in
+  let hours_since_refresh =
+    match (Unix.stat marker).st_mtime with
+    (* Clamped, because a marker set a moment ago can carry an mtime a shade
+       later than Unix.time reads, which would otherwise print as -0. *)
+    | mtime -> Float.max 0.0 ((Unix.time () -. mtime) /. 3600.0)
+    | exception _ -> infinity
+  in
+  let code =
+    if not (Sys.file_exists base) then (
+      OpamConsole.warning "No base image for %s, so nothing to refresh" (Config.os_key ~config);
+      0)
+    else
+      match max_age with
+      | Some hours when hours_since_refresh < float_of_int hours ->
+          OpamConsole.note "Index for %s refreshed %.0f hour(s) ago, within %d" (Config.os_key ~config) hours_since_refresh hours;
+          0
+      | _ -> (
+          let t = Container.init ~config in
+          let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+          let code =
+            Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
+            let log = Path.(temp_dir / "refresh.log") in
+            match Container.refresh ~t ~temp_dir log with
+            | 0 ->
+                (* Recorded beside the base rather than inside it, so it is
+                   day10's own note of when this ran and not something a layer
+                   could inherit. *)
+                Os.write_to_file marker "";
+                OpamConsole.note "Refreshed the package index for %s" (Config.os_key ~config);
+                0
+            | code ->
+                OpamConsole.error "Refreshing the index for %s failed with exit code %d:\n%s" (Config.os_key ~config) code (Os.read_from_file log);
+                code
+          in
+          Container.deinit ~t;
+          code)
+  in
+  exit code
+
 let run_ci ?repo (config : Config.t) =
   let repo = match repo with Some r -> r | None -> make_repo config in
   let package = OpamPackage.of_string (config.package ^ ".dev") in
@@ -978,6 +1027,35 @@ let cache_info_cmd =
   in
   Cmd.v cache_info_info cache_info_term
 
+let refresh_base_cmd =
+  let max_age_arg =
+    let doc = "Do nothing if the index was refreshed less than $(docv) hours ago, so this is safe to call on every idle window." in
+    Arg.(value & opt (some int) None & info [ "max-age" ] ~docv:"HOURS" ~doc)
+  in
+  let refresh_base_term =
+    Term.(
+      const (fun dir arch os os_distribution os_family os_version log max_age ->
+          run_refresh_base
+            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false }
+            max_age)
+      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ log_term $ max_age_arg)
+  in
+  let refresh_base_info =
+    Cmd.info "refresh-base" ~doc:"Bring the base image's package index up to date, in place"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Runs the distribution's index update inside the base image itself. The index is build-time state rather than something a cached layer \
+             was compiled against, so layers built on this base stay valid -- unlike rebuilding the base, which would leave them standing on \
+             libraries they never saw and cost a rebuild of every one.";
+          `P
+            "Intended to be driven by whatever knows the machine is idle: an ocluster worker can pause, call this, and resume. Nothing else may be \
+             building while it runs, since it writes into the base every build reads.";
+        ]
+  in
+  Cmd.v refresh_base_info refresh_base_term
+
 let prune_cmd =
   let days_arg =
     let doc = "Delete cache entries unused for more than $(docv) days." in
@@ -1098,5 +1176,5 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; cache_info_cmd; prune_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; cache_info_cmd; refresh_base_cmd; prune_cmd ] in
   exit (Cleanup.main (fun () -> Cmd.eval ~catch:false cmd))

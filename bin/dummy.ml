@@ -18,3 +18,5 @@ let build ~t ~temp_dir _build_log _pkg ordered_hashes =
   in
   let _rootfs = Path.(temp_dir / "fs") in
   0
+
+let refresh ~t:_ ~temp_dir:_ _log = failwith "refresh-base is implemented for Linux only, not this platform"

@@ -6,4 +6,5 @@ module type CONTAINER = sig
   val config : t:t -> Config.t
   val run : t:t -> temp_dir:string -> string -> string -> int
   val build : t:t -> temp_dir:string -> string -> OpamPackage.t -> string list -> int
+  val refresh : t:t -> temp_dir:string -> string -> int
 end

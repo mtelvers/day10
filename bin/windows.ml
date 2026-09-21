@@ -158,3 +158,5 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = List.iter (Os.rm ~recursive:true) [ Path.(target / "default" / ".opam-switch" / "sources"); Path.(target / "default" / ".opam-switch" / "build") ] in
   let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
   result
+
+let refresh ~t:_ ~temp_dir:_ _log = failwith "refresh-base is implemented for Linux only, not Windows"

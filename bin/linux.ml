@@ -161,6 +161,32 @@ let run ~t ~temp_dir opam_repository build_log =
       failwith
         (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
 
+(* Refresh the package index in the base image, in place.  The index is
+   build-time state rather than something a layer was compiled against, so
+   layers already built on this base stay valid; replacing the base itself would
+   leave them standing on libraries they never saw, and would cost a rebuild of
+   every one of them.
+
+   The container's root is the base filesystem itself rather than an overlay
+   over it, which is the only place day10 runs runc that way.  An overlay would
+   record the update's deletions as whiteouts, and copying those back would turn
+   a removed index file into a device node; run directly, the package manager
+   does what it would do natively.  It is the same work the operator's chroot
+   script did by hand. *)
+let refresh ~t ~temp_dir build_log =
+  let config = t.config in
+  match Dist.of_config ~os_family:config.os_family ~distribution:config.os_distribution ~version:config.os_version with
+  | None ->
+      failwith
+        (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
+  | Some dist ->
+      let root = Path.(config.dir / Config.os_key ~config / "base" / "fs") in
+      let argv = [ "/bin/sh"; "-c"; dist.update ] in
+      let config_runc = make ~root ~cwd:"/" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts:[] ~network:true in
+      let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
+      Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
+      Os.sudo ~stdout:build_log ~stderr:build_log ~tee:config.log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
