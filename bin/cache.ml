@@ -23,7 +23,13 @@ type mode =
   | Keep_percent of int
   | Max_size of int
 
-(* A component that was given is matched against the part of the name it
+(* A platform is a directory holding a base image: base/fs is what every layer
+   for it is built on, so a directory without one is not a platform whatever it
+   is called.  That is a surer test than the name, and it keeps out whatever
+   else happens to be in the cache -- a cache of its own filesystem has a
+   lost+found, which by name alone reads as a platform.
+
+   A component that was given is matched against the part of the name it
    occupies rather than by splitting the name: only its two ends are reliable
    delimiters, since a version may be 24.04 or unstable or tumbleweed. *)
 let platforms ~distribution ~version ~arch dir =
@@ -37,10 +43,11 @@ let platforms ~distribution ~version ~arch dir =
     && Option.fold ~none:true ~some:(fun v -> contains ("-" ^ v ^ "-") key) version
     && Option.fold ~none:true ~some:(fun a -> String.ends_with ~suffix:("-" ^ a) key) arch
   in
-  Os.ls dir |> List.filter Sys.is_directory
+  Os.ls dir
+  |> List.filter (fun path -> Sys.file_exists Path.(path / "base" / "fs"))
   |> List.filter_map (fun path ->
          let key = Filename.basename path in
-         if String.starts_with ~prefix:"temp-" key || not (matches key) then None else Some (key, path))
+         if matches key then Some (key, path) else None)
   |> List.sort compare
 
 (* Only a directory holding a layer.json counts, which is what keeps base/ and

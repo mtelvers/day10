@@ -32,7 +32,7 @@ Neither of these is a layer: base/ holds no layer.json, and a temp directory
 belongs to a run in progress.  Both must stay out of every total, and out of
 prune's reach.
 
-  $ mkdir -p cache/ubuntu-24.04-x86_64/base cache/temp-abc123
+  $ mkdir -p cache/ubuntu-24.04-x86_64/base/fs cache/debian-13-riscv64/base/fs cache/temp-abc123 cache/lost+found
   $ echo not-a-layer > cache/ubuntu-24.04-x86_64/base/build.log
 
 Each layer records its size the first time it is measured, so the first report
@@ -82,6 +82,7 @@ stale platform and leaves the busy one alone.
   [NOTE] Freed 24.0K
   $ ls prune-days/debian-13-riscv64 prune-days/ubuntu-24.04-x86_64
   prune-days/debian-13-riscv64:
+  base
   
   prune-days/ubuntu-24.04-x86_64:
   base

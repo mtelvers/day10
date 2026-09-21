@@ -87,7 +87,11 @@ let platform_names_come_apart () =
 (* Every platform unless a component was given, and never a temp directory. *)
 let platforms_are_selected () =
   let root = scratch () in
-  let () = List.iter (fun d -> Unix.mkdir (Filename.concat root d) 0o755) [ "ubuntu-24.04-x86_64"; "debian-13-riscv64"; "temp-abc123" ] in
+  (* A platform is a directory with a base image under it.  temp-abc123 is a
+     run in progress and lost+found belongs to the filesystem; neither has one,
+     which is what keeps them out however they are named. *)
+  let () = List.iter (fun d -> Os.mkdir ~parents:true Path.(root / d / "base" / "fs")) [ "ubuntu-24.04-x86_64"; "debian-13-riscv64" ] in
+  let () = List.iter (fun d -> Unix.mkdir (Filename.concat root d) 0o755) [ "temp-abc123"; "lost+found" ] in
   let selected ?distribution ?version ?arch () = Cache.platforms ~distribution ~version ~arch root |> List.map fst in
   selected () = [ "debian-13-riscv64"; "ubuntu-24.04-x86_64" ]
   && selected ~arch:"riscv64" () = [ "debian-13-riscv64" ]

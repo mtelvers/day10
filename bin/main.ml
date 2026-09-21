@@ -716,8 +716,7 @@ let refresh_one ~dir ~log ~max_age (platform, path) =
    a builder serving the whole matrix has nineteen of them, and the one that
    goes stale unnoticed is the one nobody thought to name. *)
 let run_refresh_base ~dir ~distribution ~version ~arch ~log max_age =
-  let platforms = Cache.platforms ~distribution ~version ~arch dir |> List.filter (fun (_, path) -> Sys.file_exists Path.(path / "base")) in
-  match platforms with
+  match Cache.platforms ~distribution ~version ~arch dir with
   | [] ->
       OpamConsole.warning "No base image to refresh in %s" dir;
       exit 0
