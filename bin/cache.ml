@@ -55,6 +55,22 @@ let layers_of (platform, path) =
            | last_used, exit_status -> Some { dir; platform; last_used; ok = exit_status = 0 }
            | exception _ -> None)
 
+(* The three parts of a platform directory's name, for when something has to
+   act on the platform rather than merely select it.  Config.os_key writes it as
+   distribution-version-arch, so the arch comes off the last dash and the
+   distribution off the first, leaving the version between: debian-testing and
+   opensuse-tumbleweed both come apart correctly.  A version containing a dash
+   would not, and nothing writes one. *)
+let components key =
+  match String.rindex_opt key '-' with
+  | None -> None
+  | Some last -> (
+      let arch = String.sub key (last + 1) (String.length key - last - 1) in
+      let rest = String.sub key 0 last in
+      match String.index_opt rest '-' with
+      | None -> None
+      | Some first -> Some (String.sub rest 0 first, String.sub rest (first + 1) (String.length rest - first - 1), arch))
+
 let by_platform ~distribution ~version ~arch dir = platforms ~distribution ~version ~arch dir |> List.map (fun p -> (fst p, layers_of p))
 
 let human bytes =

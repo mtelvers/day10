@@ -627,54 +627,103 @@ let run_build (config : Config.t) =
   in
   exit exit_code
 
-(* Bring the base image's package index up to date without rebuilding the base.
+(* Bring a base image's package index up to date without rebuilding the base.
    A stale index is what makes a depext install fetch a version the mirror has
-   withdrawn, which reads as a 404 and looks like the package's fault.
+   withdrawn, which arrives as a 404 and looks like the package's fault.
 
-   [max_age] makes this safe to call on every idle window: it is a no-op unless
-   the index is older than that.  The caller decides when -- an ocluster worker
-   knows when it is idle and can pause -- and day10 knows how. *)
-let run_refresh_base (config : Config.t) max_age =
-  let base = Path.(config.dir / Config.os_key ~config / "base") in
-  let marker = Path.(base / "refreshed") in
+   [max_age] makes this safe to call on every idle window: a platform whose
+   index is younger than that is left alone.  The caller decides when -- an
+   ocluster worker knows when it is idle and can pause -- and day10 knows how. *)
+let refresh_one ~dir ~log ~max_age (platform, path) =
+  (* The base's own log is the record: it already says what has happened to this
+     base, and a refresh is one of those things.  Its mtime therefore answers
+     how old the index is without a file of day10's own alongside -- and answers
+     it from the start, because an unrefreshed base's log is as old as the base,
+     which is exactly how old its index is.  A marker would have read as
+     infinitely old instead, and refreshed everything on a first sweep whatever
+     --max-age said. *)
+  let history = Path.(path / "base" / "build.log") in
   let hours_since_refresh =
-    match (Unix.stat marker).st_mtime with
-    (* Clamped, because a marker set a moment ago can carry an mtime a shade
-       later than Unix.time reads, which would otherwise print as -0. *)
+    match (Unix.stat history).st_mtime with
+    (* Clamped, because a log appended to a moment ago can carry an mtime a
+       shade later than Unix.time reads, which would otherwise print as -0. *)
     | mtime -> Float.max 0.0 ((Unix.time () -. mtime) /. 3600.0)
     | exception _ -> infinity
   in
-  let code =
-    if not (Sys.file_exists base) then (
-      OpamConsole.warning "No base image for %s, so nothing to refresh" (Config.os_key ~config);
-      0)
-    else
-      match max_age with
-      | Some hours when hours_since_refresh < float_of_int hours ->
-          OpamConsole.note "Index for %s refreshed %.0f hour(s) ago, within %d" (Config.os_key ~config) hours_since_refresh hours;
+  match max_age with
+  | Some hours when hours_since_refresh < float_of_int hours ->
+      OpamConsole.note "%s: refreshed %.0f hour(s) ago, within %d" platform hours_since_refresh hours;
+      0
+  | _ -> (
+      match Cache.components platform with
+      | None ->
+          OpamConsole.warning "%s: cannot tell which distribution this is, so leaving it alone" platform;
           0
-      | _ -> (
+      | Some (os_distribution, os_version, arch) ->
+          OpamConsole.note "%s: refreshing" platform;
+          let config =
+            {
+              Config.dir;
+              ocaml_version = OpamPackage.of_string "ocaml.0.0.0";
+              opam_repositories = [];
+              package = "";
+              arch;
+              os = "linux";
+              os_distribution;
+              (* Only a fallback: Dist looks the distribution and version up
+                 first, and the name does not record a family. *)
+              os_family = os_distribution;
+              os_version;
+              directory = None;
+              md = None;
+              json = None;
+              dot = None;
+              with_test = false;
+              with_doc = false;
+              tag = None;
+              oci = None;
+              log;
+              dry_run = false;
+              fork = None;
+              build_command = None;
+              local_packages = [];
+              prefer_oldest = false;
+              update_invariant = false;
+            }
+          in
           let t = Container.init ~config in
-          let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
+          let temp_dir = Filename.temp_dir ~temp_dir:dir ~perms:0o755 "temp-" "" in
           let code =
             Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
-            let log = Path.(temp_dir / "refresh.log") in
-            match Container.refresh ~t ~temp_dir log with
+            let refresh_log = Path.(temp_dir / "refresh.log") in
+            match Container.refresh ~t ~temp_dir refresh_log with
             | 0 ->
-                (* Recorded beside the base rather than inside it, so it is
-                   day10's own note of when this ran and not something a layer
-                   could inherit. *)
-                Os.write_to_file marker "";
-                OpamConsole.note "Refreshed the package index for %s" (Config.os_key ~config);
+                (* Appended only when it worked, so the mtime means the last
+                   successful refresh.  Recording a failure would leave the
+                   index stale while claiming to be fresh, and --max-age would
+                   then skip it. *)
+                Os.append_to_file history (Printf.sprintf "\n=== index refreshed %s ===\n%s" (Util.timestamp ()) (Os.read_from_file refresh_log));
+                OpamConsole.note "%s: index up to date" platform;
                 0
             | code ->
-                OpamConsole.error "Refreshing the index for %s failed with exit code %d:\n%s" (Config.os_key ~config) code (Os.read_from_file log);
+                OpamConsole.error "%s: refreshing the index failed with exit code %d:\n%s" platform code (Os.read_from_file refresh_log);
                 code
           in
           Container.deinit ~t;
           code)
-  in
-  exit code
+
+(* Every platform in the cache unless one was named, as cache-info and prune do:
+   a builder serving the whole matrix has nineteen of them, and the one that
+   goes stale unnoticed is the one nobody thought to name. *)
+let run_refresh_base ~dir ~distribution ~version ~arch ~log max_age =
+  let platforms = Cache.platforms ~distribution ~version ~arch dir |> List.filter (fun (_, path) -> Sys.file_exists Path.(path / "base")) in
+  match platforms with
+  | [] ->
+      OpamConsole.warning "No base image to refresh in %s" dir;
+      exit 0
+  | platforms ->
+      let codes = List.map (refresh_one ~dir ~log ~max_age) platforms in
+      exit (if List.exists (fun code -> code <> 0) codes then 1 else 0)
 
 let run_ci ?repo (config : Config.t) =
   let repo = match repo with Some r -> r | None -> make_repo config in
@@ -1029,29 +1078,28 @@ let cache_info_cmd =
 
 let refresh_base_cmd =
   let max_age_arg =
-    let doc = "Do nothing if the index was refreshed less than $(docv) hours ago, so this is safe to call on every idle window." in
+    let doc = "Leave a platform alone if its index was refreshed less than $(docv) hours ago, so this is safe to call on every idle window." in
     Arg.(value & opt (some int) None & info [ "max-age" ] ~docv:"HOURS" ~doc)
   in
+  let distribution_arg, version_arg, arch_arg = platform_filter_terms in
   let refresh_base_term =
     Term.(
-      const (fun dir arch os os_distribution os_family os_version log max_age ->
-          run_refresh_base
-            { dir; ocaml_version = OpamPackage.of_string "ocaml.0.0.0"; opam_repositories = []; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false }
-            max_age)
-      $ cache_dir_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ log_term $ max_age_arg)
+      const (fun dir distribution version arch log max_age -> run_refresh_base ~dir ~distribution ~version ~arch ~log max_age)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ log_term $ max_age_arg)
   in
   let refresh_base_info =
-    Cmd.info "refresh-base" ~doc:"Bring the base image's package index up to date, in place"
+    Cmd.info "refresh-base" ~doc:"Bring base images' package indexes up to date, in place"
       ~man:
         [
           `S Manpage.s_description;
           `P
-            "Runs the distribution's index update inside the base image itself. The index is build-time state rather than something a cached layer \
-             was compiled against, so layers built on this base stay valid -- unlike rebuilding the base, which would leave them standing on \
-             libraries they never saw and cost a rebuild of every one.";
+            "Runs the distribution's index update inside each base image. The index is build-time state rather than something a cached layer was \
+             compiled against, so layers built on a base stay valid -- unlike rebuilding it, which would leave them standing on libraries they never \
+             saw and cost a rebuild of every one.";
+          `P "Every platform in the cache, unless --os-distribution, --os-version or --arch names one.";
           `P
             "Intended to be driven by whatever knows the machine is idle: an ocluster worker can pause, call this, and resume. Nothing else may be \
-             building while it runs, since it writes into the base every build reads.";
+             building while it runs, since it writes into a base that every build reads.";
         ]
   in
   Cmd.v refresh_base_info refresh_base_term

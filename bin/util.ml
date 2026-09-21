@@ -32,6 +32,12 @@ let accept_failures opam =
       | _ -> [])
   |> Option.value ~default:[]
 
+(* For a line in a log that is appended to over the life of a base image, so
+   that the entries can be told apart and read in order. *)
+let timestamp () =
+  let t = Unix.gmtime (Unix.time ()) in
+  Printf.sprintf "%04d-%02d-%02d %02d:%02d:%02dZ" (t.tm_year + 1900) (t.tm_mon + 1) t.tm_mday t.tm_hour t.tm_min t.tm_sec
+
 let save_layer_info name pkg deps hashes rc =
   Yojson.Safe.to_file name
     (`Assoc
