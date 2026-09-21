@@ -35,12 +35,26 @@ let rec wait pid =
    while it is still running instead of only once it is over.  Either of those
    sends the child's output through a pipe rather than straight to the file, and
    [tee] merges stderr into the same pipe to keep the two in order. *)
-let spawn ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
+(* For [~stdin] where a child should have no input.  Reads return end of file at
+   once and isatty is false, so anything that probes takes its non-interactive
+   path.  Closing the descriptor instead would be worse: the next file the child
+   opened would land on it. *)
+let no_input = "/dev/null"
+
+let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
   let close fd =
     try Unix.close fd with
     | Unix.Unix_error _ -> ()
   in
   let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o644 in
+  (* A child given day10's own stdin inherits its terminal.  sudo, configured
+     with use_pty, then runs it on a pty of sudo's own in a process group that
+     is not that pty's foreground -- and a background process group touching a
+     terminal is stopped by SIGTTIN or SIGTTOU, which runc's init cannot catch.
+     The container is left stopped in "created" while runc spins waiting for it.
+     Only ever seen from an interactive shell: under a worker there is no
+     terminal for sudo to allocate a pty against. *)
+  let in_fd = Option.map (fun path -> Unix.openfile path [ Unix.O_RDONLY; Unix.O_CLOEXEC ] 0) stdin in
   (* Close on exec, or the child inherits a stray copy of each end alongside the
      one create_process dups onto its stdout -- dup2 clears the flag, so the
      descriptor it actually uses survives.  A child holding the read end of its
@@ -69,13 +83,13 @@ let spawn ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
   let pid =
     Unix.create_process prog
       (Array.of_list (prog :: args))
-      Unix.stdin
+      (Option.value ~default:Unix.stdin in_fd)
       (Option.value ~default:Unix.stdout out_fd)
       (Option.value ~default:Unix.stderr err_fd)
   in
   (* Let go of whatever the child now owns -- the write end especially, or the
      read below would never see end of file. *)
-  let () = List.iter close (List.filter_map Fun.id [ out_fd; (if err_fd = out_fd then None else err_fd) ]) in
+  let () = List.iter close (List.filter_map Fun.id [ in_fd; out_fd; (if err_fd = out_fd then None else err_fd) ]) in
   let output =
     match piped with
     | None -> ""
@@ -106,7 +120,7 @@ let spawn ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
   in
   (wait pid, output)
 
-let sudo ?stdout ?stderr ?tee cmd = fst (spawn ?stdout ?stderr ?tee "sudo" cmd)
+let sudo ?stdin ?stdout ?stderr ?tee cmd = fst (spawn ?stdin ?stdout ?stderr ?tee "sudo" cmd)
 
 let exec ?stdout ?stderr ?tee cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in

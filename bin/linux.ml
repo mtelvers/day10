@@ -48,6 +48,19 @@ let default_linux_caps =
     "CAP_AUDIT_WRITE";
   ]
 
+(* What a container gets for stdin.  Never a terminal: with terminal false in
+   the config runc passes its own descriptors straight through, so the container
+   would hold day10's, and sudo -- use_pty here -- runs it on a pty of its own
+   in a process group that is not always that pty's foreground.  Reading a
+   terminal from a background process group raises SIGTTIN, which runc's init
+   cannot catch, and it stops there before the container ever starts.
+
+   A pipe or a file is inherited as it is: that is how data is fed to a command
+   given to exec, and it carries no such hazard.  None rather than a path, so it
+   is the descriptor itself and not a fresh open of it -- reopening a regular
+   file would start reading from the beginning. *)
+let container_stdin () = if Unix.isatty Unix.stdin then Some Os.no_input else None
+
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
 let make ~root ~cwd ~argv ~hostname ~uid ~gid ~env ~mounts ~network : Yojson.Safe.t =
@@ -185,7 +198,8 @@ let refresh ~t ~temp_dir build_log =
       let config_runc = make ~root ~cwd:"/" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts:[] ~network:true in
       let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
       Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
-      Os.sudo ~stdout:build_log ~stderr:build_log ~tee:config.log [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+      Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee:config.log
+        [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
@@ -275,7 +289,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let tee = Option.is_some config.build_command || config.log in
   let result =
     Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
-    Os.sudo ~stdout:build_log ~stderr:build_log ~tee [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+    Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
   in
   (* Unmount before the rm below, or rm would delete through the overlay. *)
   let _ = Os.sudo [ "umount"; rootfsdir ] in
