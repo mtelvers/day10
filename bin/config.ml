@@ -21,13 +21,10 @@ type t = {
   log : bool;
   dry_run : bool;
   fork : int option;
-  (* What to run in the container instead of building a package, and whether it
-     may reach the network.  A dune build has nothing to fetch -- the
-     dependencies are installed in the layers under it and the sources are bind
-     mounted -- so it is given none, and a project that turns out to need it
-     finds that out here rather than in CI.  A command the caller wrote is
-     another matter: day10 cannot tell what they meant by it, so it keeps the
-     network it would have had outside the container. *)
+  (* What to run in the container instead of building a package.  A dune build
+     has nothing to fetch, its dependencies being installed already, so it is
+     given no network; a command the caller wrote keeps one, day10 having no way
+     to tell what they meant by it. *)
   build_command : command option;
   (* The packages built from the workspace by dune, so never installed into the
      switch as well.  Defaults to every .opam file in the directory; a caller

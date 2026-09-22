@@ -34,7 +34,9 @@ let rec wait pid =
    the file and passes it on as it arrives, so that a long build says something
    while it is still running instead of only once it is over.  Either of those
    sends the child's output through a pipe rather than straight to the file, and
-   [tee] merges stderr into the same pipe to keep the two in order.
+   [tee] merges stderr into the same pipe to keep the two in order.  [append]
+   adds to a redirect target rather than truncating it, for a caller running
+   several commands into one log.
 
    For [~stdin] where a child should have no input.  Reads return end of file at
    once and isatty is false, so anything that probes takes its non-interactive

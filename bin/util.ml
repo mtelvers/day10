@@ -161,55 +161,36 @@ let opam_repo_sha opam_repositories =
   List.filter_map git_sha opam_repositories |> String.concat ""
   |> function "" -> None | s -> Some s
 
-(* Only the checksum identifies a source: a move to a new host, or a mirror
-   gained or lost, serves the same bytes and must not re-key.  A source with no
-   checksum has nothing else to go on, so the url stands in for it -- which for
-   a version-control url includes the ref, so a moved branch still counts.
-
-   One checksum is enough to say which bytes, so the rest are dropped rather
-   than hashed: a package recording sha256 and md5 for the same file has said
-   one thing, not two, and adding a third later is a metadata change that must
-   not cost a rebuild.  Keeping the first is also what the layers already in
-   every cache were hashed with, and there are about sixteen and a half
-   thousand of them where it is the only thing that would otherwise move. *)
+(* A source is identified by its checksum, so where it is served from is not
+   part of the layer, and a second checksum for the same file says the same
+   thing again.  With none, the url has to stand in for it. *)
 let effective_url u =
   match OpamFile.URL.checksum u with
   | [] -> OpamFile.URL.create (OpamFile.URL.url u)
   | checksum :: _ -> OpamFile.URL.with_checksum [ checksum ] OpamFile.URL.empty
 
-(* The system packages this platform installs for a package.  Resolving the
-   filters here rather than hashing them whole keeps an edit to one
-   distribution's depexts from re-keying the other eighteen.  A filter that
-   will not evaluate counts as applying: over-keying costs a rebuild, while
-   under-keying reuses a layer built without the package. *)
+(* The system packages this platform installs for a package.  Resolved rather
+   than hashed whole, so an edit to one distribution's depexts leaves the others
+   alone.  A filter that will not evaluate counts as applying: over-keying costs
+   a rebuild, under-keying reuses a layer built without the package. *)
 let depexts_for ~vars opam =
   OpamFile.OPAM.depexts opam
   |> List.filter (fun (_, filter) -> OpamFilter.eval_to_bool ~default:true vars filter)
   |> List.fold_left (fun acc (names, _) -> OpamSysPkg.Set.union acc names) OpamSysPkg.Set.empty
 
-(* day10's own answer to "what makes this layer".  opam's
-   OpamFile.OPAM.effective_part answers a neighbouring but different question --
-   whether two opam files yield the same package in a switch -- and so discards
-   depexts, which for day10 are installed as part of the layer.  That gap is
-   not theoretical: PR #30785 adds gmp-static to conf-gmp.5 and nothing else,
-   which under effective_part leaves the key untouched, so the week-old layer
-   answers for it.
-
-   Built up from empty rather than by editing opam's value, for two reasons: a
-   field opam adds later stays out until someone decides it belongs, and an
-   opam upgrade cannot silently re-key every cache on every builder -- 2.5
-   changes effective_part, and would have. *)
+(* What day10 takes a layer to be.  Not opam's effective_part, which answers
+   whether two opam files yield the same package in a switch and so discards
+   depexts -- day10 installs those as part of the layer.  Built from empty so
+   that a field opam adds later stays out until someone decides it belongs, and
+   an opam upgrade cannot re-key every cache. *)
 let effective_part ~vars opam =
   let open OpamFile.OPAM in
   let depexts = depexts_for ~vars opam in
-  (* The option-preserving setters: in a repository the name and version come
-     from the path, so the file itself carries neither, and asserting them here
-     would make a value that will not print. *)
+  (* In a repository both come from the path, so the file itself carries
+     neither, and asserting them makes a value that will not print. *)
   empty |> with_name_opt (name_opt opam) |> with_version_opt (version_opt opam)
-  (* What the solver is working from.  The chosen versions are hashed anyway,
-     as the rest of the closure, but a package's own constraints have to count
-     on their own: tightening one that the current solution already satisfies
-     changes what the package declares without changing what was picked. *)
+  (* What is solved for.  A package's own constraints count even when the
+     solution already satisfies them. *)
   |> with_depends (depends opam)
   |> with_depopts (depopts opam)
   |> with_conflicts (conflicts opam)
@@ -219,8 +200,8 @@ let effective_part ~vars opam =
   |> with_build (build opam)
   |> with_install (install opam)
   |> with_remove (remove opam)
-  (* build-test was the old spelling of run-test; merged, so that moving a
-     command between them is not a change. *)
+  (* build-test was the old spelling, so moving a command between them is not a
+     change. *)
   |> with_run_test (deprecated_build_test opam @ run_test opam)
   |> with_deprecated_build_doc (deprecated_build_doc opam)
   |> with_substs (substs opam)
@@ -232,14 +213,11 @@ let effective_part ~vars opam =
   |> with_url_opt (Option.map effective_url (url opam))
   |> with_extra_sources (List.map (fun (basename, u) -> (basename, effective_url u)) (extra_sources opam))
   |> with_extra_files_opt (extra_files opam)
-  (* A plugin installs somewhere else, so it changes the layer.  The rest --
-     avoid-version, deprecated, conf, compiler -- steer the solver, and the
-     solver's answer is already hashed as the closure, so honouring them here
-     would re-key on an edit that cannot change a byte of the build. *)
+  (* A plugin installs elsewhere, so it changes the layer.  The other flags only
+     steer the solver, whose answer is hashed as the closure. *)
   |> with_flags (List.filter (function OpamTypes.Pkgflag_Plugin -> true | _ -> false) (flags opam))
-  (* x-env-path-rewrite alters the build environment.  Every other extension
-     field is metadata to something downstream of day10: x-ci-accept-failures
-     is read from the repository at report time, not from the layer. *)
+  (* The one extension field that alters the build environment.  The rest are
+     read from the repository, not from the layer. *)
   |> with_extensions (OpamStd.String.Map.filter (fun k _ -> String.equal k "x-env-path-rewrite") (extensions opam))
   |> with_depexts (if OpamSysPkg.Set.is_empty depexts then [] else [ (depexts, OpamTypes.FBool true) ])
 

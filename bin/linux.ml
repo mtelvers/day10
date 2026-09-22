@@ -204,15 +204,11 @@ let refresh ~t ~temp_dir build_log =
       Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee:config.log
         [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
 
-(* A build is one container, except when tests were asked for.  Then the package
-   is installed in one and its tests are run in a second, which has a network
-   namespace of its own: a suite binding a fixed port would otherwise meet
-   another job's on the same machine -- a builder runs dozens at once, all
-   sharing one localhost -- and a suite reaching the internet would pass here
-   while failing under OBuilder, which takes the network away for the same
-   reason.  The second run needs none: the first installed the depexts and left
-   the sources in the download cache, and both write into the same upper
-   directory, so the second finds the build tree the first left behind. *)
+(* One container, except when tests were asked for: then the package installs in
+   one and its tests run in a second that has no network, so that suites on a
+   busy machine cannot meet each other's ports.  The second needs none -- the
+   first left the depexts installed and the sources in the download cache, and
+   both write into the same upper directory. *)
 type phase = { suffix : string; network : bool; command : string }
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
@@ -306,16 +302,14 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     let argv = [ "/usr/bin/env"; "bash"; "-c"; command ] in
     let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network in
     let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
-    (* A name of its own per phase, so a container left behind by one is never
-       mistaken for the other's. *)
+    (* A name per phase, so one left behind is not taken for the other. *)
     let container = Filename.basename temp_dir ^ suffix in
     Cleanup.with_resource (Cleanup.Runc_container container) @@ fun () ->
     Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee ~append [ "runc"; "run"; "-b"; temp_dir; container ]
   in
-  (* Stop at the first phase that fails, and report its status: the install
-     failing is the answer, and running the tests after it would only bury it.
-     Every phase after the first appends, so the log is the whole build and not
-     merely its last part. *)
+  (* Stop at the first failure and report it: testing after a failed install
+     would only bury it.  Phases after the first append, so the log is the whole
+     build rather than its last part. *)
   let result =
     phases
     |> List.mapi (fun index phase -> (index > 0, phase))

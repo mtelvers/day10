@@ -61,8 +61,7 @@ let yum =
     (* --allowerasing so a package may replace one the image already has:
        RHEL 9 ships curl-minimal, which conflicts with curl. *)
     install = (fun packages -> "yum install -y --allowerasing " ^ packages);
-    (* Set by of_config, which knows the version: the repository is only there
-       on some of the distributions sharing this package manager. *)
+    (* Set by of_config, which knows the version. *)
     enable_repos = None;
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
     deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
@@ -144,14 +143,10 @@ let of_os_family = function
   | "arch" | "archlinux" -> Some pacman
   | _ -> None
 
-(* Many of the -devel and -static packages opam names as depexts are not in a
-   RHEL clone's default repositories but in CodeReady Builder, which ships
-   disabled: conf-zlib asks for zlib-static on CentOS 9 and for
-   zlib-ng-compat-static on 10, and both are CRB-only.  Without it the install
-   reports no such package even though the distribution has one.  The
-   repository was called powertools on 8 and crb from 9 on.  Nothing else in
-   the matrix needs this -- Fedora carries its static packages in the
-   repositories that are already on. *)
+(* CentOS keeps many of the -devel and -static packages opam names as depexts in
+   CodeReady Builder, and ships it disabled, so installing them reports no such
+   package.  It was called powertools on 8 and crb from 9 on.  Nothing else in
+   the matrix holds a repository back this way. *)
 let codeready_builder : Distro.t option -> string option = function
   | Some (`CentOS (`V6 | `V7)) -> None
   | Some (`CentOS `V8) -> Some "dnf config-manager --set-enabled powertools"
