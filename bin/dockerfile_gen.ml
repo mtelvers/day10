@@ -13,7 +13,7 @@ let platform = function
 
 let opam ~(dist : Dist.t) ~arch base_image =
   from ~platform:(platform arch) ~alias:"opam-builder" base_image
-  @@ run "%s && %s" dist.update (dist.install dist.deps_opam)
+  @@ run "%s" (Dist.shell dist [ dist.update; dist.install dist.deps_opam ])
   @@ run "git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam"
   @@ workdir "/tmp/opam"
   @@ run "make cold"
@@ -21,7 +21,7 @@ let opam ~(dist : Dist.t) ~arch base_image =
 
 let opam_build ~(dist : Dist.t) ~arch base_image =
   from ~platform:(platform arch) ~alias:"opam-build-builder" base_image
-  @@ run "%s && %s" dist.update (dist.install dist.deps_opam_build)
+  @@ run "%s" (Dist.shell dist [ dist.update; dist.install dist.deps_opam_build ])
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ run "opam init --disable-sandboxing -a --bare -y"
   (* Docker keys a RUN on its text, so cloning master is cached forever and the
@@ -40,7 +40,7 @@ let dockerfile ~(dist : Dist.t) ~arch ~base_image ~uid ~gid =
   @@ from ~platform:(platform arch) base_image
   (* One RUN, so the package index cannot be served from a stale cached layer
      while the mirror has moved on -- that combination 404s on every package. *)
-  @@ run "%s && %s && %s" dist.update dist.upgrade (dist.install dist.deps_runtime)
+  @@ run "%s" (Dist.shell dist [ dist.update; dist.upgrade; dist.install dist.deps_runtime ])
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ copy ~from:"opam-build-builder" ~src:[ "/usr/local/bin/opam-build" ] ~dst:"/usr/local/bin/opam-build" ()
   @@ dist.noninteractive

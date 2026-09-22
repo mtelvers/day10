@@ -46,6 +46,11 @@
 
 (rule
  (with-stdout-to
+  centos-9.Dockerfile.actual
+  (run ./dump.exe centos 9 rhel)))
+
+(rule
+ (with-stdout-to
   alpine-3.22.Dockerfile.actual
   (run ./dump.exe alpine 3.22 alpine)))
 
@@ -68,6 +73,11 @@
  (alias runtest)
  (action
   (diff fedora-42.Dockerfile fedora-42.Dockerfile.actual)))
+
+(rule
+ (alias runtest)
+ (action
+  (diff centos-9.Dockerfile centos-9.Dockerfile.actual)))
 
 (rule
  (alias runtest)

@@ -100,6 +100,25 @@ let platforms_are_selected () =
   && selected ~distribution:"ubuntu" ~arch:"riscv64" () = []
   && selected ~arch:"ppc64" () = []
 
+(* CentOS keeps most of the -devel and -static packages opam names as depexts
+   in CodeReady Builder, and ships it disabled, so a base image that does not
+   turn it on cannot install them: conf-zlib wants zlib-static on 9 and
+   zlib-ng-compat-static on 10, and neither is anywhere else.  Nothing else in
+   the matrix has a repository held back this way. *)
+let centos_enables_codeready_builder () =
+  let enabled ~distribution ~version ~os_family =
+    match Dist.of_config ~os_family ~distribution ~version with None -> None | Some dist -> dist.enable_repos
+  in
+  enabled ~distribution:"centos" ~version:"9" ~os_family:"rhel" = Some "dnf config-manager --set-enabled crb"
+  && enabled ~distribution:"centos" ~version:"10" ~os_family:"rhel" = Some "dnf config-manager --set-enabled crb"
+  (* It was called something else before 9, and did not exist before 8. *)
+  && enabled ~distribution:"centos" ~version:"8" ~os_family:"rhel" = Some "dnf config-manager --set-enabled powertools"
+  && enabled ~distribution:"centos" ~version:"7" ~os_family:"rhel" = None
+  (* Fedora shares the package manager but carries these in a repository that
+     is already on, so it must not inherit the command. *)
+  && enabled ~distribution:"fedora" ~version:"42" ~os_family:"fedora" = None
+  && enabled ~distribution:"debian" ~version:"13" ~os_family:"debian" = None
+
 let base = {|opam-version: "2.0"
 build: [ "make" ]
 depends: [ "b" ]
@@ -299,6 +318,7 @@ let checks =
     ("buckets scale to the data", buckets_scale_to_the_data);
     ("platforms are selected", platforms_are_selected);
     ("platform names come apart", platform_names_come_apart);
+    ("centos enables codeready builder", centos_enables_codeready_builder);
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("hash separates the flags", hash_separates_the_flags);

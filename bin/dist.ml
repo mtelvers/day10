@@ -11,12 +11,17 @@ type t = {
   update : string;  (** shell command refreshing the package index *)
   upgrade : string;  (** shell command upgrading the installed packages *)
   install : string -> string;  (** shell command installing the given packages *)
+  enable_repos : string option;  (** shell command turning on repositories the image ships disabled *)
   deps_opam : string;  (** needed to build opam from source *)
   deps_opam_build : string;  (** needed to build opam-build from source *)
   deps_runtime : string;  (** needed in the final image *)
   noninteractive : Dockerfile.t;  (** stop the package manager prompting *)
   add_user : uid:int -> gid:int -> Dockerfile.t;
 }
+
+(* Enabling a repository has to come before the index is refreshed, and the
+   refresh has to stay in the same command as the install that depends on it. *)
+let shell dist commands = String.concat " && " (Option.to_list dist.enable_repos @ commands)
 
 let sudoers =
   run "echo 'opam ALL=(ALL:ALL) NOPASSWD:ALL' > /etc/sudoers.d/opam"
@@ -41,6 +46,7 @@ let apt =
     update = "apt update";
     upgrade = "apt upgrade -y";
     install = (fun packages -> "apt install -y " ^ packages);
+    enable_repos = None;
     deps_opam = "build-essential git curl libcap-dev sudo";
     deps_opam_build = "build-essential git curl unzip bubblewrap";
     deps_runtime = "build-essential unzip bubblewrap git sudo curl rsync";
@@ -55,6 +61,9 @@ let yum =
     (* --allowerasing so a package may replace one the image already has:
        RHEL 9 ships curl-minimal, which conflicts with curl. *)
     install = (fun packages -> "yum install -y --allowerasing " ^ packages);
+    (* Set by of_config, which knows the version: the repository is only there
+       on some of the distributions sharing this package manager. *)
+    enable_repos = None;
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
     deps_opam_build = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
@@ -67,6 +76,7 @@ let apk =
     update = "apk update";
     upgrade = "apk upgrade";
     install = (fun packages -> "apk add " ^ packages);
+    enable_repos = None;
     deps_opam = "build-base patch unzip bzip2 tar git curl openssl sudo linux-headers libcap-dev";
     deps_opam_build = "build-base patch unzip bzip2 tar git curl bubblewrap";
     deps_runtime = "build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap";
@@ -86,6 +96,7 @@ let zypper =
     update = "zypper refresh";
     upgrade = "zypper update -y";
     install = (fun packages -> "zypper install -y " ^ packages);
+    enable_repos = None;
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip";
     deps_opam_build = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip";
@@ -98,6 +109,7 @@ let pacman =
     update = "pacman -Sy --noconfirm";
     upgrade = "pacman -Su --noconfirm";
     install = (fun packages -> "pacman -S --noconfirm --needed " ^ packages);
+    enable_repos = None;
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils libcap";
     deps_opam_build = "gcc make patch unzip bzip2 tar git curl diffutils bubblewrap";
     deps_runtime = "gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap";
@@ -132,10 +144,28 @@ let of_os_family = function
   | "arch" | "archlinux" -> Some pacman
   | _ -> None
 
+(* Many of the -devel and -static packages opam names as depexts are not in a
+   RHEL clone's default repositories but in CodeReady Builder, which ships
+   disabled: conf-zlib asks for zlib-static on CentOS 9 and for
+   zlib-ng-compat-static on 10, and both are CRB-only.  Without it the install
+   reports no such package even though the distribution has one.  The
+   repository was called powertools on 8 and crb from 9 on.  Nothing else in
+   the matrix needs this -- Fedora carries its static packages in the
+   repositories that are already on. *)
+let codeready_builder : Distro.t option -> string option = function
+  | Some (`CentOS (`V6 | `V7)) -> None
+  | Some (`CentOS `V8) -> Some "dnf config-manager --set-enabled powertools"
+  | Some (`CentOS _) -> Some "dnf config-manager --set-enabled crb"
+  | Some _ | None -> None
+
 let of_config ~os_family ~distribution ~version =
-  match distro_of ~distribution ~version with
-  | Some distro -> of_package_manager (Distro.package_manager distro)
-  | None -> of_os_family os_family
+  let distro = distro_of ~distribution ~version in
+  let dist =
+    match distro with
+    | Some distro -> of_package_manager (Distro.package_manager distro)
+    | None -> of_os_family os_family
+  in
+  Option.map (fun dist -> { dist with enable_repos = codeready_builder distro }) dist
 
 let base_image ~arch ~distribution ~version =
   match distro_of ~distribution ~version with

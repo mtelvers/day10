@@ -194,7 +194,10 @@ let refresh ~t ~temp_dir build_log =
         (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
   | Some dist ->
       let root = Path.(config.dir / Config.os_key ~config / "base" / "fs") in
-      let argv = [ "/bin/sh"; "-c"; dist.update ] in
+      (* Enabling the repositories as well as refreshing the index, so a base
+         built before day10 knew it needed one can be brought up to date in
+         place rather than having to be thrown away and rebuilt. *)
+      let argv = [ "/bin/sh"; "-c"; Dist.shell dist [ dist.update ] ] in
       let config_runc = make ~root ~cwd:"/" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts:[] ~network:true in
       let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
       Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
