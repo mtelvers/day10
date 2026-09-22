@@ -30,7 +30,8 @@ let mentions ~variable opam =
 let layer_hash_of ~(config : Config.t) ctx pkg pkgs =
   let target = Config.is_target_package ~config pkg in
   let matters requested variable = requested && target && mentions ~variable (resolve_opam ctx pkg) in
-  Util.layer_hash ~with_test:(matters config.with_test "with-test") ~with_doc:(matters config.with_doc "with-doc") (List.map (resolve_opam ctx) pkgs)
+  Util.layer_hash ~with_test:(matters config.with_test "with-test") ~with_doc:(matters config.with_doc "with-doc")
+    ~vars:(Config.platform_vars ~config) (List.map (resolve_opam ctx) pkgs)
 
 let container =
   match OpamSysPoll.os OpamVariable.Map.empty with

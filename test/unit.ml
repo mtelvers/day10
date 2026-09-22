@@ -9,7 +9,14 @@ open Day10
    where it is not obvious what the assertion is for. *)
 
 let scratch () = Filename.temp_dir ~temp_dir:(Filename.get_temp_dir_name ()) "day10-unit-" ""
-let opam_of_string s = OpamFile.OPAM.read_from_string s
+(* Read with a filename, the way Repo.parse_opam reads one: in a repository the
+   name and version come from the path rather than from the file, and both are
+   part of the layer hash.  Given no filename an opam file parses as a package
+   with neither, which is not a package day10 ever builds. *)
+let opam_of_string ?(pkg = "a.1.0") s =
+  let pkg = OpamPackage.of_string pkg in
+  let path = Printf.sprintf "packages/%s/%s/opam" (OpamPackage.Name.to_string (OpamPackage.name pkg)) (OpamPackage.to_string pkg) in
+  OpamFile.OPAM.read_from_string ~filename:(OpamFile.make (OpamFilename.raw path)) s
 
 (* create_directory_exclusively has to say whether this call was the one that
    wrote the directory.  A job that waited for another to build a layer used to
@@ -124,7 +131,13 @@ build: [ "make" ]
 depends: [ "b" ]
 |}
 
-let with_field field = Util.layer_hash [ opam_of_string (base ^ field ^ "\n") ]
+(* The platform the depexts are resolved against, which is day10's own function
+   with a default platform filled in rather than a second copy of it. *)
+let vars ?(os_distribution = "debian") ?(os_family = "debian") ?(os_version = "13") () =
+  Util.platform_vars ~arch:"x86_64" ~os:"linux" ~os_distribution ~os_family ~os_version
+
+let hash ?(vars = vars ()) ?pkg file = Util.layer_hash ~vars [ opam_of_string ?pkg file ]
+let with_field field = hash (base ^ field ^ "\n")
 
 (* The hash covers the effective part of the opam file: what decides how a
    package builds, and not what does not.  That is what lets a cached layer
@@ -133,7 +146,7 @@ let with_field field = Util.layer_hash [ opam_of_string (base ^ field ^ "\n") ]
    one of them.  Note that flags and x- fields are outside it too, so marking a
    version avoid-version, or adding x-ci-accept-failures, costs nothing. *)
 let hash_ignores_metadata () =
-  let plain = Util.layer_hash [ opam_of_string base ] in
+  let plain = hash base in
   [
     {|synopsis: "x"|};
     {|description: "x"|};
@@ -153,7 +166,7 @@ let hash_ignores_metadata () =
 (* And the other way: anything that changes what the build does has to move it,
    or a layer built from different sources answers for these ones. *)
 let hash_follows_the_build () =
-  let plain = Util.layer_hash [ opam_of_string base ] in
+  let plain = hash base in
   [
     {|install: [ "make" "install" ]|};
     {|patches: [ "p.diff" ]|};
@@ -164,26 +177,77 @@ let hash_follows_the_build () =
     {|url { src: "http://x/y.tbz" checksum: [ "md5=0123456789abcdef0123456789abcdef" ] }|};
   ]
   |> List.for_all (fun field -> with_field field <> plain)
-  && Util.layer_hash [ opam_of_string {|opam-version: "2.0"
+  && hash {|opam-version: "2.0"
 build: [ "gmake" ]
 depends: [ "b" ]
-|} ] <> plain
-  && Util.layer_hash [ opam_of_string {|opam-version: "2.0"
+|} <> plain
+  && hash {|opam-version: "2.0"
 build: [ "make" ]
 depends: [ "c" ]
-|} ] <> plain
+|} <> plain
+
+(* opam's own effective_part drops depexts, since they do not change what ends
+   up in a switch.  For day10 they are installed as part of the layer, so they
+   have to count: opam-repository PR #30785 adds gmp-static to conf-gmp.5 and
+   edits nothing else, and under opam's answer the key does not move, so the
+   week-old layer answers for it -- a green tick for a job that ran no part of
+   the change, and a failure for the revdep the change was meant to fix. *)
+let hash_follows_the_depexts () =
+  with_field {|depexts: [ ["libgmp-dev"] {os-family = "debian"} ]|} <> hash base
+
+(* But only where the depext applies.  Resolving against the platform first is
+   what keeps an edit to one distribution's depexts from re-keying the other
+   eighteen, which for a package as deep in the graph as conf-gmp would be most
+   of every cache. *)
+let depexts_are_scoped_to_the_platform () =
+  let fedora = vars ~os_distribution:"fedora" ~os_family:"fedora" ~os_version:"42" () in
+  let debian = vars () in
+  let with_depexts gmp =
+    base ^ Printf.sprintf {|depexts: [ [%s] {os-distribution = "fedora"} ["libgmp-dev"] {os-family = "debian"} ]|} gmp ^ "\n"
+  in
+  let before = with_depexts {|"gmp-devel"|} and after = with_depexts {|"gmp-devel" "gmp-static"|} in
+  hash ~vars:fedora before <> hash ~vars:fedora after && hash ~vars:debian before = hash ~vars:debian after
+
+(* A source is identified by its checksum, so where it is served from is not
+   part of the layer, and a second checksum for the same file says the same
+   thing twice rather than something new.  Hashing every checksum instead would
+   have moved sixteen and a half thousand packages -- dune and ocaml-config
+   among them, which are in nearly every closure -- on a change that cannot
+   affect a build. *)
+let hash_identifies_a_source_by_its_checksum () =
+  let sha = "sha256=" ^ String.make 64 '0' in
+  let url src checksums = Printf.sprintf {|url { src: "%s" checksum: [ %s ] }|} src (String.concat " " (List.map (Printf.sprintf {|"%s"|}) checksums)) in
+  with_field (url "http://x/y.tbz" [ sha ]) = with_field (url "http://moved/y.tbz" [ sha ])
+  && with_field (url "http://x/y.tbz" [ sha ]) = with_field (url "http://x/y.tbz" [ sha; "md5=0123456789abcdef0123456789abcdef" ])
+  (* The checksum itself still counts: different bytes are a different build. *)
+  && with_field (url "http://x/y.tbz" [ sha ]) <> with_field (url "http://x/y.tbz" [ "sha256=" ^ String.make 64 '1' ])
+
+(* Which package this is counts, even though it is the only part of the layer
+   that comes from the path rather than from the file.  Two packages whose opam
+   files are byte for byte the same still install different things, so they
+   cannot share a layer, and neither can two versions of one package. *)
+let hash_follows_the_package () =
+  hash ~pkg:"a.1.0" base <> hash ~pkg:"b.1.0" base && hash ~pkg:"a.1.0" base <> hash ~pkg:"a.2.0" base
+
+(* day10 owns this hash rather than borrowing opam's, so it is worth pinning.
+   Any change to it orphans every layer in every cache on every builder, which
+   is a thing to decide and then to do, not to discover afterwards.  If this
+   check fails, either the change was not meant, or the literal wants updating
+   and the caches want rebuilding. *)
+let hash_is_stable () = hash base = "29ddeddd71e75c2ceadac7c2c76c6477"
 
 (* Asking for tests has to reach the hash, or a run with them is answered from a
    layer built without them.  Not asking has to leave the hash alone, or every
    layer already in every cache is orphaned. *)
 let hash_separates_the_flags () =
   let opam = opam_of_string base in
-  let plain = Util.layer_hash [ opam ] in
-  plain = Util.layer_hash [ opam ]
-  && plain = Util.layer_hash ~with_test:false ~with_doc:false [ opam ]
-  && plain <> Util.layer_hash ~with_test:true [ opam ]
-  && plain <> Util.layer_hash ~with_doc:true [ opam ]
-  && Util.layer_hash ~with_test:true [ opam ] <> Util.layer_hash ~with_doc:true [ opam ]
+  let layer_hash ?with_test ?with_doc () = Util.layer_hash ?with_test ?with_doc ~vars:(vars ()) [ opam ] in
+  let plain = layer_hash () in
+  plain = layer_hash ()
+  && plain = layer_hash ~with_test:false ~with_doc:false ()
+  && plain <> layer_hash ~with_test:true ()
+  && plain <> layer_hash ~with_doc:true ()
+  && layer_hash ~with_test:true () <> layer_hash ~with_doc:true ()
 
 (* A Config.t with only the fields these checks turn on set away from their
    defaults. *)
@@ -322,6 +386,11 @@ let checks =
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("hash separates the flags", hash_separates_the_flags);
+    ("hash follows the depexts", hash_follows_the_depexts);
+    ("depexts are scoped to the platform", depexts_are_scoped_to_the_platform);
+    ("hash identifies a source by its checksum", hash_identifies_a_source_by_its_checksum);
+    ("hash follows the package", hash_follows_the_package);
+    ("hash is stable", hash_is_stable);
     ("with-test reaches only the target", with_test_reaches_only_the_target);
     ("a local package is pinned", a_local_package_is_pinned);
     ("only-packages reaches dune", only_packages_reaches_dune);
