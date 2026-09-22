@@ -12,6 +12,12 @@ type t = {
   upgrade : string;  (** shell command upgrading the installed packages *)
   install : string -> string;  (** shell command installing the given packages *)
   enable_repos : string option;  (** shell command turning on repositories the image ships disabled *)
+  (* The distribution's development group, where the autotools live.  Many
+     packages leave libtool and friends out of their depexts, so whether they
+     build comes down to what the base image happens to carry: conf-libtool
+     declares no depext at all outside the debian and rpm families.  OBuilder's
+     images install the group, so these do too. *)
+  dev_group : string option;
   deps_opam : string;  (** needed to build opam from source *)
   deps_day10_install : string;  (** needed to build day10-install from source *)
   deps_runtime : string;  (** needed in the final image *)
@@ -47,9 +53,10 @@ let apt =
     upgrade = "apt upgrade -y";
     install = (fun packages -> "apt install -y " ^ packages);
     enable_repos = None;
+    dev_group = None;
     deps_opam = "build-essential git curl libcap-dev sudo";
     deps_day10_install = "build-essential git curl unzip bubblewrap";
-    deps_runtime = "build-essential unzip bubblewrap git sudo curl rsync";
+    deps_runtime = "build-essential curl git rsync sudo unzip nano libcap-dev libx11-dev bubblewrap";
     noninteractive = run "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections";
     add_user = useradd;
   }
@@ -63,9 +70,11 @@ let yum =
     install = (fun packages -> "yum install -y --allowerasing " ^ packages);
     (* Set by of_config, which knows the version. *)
     enable_repos = None;
+    (* Named differently on Fedora, which of_config knows the version for. *)
+    dev_group = Some {|yum groupinstall -y "Development Tools"|};
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
     deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
-    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
+    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap passwd nano libX11-devel";
     noninteractive = empty;
     add_user = useradd;
   }
@@ -76,9 +85,10 @@ let apk =
     upgrade = "apk upgrade";
     install = (fun packages -> "apk add " ^ packages);
     enable_repos = None;
+    dev_group = None;
     deps_opam = "build-base patch unzip bzip2 tar git curl openssl sudo linux-headers libcap-dev";
     deps_day10_install = "build-base patch unzip bzip2 tar git curl bubblewrap";
-    deps_runtime = "build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap";
+    deps_runtime = "build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap ca-certificates libx11-dev nano ncurses-dev";
     noninteractive = empty;
     (* Alpine ships busybox's adduser rather than shadow's useradd, and its
        flags are not the same. *)
@@ -96,9 +106,10 @@ let zypper =
     upgrade = "zypper update -y";
     install = (fun packages -> "zypper install -y " ^ packages);
     enable_repos = None;
+    dev_group = Some "zypper install --force-resolution -y -t pattern devel_C_C++";
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip";
     deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip";
-    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip";
+    deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip libcap-devel libX11-devel bubblewrap";
     noninteractive = empty;
     add_user = useradd;
   }
@@ -109,9 +120,10 @@ let pacman =
     upgrade = "pacman -Su --noconfirm";
     install = (fun packages -> "pacman -S --noconfirm --needed " ^ packages);
     enable_repos = None;
+    dev_group = None;
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils libcap";
     deps_day10_install = "gcc make patch unzip bzip2 tar git curl diffutils bubblewrap";
-    deps_runtime = "gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap";
+    deps_runtime = "gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap ca-certificates bash libx11 nano coreutils ncurses";
     noninteractive = empty;
     add_user = useradd;
   }
@@ -153,6 +165,14 @@ let codeready_builder : Distro.t option -> string option = function
   | Some (`CentOS _) -> Some "dnf config-manager --set-enabled crb"
   | Some _ | None -> None
 
+(* Fedora renamed the group and changed how dnf spells the subcommand, from 41
+   on.  Everything else rpm keeps "Development Tools". *)
+let development_group ~distribution ~version fallback =
+  match (distribution, int_of_string_opt version) with
+  | "fedora", Some release when release >= 41 -> Some {|yum group install -y "c-development"|}
+  | "fedora", _ -> Some {|yum groupinstall -y "C Development Tools and Libraries"|}
+  | _ -> fallback
+
 let of_config ~os_family ~distribution ~version =
   let distro = distro_of ~distribution ~version in
   let dist =
@@ -160,7 +180,11 @@ let of_config ~os_family ~distribution ~version =
     | Some distro -> of_package_manager (Distro.package_manager distro)
     | None -> of_os_family os_family
   in
-  Option.map (fun dist -> { dist with enable_repos = codeready_builder distro }) dist
+  Option.map
+    (fun dist ->
+      let dev_group = if Option.is_some dist.dev_group then development_group ~distribution ~version dist.dev_group else None in
+      { dist with enable_repos = codeready_builder distro; dev_group })
+    dist
 
 let base_image ~arch ~distribution ~version =
   match distro_of ~distribution ~version with

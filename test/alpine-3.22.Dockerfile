@@ -17,7 +17,7 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 alpine:3.22
-RUN apk update && apk upgrade && apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap
+RUN apk update && apk upgrade && apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap ca-certificates libx11-dev nano ncurses-dev
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN addgroup -g 1000 opam
