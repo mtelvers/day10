@@ -5,21 +5,21 @@ WORKDIR /tmp/opam
 RUN make cold
 RUN make install
 
-FROM --platform=linux/amd64 archlinux:latest AS opam-build-builder
+FROM --platform=linux/amd64 archlinux:latest AS day10-install-builder
 RUN pacman -Sy --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl diffutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
-ADD [ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master", "/tmp/opam-build.ref" ]
-RUN git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build
-WORKDIR /tmp/opam-build
+ADD [ "https://api.github.com/repos/mtelvers/day10-install/git/refs/heads/master", "/tmp/day10-install.ref" ]
+RUN git clone --depth 1 --branch master https://github.com/mtelvers/day10-install.git /tmp/day10-install
+WORKDIR /tmp/day10-install
 RUN opam switch create . 5.3.0 --deps-only -y
 RUN opam exec -- dune build --release
-RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build
+RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 archlinux:latest
 RUN pacman -Sy --noconfirm && pacman -Su --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
-COPY --from=opam-build-builder [ "/usr/local/bin/opam-build", "/usr/local/bin/opam-build" ]
+COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi
 RUN groupadd --gid 1000 opam
 RUN useradd --uid 1000 --gid 1000 --home-dir /home/opam --create-home --shell /bin/bash opam

@@ -13,7 +13,7 @@ type t = {
   install : string -> string;  (** shell command installing the given packages *)
   enable_repos : string option;  (** shell command turning on repositories the image ships disabled *)
   deps_opam : string;  (** needed to build opam from source *)
-  deps_opam_build : string;  (** needed to build opam-build from source *)
+  deps_day10_install : string;  (** needed to build day10-install from source *)
   deps_runtime : string;  (** needed in the final image *)
   noninteractive : Dockerfile.t;  (** stop the package manager prompting *)
   add_user : uid:int -> gid:int -> Dockerfile.t;
@@ -48,7 +48,7 @@ let apt =
     install = (fun packages -> "apt install -y " ^ packages);
     enable_repos = None;
     deps_opam = "build-essential git curl libcap-dev sudo";
-    deps_opam_build = "build-essential git curl unzip bubblewrap";
+    deps_day10_install = "build-essential git curl unzip bubblewrap";
     deps_runtime = "build-essential unzip bubblewrap git sudo curl rsync";
     noninteractive = run "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections";
     add_user = useradd;
@@ -65,7 +65,7 @@ let yum =
        on some of the distributions sharing this package manager. *)
     enable_repos = None;
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
-    deps_opam_build = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
+    deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
     noninteractive = empty;
     add_user = useradd;
@@ -78,7 +78,7 @@ let apk =
     install = (fun packages -> "apk add " ^ packages);
     enable_repos = None;
     deps_opam = "build-base patch unzip bzip2 tar git curl openssl sudo linux-headers libcap-dev";
-    deps_opam_build = "build-base patch unzip bzip2 tar git curl bubblewrap";
+    deps_day10_install = "build-base patch unzip bzip2 tar git curl bubblewrap";
     deps_runtime = "build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap";
     noninteractive = empty;
     (* Alpine ships busybox's adduser rather than shadow's useradd, and its
@@ -98,7 +98,7 @@ let zypper =
     install = (fun packages -> "zypper install -y " ^ packages);
     enable_repos = None;
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip";
-    deps_opam_build = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip";
+    deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip";
     noninteractive = empty;
     add_user = useradd;
@@ -111,7 +111,7 @@ let pacman =
     install = (fun packages -> "pacman -S --noconfirm --needed " ^ packages);
     enable_repos = None;
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils libcap";
-    deps_opam_build = "gcc make patch unzip bzip2 tar git curl diffutils bubblewrap";
+    deps_day10_install = "gcc make patch unzip bzip2 tar git curl diffutils bubblewrap";
     deps_runtime = "gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap";
     noninteractive = empty;
     add_user = useradd;

@@ -215,7 +215,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let cmd =
     match config.build_command with
     | Some build_cmd -> "cd src && " ^ build_cmd
-    | None -> String.concat " && " (Build_command.for_package ~config ~opam_build:"opam-build" pkg)
+    | None -> String.concat " && " (Build_command.for_package ~config ~day10_install:"day10-install" pkg)
   in
   let argv = [ "/usr/bin/env"; "bash"; "-c"; cmd ] in
   let () =

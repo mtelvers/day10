@@ -191,9 +191,10 @@ let run ~t ~temp_dir opam_repository build_log =
   let arch = if config.arch = "amd64" then "x86_64" else config.arch in
   let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.5.1/opam-2.5.1-" ^ arch ^ "-freebsd"; "-o"; opam ] in
   let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
-  let opam_build = Path.(rootfs / "usr" / "bin" / "opam-build") in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/opam-build/releases/download/1.3.0/opam-build-1.3.0-" ^ arch ^ "-freebsd"; "-o"; opam_build ] in
-  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam_build ] in
+  let day10_install = Path.(rootfs / "usr" / "bin" / "day10-install") in
+  (* Needs a release cut under the new name; nothing runs FreeBSD yet. *)
+  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.3.0/day10-install-1.3.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
+  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; day10_install ] in
   let argv =
     [
       "pw groupadd opam -g " ^ string_of_int t.gid;
@@ -230,7 +231,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let argv =
     match config.build_command with
     | Some build_cmd -> [ "cd src"; build_cmd ]
-    | None -> Build_command.for_package ~config ~opam_build:"opam-build" pkg
+    | None -> Build_command.for_package ~config ~day10_install:"day10-install" pkg
   in
   let () =
     List.iter

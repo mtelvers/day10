@@ -5,10 +5,10 @@
    reached the Linux build but not FreeBSD's, and Windows passed it for every
    package rather than the one under test. *)
 
-(* [opam_build] is how the driver is invoked, which differs per platform: on
+(* [day10_install] is how the driver is invoked, which differs per platform: on
    the path for Linux and FreeBSD, an explicit path under the user's profile on
    Windows. *)
-let for_package ~(config : Config.t) ~opam_build pkg =
+let for_package ~(config : Config.t) ~day10_install pkg =
   let name = OpamPackage.to_string pkg in
   (* A package built from the project's own sources has to be pinned to them
      first, and the build run from there. *)
@@ -16,7 +16,7 @@ let for_package ~(config : Config.t) ~opam_build pkg =
   (* Tests are asked for the package under test, not for the things it depends
      on: a dependency is built the same way either way. *)
   let with_test = if config.with_test && Config.is_target_package ~config pkg then "--with-test " else "" in
-  pin @ [ opam_build ^ " -v " ^ with_test ^ name ]
+  pin @ [ day10_install ^ " -v " ^ with_test ^ name ]
 
 (* The dune invocation that [day10 build] stands for.  Packages the caller named
    are passed on to dune, not merely used to decide what to solve for: dune

@@ -279,7 +279,7 @@ let config ?(with_test = false) ?(package = "a.1.0") ?(local_packages = []) () =
     update_invariant = false;
   }
 
-let commands config pkg = Build_command.for_package ~config ~opam_build:"opam-build" (OpamPackage.of_string pkg)
+let commands config pkg = Build_command.for_package ~config ~day10_install:"day10-install" (OpamPackage.of_string pkg)
 
 (* Asking for tests applies to the package under test and to nothing else.  This
    went wrong in both directions at once: the flag never reached the Linux build
@@ -287,16 +287,16 @@ let commands config pkg = Build_command.for_package ~config ~opam_build:"opam-bu
    solution, dependencies included. *)
 let with_test_reaches_only_the_target () =
   let asked = config ~with_test:true () in
-  commands asked "a.1.0" = [ "opam-build -v --with-test a.1.0" ]
-  && commands asked "b.2.0" = [ "opam-build -v b.2.0" ]
-  && commands (config ()) "a.1.0" = [ "opam-build -v a.1.0" ]
+  commands asked "a.1.0" = [ "day10-install -v --with-test a.1.0" ]
+  && commands asked "b.2.0" = [ "day10-install -v b.2.0" ]
+  && commands (config ()) "a.1.0" = [ "day10-install -v a.1.0" ]
 
 (* A package of the project's own is pinned to the sources first, and counts as
    a target even though the version is not the one named on the command line. *)
 let a_local_package_is_pinned () =
   let mine = config ~with_test:true ~package:"mine" ~local_packages:[ "mine" ] () in
-  commands mine "mine.dev" = [ "opam pin -yn mine.dev $HOME/src/"; "cd src"; "opam-build -v --with-test mine.dev" ]
-  && commands mine "b.2.0" = [ "opam-build -v b.2.0" ]
+  commands mine "mine.dev" = [ "opam pin -yn mine.dev $HOME/src/"; "cd src"; "day10-install -v --with-test mine.dev" ]
+  && commands mine "b.2.0" = [ "day10-install -v b.2.0" ]
 
 (* Naming the packages has to reach dune, not just the solver: dune builds every
    package in the workspace otherwise, including ones that were left out and so

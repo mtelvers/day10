@@ -50,7 +50,7 @@ let run ~t ~temp_dir opam_repository build_log =
         [
           "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
           "curl.exe -L -o c:\\Users\\" ^ t.username
-          ^ "\\AppData\\Local\\opam\\opam-build.exe https://github.com/mtelvers/opam-build/releases/download/1.0.0/opam-build-1.0.0-" ^ config.arch ^ "-windows.exe";
+          ^ "\\AppData\\Local\\opam\\day10-install.exe https://github.com/mtelvers/day10-install/releases/download/1.0.0/day10-install-1.0.0-" ^ config.arch ^ "-windows.exe";
           (* "net user opam /nopassword /add"; *)
           "opam.exe init -k local -a c:\\opam-repository --bare -y";
           "opam.exe switch create default --empty";
@@ -106,7 +106,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
            "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
            "opam option sys-pkg-manager-cmd";
          ]
-        @ Build_command.for_package ~config ~opam_build:("c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\opam-build.exe") pkg);
+        @ Build_command.for_package ~config ~day10_install:("c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\day10-install.exe") pkg);
     ]
   in
   let sources = ordered_hashes @ [ "base" ] in

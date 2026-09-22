@@ -19,30 +19,30 @@ let opam ~(dist : Dist.t) ~arch base_image =
   @@ run "make cold"
   @@ run "make install"
 
-let opam_build ~(dist : Dist.t) ~arch base_image =
-  from ~platform:(platform arch) ~alias:"opam-build-builder" base_image
-  @@ run "%s" (Dist.shell dist [ dist.update; dist.install dist.deps_opam_build ])
+let day10_install ~(dist : Dist.t) ~arch base_image =
+  from ~platform:(platform arch) ~alias:"day10-install-builder" base_image
+  @@ run "%s" (Dist.shell dist [ dist.update; dist.install dist.deps_day10_install ])
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ run "opam init --disable-sandboxing -a --bare -y"
   (* Docker keys a RUN on its text, so cloning master is cached forever and the
-     image keeps whichever opam-build it was first built with.  A remote ADD is
+     image keeps whichever day10-install it was first built with.  A remote ADD is
      fetched and checksummed on every build, so naming the ref here rebuilds
      from the clone down whenever master moves. *)
-  @@ add ~src:[ "https://api.github.com/repos/mtelvers/opam-build/git/refs/heads/master" ] ~dst:"/tmp/opam-build.ref" ()
-  @@ run "git clone --depth 1 --branch master https://github.com/mtelvers/opam-build.git /tmp/opam-build"
-  @@ workdir "/tmp/opam-build"
+  @@ add ~src:[ "https://api.github.com/repos/mtelvers/day10-install/git/refs/heads/master" ] ~dst:"/tmp/day10-install.ref" ()
+  @@ run "git clone --depth 1 --branch master https://github.com/mtelvers/day10-install.git /tmp/day10-install"
+  @@ workdir "/tmp/day10-install"
   @@ run "opam switch create . 5.3.0 --deps-only -y"
   @@ run "opam exec -- dune build --release"
-  @@ run "install -m 755 _build/default/bin/main.exe /usr/local/bin/opam-build"
+  @@ run "install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install"
 
 let dockerfile ~(dist : Dist.t) ~arch ~base_image ~uid ~gid =
-  (opam ~dist ~arch base_image) @@ (opam_build ~dist ~arch base_image)
+  (opam ~dist ~arch base_image) @@ (day10_install ~dist ~arch base_image)
   @@ from ~platform:(platform arch) base_image
   (* One RUN, so the package index cannot be served from a stale cached layer
      while the mirror has moved on -- that combination 404s on every package. *)
   @@ run "%s" (Dist.shell dist [ dist.update; dist.upgrade; dist.install dist.deps_runtime ])
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
-  @@ copy ~from:"opam-build-builder" ~src:[ "/usr/local/bin/opam-build" ] ~dst:"/usr/local/bin/opam-build" ()
+  @@ copy ~from:"day10-install-builder" ~src:[ "/usr/local/bin/day10-install" ] ~dst:"/usr/local/bin/day10-install" ()
   @@ dist.noninteractive
   @@ dist.add_user ~uid ~gid
   @@ copy ~chown:(string_of_int uid ^ ":" ^ string_of_int gid) ~src:[ "opam-repository" ] ~dst:"/home/opam/opam-repository" ()
