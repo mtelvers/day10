@@ -204,6 +204,17 @@ let refresh ~t ~temp_dir build_log =
       Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee:config.log
         [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
 
+(* A build is one container, except when tests were asked for.  Then the package
+   is installed in one and its tests are run in a second, which has a network
+   namespace of its own: a suite binding a fixed port would otherwise meet
+   another job's on the same machine -- a builder runs dozens at once, all
+   sharing one localhost -- and a suite reaching the internet would pass here
+   while failing under OBuilder, which takes the network away for the same
+   reason.  The second run needs none: the first installed the depexts and left
+   the sources in the download cache, and both write into the same upper
+   directory, so the second finds the build tree the first left behind. *)
+type phase = { suffix : string; network : bool; command : string }
+
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
@@ -212,12 +223,15 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let workdir = Path.(temp_dir / "work") in
   let rootfsdir = Path.(temp_dir / "rootfs") in
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir; rootfsdir ] in
-  let cmd =
+  let phases =
     match config.build_command with
-    | Some build_cmd -> "cd src && " ^ build_cmd
-    | None -> String.concat " && " (Build_command.for_package ~config ~day10_install:"day10-install" pkg)
+    | Some { run; network } -> [ { suffix = ""; network; command = "cd src && " ^ run } ]
+    | None ->
+        let command ~with_test = String.concat " && " (Build_command.for_package ~config ~with_test pkg) in
+        if Build_command.tests_requested ~config pkg then
+          [ { suffix = ""; network = true; command = command ~with_test:false }; { suffix = "-test"; network = false; command = command ~with_test:true } ]
+        else [ { suffix = ""; network = true; command = command ~with_test:false } ]
   in
-  let argv = [ "/usr/bin/env"; "bash"; "-c"; cmd ] in
   let () =
     List.iter
       (fun hash ->
@@ -284,15 +298,29 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     | None -> mounts
     | Some src -> mounts @ [ { ty = "bind"; src; dst = "/home/opam/src"; options = [ "rw"; "rbind"; "rprivate" ] } ]
   in
-  let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network:true in
-  let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
   (* Show the output as it happens for the command the user asked for, since
      that is the one they are waiting on.  A dependency layer is someone else's
      package being compiled, so it only speaks up when asked with --log. *)
   let tee = Option.is_some config.build_command || config.log in
+  let run_phase ~append { suffix; network; command } =
+    let argv = [ "/usr/bin/env"; "bash"; "-c"; command ] in
+    let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network in
+    let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
+    (* A name of its own per phase, so a container left behind by one is never
+       mistaken for the other's. *)
+    let container = Filename.basename temp_dir ^ suffix in
+    Cleanup.with_resource (Cleanup.Runc_container container) @@ fun () ->
+    Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee ~append [ "runc"; "run"; "-b"; temp_dir; container ]
+  in
+  (* Stop at the first phase that fails, and report its status: the install
+     failing is the answer, and running the tests after it would only bury it.
+     Every phase after the first appends, so the log is the whole build and not
+     merely its last part. *)
   let result =
-    Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
-    Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee [ "runc"; "run"; "-b"; temp_dir; Filename.basename temp_dir ]
+    phases
+    |> List.mapi (fun index phase -> (index > 0, phase))
+    |> List.find_map (fun (append, phase) -> match run_phase ~append phase with 0 -> None | code -> Some code)
+    |> Option.value ~default:0
   in
   (* Unmount before the rm below, or rm would delete through the overlay. *)
   let _ = Os.sudo [ "umount"; rootfsdir ] in

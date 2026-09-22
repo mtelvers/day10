@@ -85,4 +85,66 @@ happened just now or weeks ago.
   $ grep -c '^\[NOTE\] accept_failures$' second.log
   1
 
+Tests run in a container of their own, with a network namespace of their own.
+A builder runs dozens of jobs at once against one localhost, so two suites
+binding the same fixed port would otherwise collide -- or worse, one would
+reach the other's server and report on it.  Taking the network away also makes
+a suite that downloads something fail here, as it does under OBuilder, rather
+than passing on a machine that happens to have a route out.
+
+The package under test installs first, with the network, so that the run that
+has none still finds its sources and its depexts in place.
+
+  $ mkdir -p repo/packages/netprobe/netprobe.1.0
+  $ cat > repo/packages/netprobe/netprobe.1.0/opam <<'EOF'
+  > opam-version: "2.0"
+  > build: [ "sh" "-c" "curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo BUILD-ONLINE || echo BUILD-OFFLINE" ]
+  > run-test: [ "sh" "-c" "curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo TEST-ONLINE || echo TEST-OFFLINE" ]
+  > EOF
+
+  $ NET=$(mktemp -d)
+  $ mkdir -p "$NET/$OSKEY"
+  $ sudo cp -al "$REAL/$OSKEY/base" "$NET/$OSKEY/base"
+  $ day10 health-check --with-test --log --cache-dir "$NET" --opam-repository repo netprobe.1.0 > net.log 2>&1
+  $ grep -c '^- BUILD-ONLINE$' net.log
+  1
+  $ grep -c '^- TEST-OFFLINE$' net.log
+  1
+
+Both runs are in the one log.  The second used to open it truncating, so the
+install's output -- the half that has the network, and so the half where a
+download fails -- was thrown away before anyone could read it.
+
+  $ grep -c '^- BUILD-OFFLINE$' net.log
+  1
+
+  $ sudo rm -rf "$NET"
+
+A command the caller wrote keeps the network: day10 cannot tell what they meant
+by it, and it is their own machine running the one job.  A dune build is day10's
+own command and has nothing to fetch -- the dependencies are installed in the
+layers beneath it and the sources are bind mounted -- so it is given none, and a
+project that turns out to need it finds that out here rather than in CI.
+
+  $ mkdir -p netproject
+  $ cat > netproject/probe.opam <<'EOF'
+  > opam-version: "2.0"
+  > depends: [ "dune" ]
+  > EOF
+  $ cat > netproject/dune-project <<'EOF'
+  > (lang dune 3.0)
+  > EOF
+  $ cat > netproject/dune <<'EOF'
+  > (rule
+  >  (alias netprobe)
+  >  (action
+  >   (run sh -c "curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo ONLINE || echo OFFLINE")))
+  > EOF
+
+  $ day10 exec netproject -- sh -c 'curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo ONLINE || echo OFFLINE'
+  ONLINE
+
+  $ day10 build netproject @netprobe
+  OFFLINE
+
   $ sudo rm -rf "$CACHE"

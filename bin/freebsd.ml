@@ -230,8 +230,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir ] in
   let argv =
     match config.build_command with
-    | Some build_cmd -> [ "cd src"; build_cmd ]
-    | None -> Build_command.for_package ~config ~day10_install:"day10-install" pkg
+    | Some { run; _ } -> [ "cd src"; run ]
+    | None -> Build_command.for_package ~config pkg
   in
   let () =
     List.iter

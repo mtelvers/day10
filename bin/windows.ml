@@ -49,8 +49,9 @@ let run ~t ~temp_dir opam_repository build_log =
       String.concat " && "
         [
           "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
-          "curl.exe -L -o c:\\Users\\" ^ t.username
-          ^ "\\AppData\\Local\\opam\\day10-install.exe https://github.com/mtelvers/day10-install/releases/download/1.0.0/day10-install-1.0.0-" ^ config.arch ^ "-windows.exe";
+          (* Beside opam.exe, which is on the path: the profile directory opam keeps
+             its own binaries in does not exist until opam init has run. *)
+          "curl.exe -L -o c:\\Windows\\day10-install.exe https://github.com/mtelvers/day10-install/releases/download/1.0.0/day10-install-1.0.0-" ^ config.arch ^ "-windows.exe";
           (* "net user opam /nopassword /add"; *)
           "opam.exe init -k local -a c:\\opam-repository --bare -y";
           "opam.exe switch create default --empty";
@@ -106,7 +107,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
            "curl.exe -L -o c:\\Windows\\opam.exe https://github.com/ocaml/opam/releases/download/2.3.0/opam-2.3.0-" ^ config.arch ^ "-windows.exe";
            "opam option sys-pkg-manager-cmd";
          ]
-        @ Build_command.for_package ~config ~day10_install:("c:\\Users\\" ^ t.username ^ "\\AppData\\Local\\opam\\day10-install.exe") pkg);
+        @ Build_command.for_package ~config pkg);
     ]
   in
   let sources = ordered_hashes @ [ "base" ] in

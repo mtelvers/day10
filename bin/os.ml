@@ -34,19 +34,22 @@ let rec wait pid =
    the file and passes it on as it arrives, so that a long build says something
    while it is still running instead of only once it is over.  Either of those
    sends the child's output through a pipe rather than straight to the file, and
-   [tee] merges stderr into the same pipe to keep the two in order. *)
-(* For [~stdin] where a child should have no input.  Reads return end of file at
+   [tee] merges stderr into the same pipe to keep the two in order.
+
+   For [~stdin] where a child should have no input.  Reads return end of file at
    once and isatty is false, so anything that probes takes its non-interactive
    path.  Closing the descriptor instead would be worse: the next file the child
    opened would land on it. *)
 let no_input = "/dev/null"
 
-let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
+let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) ?(append = false) prog args =
   let close fd =
     try Unix.close fd with
     | Unix.Unix_error _ -> ()
   in
-  let redirect path = Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_CLOEXEC ] 0o644 in
+  let redirect path =
+    Unix.openfile path [ Unix.O_WRONLY; Unix.O_CREAT; (if append then Unix.O_APPEND else Unix.O_TRUNC); Unix.O_CLOEXEC ] 0o644
+  in
   (* A child given day10's own stdin inherits its terminal.  sudo, configured
      with use_pty, then runs it on a pty of sudo's own in a process group that
      is not that pty's foreground -- and a background process group touching a
@@ -120,7 +123,7 @@ let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) prog args =
   in
   (wait pid, output)
 
-let sudo ?stdin ?stdout ?stderr ?tee cmd = fst (spawn ?stdin ?stdout ?stderr ?tee "sudo" cmd)
+let sudo ?stdin ?stdout ?stderr ?tee ?append cmd = fst (spawn ?stdin ?stdout ?stderr ?tee ?append "sudo" cmd)
 
 let exec ?stdout ?stderr ?tee cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in

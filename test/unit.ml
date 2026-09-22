@@ -279,7 +279,7 @@ let config ?(with_test = false) ?(package = "a.1.0") ?(local_packages = []) () =
     update_invariant = false;
   }
 
-let commands config pkg = Build_command.for_package ~config ~day10_install:"day10-install" (OpamPackage.of_string pkg)
+let commands config pkg = Build_command.for_package ~config (OpamPackage.of_string pkg)
 
 (* Asking for tests applies to the package under test and to nothing else.  This
    went wrong in both directions at once: the flag never reached the Linux build

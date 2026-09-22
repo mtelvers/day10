@@ -588,7 +588,7 @@ let output (config : Config.t) results =
   print_build_result (List.hd results)
 
 let run_build (config : Config.t) =
-  let build_command = Option.value ~default:"dune build" config.build_command in
+  let build_command = Option.value ~default:{ Config.run = "dune build"; network = false } config.build_command in
   (* Use build_command = None during dependency layer building *)
   let dep_config = { config with build_command = None } in
   let local_pkgs = List.map (fun name -> OpamPackage.of_string (name ^ ".dev")) config.local_packages in
@@ -946,7 +946,7 @@ let exec_cmd =
       const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some (String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd)))))
+               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some { Config.run = String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd); network = true })))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
       $ prefer_oldest_term $ update_invariant_term)
   in
@@ -967,7 +967,7 @@ let build_cmd =
       const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some (Build_command.dune ~only_packages dune_extra))))
+               ~only_packages ~prefer_oldest ~update_invariant ~build_command:(Some { Config.run = Build_command.dune ~only_packages dune_extra; network = false })))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
       $ prefer_oldest_term $ update_invariant_term)
   in
