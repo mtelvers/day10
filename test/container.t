@@ -34,6 +34,16 @@ The build runs as opam, not as root.
   $ day10 exec project -- sh -c 'id -un'
   opam
 
+A build gets one job per core up to a ceiling.  The container sees every core
+the machine has however many other containers are running, so on a 256-core
+worker at 64 jobs a package building with "make -j jobs" asked for 255 apiece:
+z3 holds about 375M per cc1plus, which is six terabytes, and the machine died.
+The count is only ever wrong upwards -- a four-core board already comes out at
+three -- so it is capped rather than replaced.
+
+  $ day10 exec project -- sh -c 'cores=$(nproc); want=$((cores - 1)); [ $want -gt 32 ] && want=32; [ $want -lt 1 ] && want=1; [ "$(opam var jobs)" = "$want" ] && echo "jobs matches the cap"'
+  jobs matches the cap
+
 The rest need a build that fails, so they run against a cache of their own and
 leave nothing in the machine's.  The base image is hardlinked in rather than
 built: it takes minutes, and is the one thing here worth reusing.  It lives
