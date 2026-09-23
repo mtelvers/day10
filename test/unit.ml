@@ -277,6 +277,7 @@ let config ?(with_test = false) ?(package = "a.1.0") ?(local_packages = []) () =
     local_packages;
     prefer_oldest = false;
     update_invariant = false;
+    opam_jobs = None;
   }
 
 let commands config pkg = Build_command.for_package ~config (OpamPackage.of_string pkg)

@@ -16,9 +16,9 @@ let hostname = "builder"
    a four-core board it already comes out at three.  Oversubscribing cores is
    absorbed by the scheduler; oversubscribing memory is not, which is why the
    ceiling is set by what a machine can hold rather than by what it can run. *)
-let jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
+let default_jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
 
-let env =
+let env ~(config : Config.t) =
   [
     ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
     ("HOME", "/home/opam");
@@ -26,7 +26,7 @@ let env =
     ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
-    ("OPAMJOBS", string_of_int jobs);
+    ("OPAMJOBS", string_of_int (Option.value ~default:default_jobs config.opam_jobs));
   ]
 
 (* This is a subset of the capabilities that Docker uses by default.
@@ -211,7 +211,7 @@ let refresh ~t ~temp_dir build_log =
          built before day10 knew it needed one can be brought up to date in
          place rather than having to be thrown away and rebuilt. *)
       let argv = [ "/bin/sh"; "-c"; Dist.shell dist [ dist.update ] ] in
-      let config_runc = make ~root ~cwd:"/" ~argv ~hostname ~uid:0 ~gid:0 ~env ~mounts:[] ~network:true in
+      let config_runc = make ~root ~cwd:"/" ~argv ~hostname ~uid:0 ~gid:0 ~env:(env ~config) ~mounts:[] ~network:true in
       let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
       Cleanup.with_resource (Cleanup.Runc_container (Filename.basename temp_dir)) @@ fun () ->
       Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee:config.log
@@ -313,7 +313,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let tee = Option.is_some config.build_command || config.log in
   let run_phase ~append { suffix; network; command } =
     let argv = [ "/usr/bin/env"; "bash"; "-c"; command ] in
-    let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env ~mounts ~network in
+    let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env:(env ~config) ~mounts ~network in
     let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
     (* A name per phase, so one left behind is not taken for the other. *)
     let container = Filename.basename temp_dir ^ suffix in

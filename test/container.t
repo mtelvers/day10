@@ -44,6 +44,12 @@ three -- so it is capped rather than replaced.
   $ day10 exec project -- sh -c 'cores=$(nproc); want=$((cores - 1)); [ $want -gt 32 ] && want=32; [ $want -lt 1 ] && want=1; [ "$(opam var jobs)" = "$want" ] && echo "jobs matches the cap"'
   jobs matches the cap
 
+The ceiling suits one worker's slots against one machine's memory, so it is
+worth overriding where those differ.
+
+  $ day10 exec --opam-jobs 7 project -- sh -c 'opam var jobs'
+  7
+
 The rest need a build that fails, so they run against a cache of their own and
 leave nothing in the machine's.  The base image is hardlinked in rather than
 built: it takes minutes, and is the one thing here worth reusing.  It lives

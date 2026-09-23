@@ -26,6 +26,10 @@ type t = {
      given no network; a command the caller wrote keeps one, day10 having no way
      to tell what they meant by it. *)
   build_command : command option;
+  (* How many jobs a package's build may run at once, or None for the default:
+     one per core up to a ceiling.  Worth setting where a worker's slots and the
+     machine's memory make the default wrong. *)
+  opam_jobs : int option;
   (* The packages built from the workspace by dune, so never installed into the
      switch as well.  Defaults to every .opam file in the directory; a caller
      that has already worked out which packages it wants, as OCaml-CI has, names
