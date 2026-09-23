@@ -17,7 +17,7 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 opensuse/leap:15.6
-RUN zypper refresh && zypper update -y && zypper install --force-resolution -y -t pattern devel_C_C++ && zypper install -y gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip libcap-devel libX11-devel bubblewrap
+RUN zypper refresh && zypper update -y && zypper install -y gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi

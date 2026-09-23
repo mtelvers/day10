@@ -17,7 +17,7 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 quay.io/centos/centos:stream9
-RUN dnf config-manager --set-enabled crb && yum makecache && yum update -y && yum groupinstall -y "Development Tools" && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap passwd nano libX11-devel
+RUN dnf config-manager --set-enabled crb && yum makecache && yum update -y && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi
