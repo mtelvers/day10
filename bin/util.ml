@@ -221,6 +221,30 @@ let effective_part ~vars opam =
   |> with_extensions (OpamStd.String.Map.filter (fun k _ -> String.equal k "x-env-path-rewrite") (extensions opam))
   |> with_depexts (if OpamSysPkg.Set.is_empty depexts then [] else [ (depexts, OpamTypes.FBool true) ])
 
+(* Whether asking for [variable] could make this package do anything different.
+   There are two ways it can, and only the first was checked: a filter on one of
+   its commands names the variable, or it has commands opam runs solely because
+   the flag is set.  run-test is the second kind -- opam appends it on a plain
+   "if test then", consulting no filter -- so a package written with a run-test
+   field rather than a {with-test} filter kept the hash it had without tests,
+   and its test job was answered by the layer a plain build left behind.
+
+   A filter counts without being resolved, since it can depend on variables
+   known only inside the container: concluding it would not fire risks
+   answering a tested run from an untested layer, where the error the other way
+   is a rebuild. *)
+let can_act_on ~variable opam =
+  let only_when_set =
+    match variable with
+    | "with-test" -> OpamFile.OPAM.run_test opam @ OpamFile.OPAM.deprecated_build_test opam
+    | "with-doc" -> OpamFile.OPAM.deprecated_build_doc opam
+    | _ -> []
+  in
+  only_when_set <> []
+  || [ OpamFile.OPAM.build opam; OpamFile.OPAM.install opam; OpamFile.OPAM.run_test opam; OpamFile.OPAM.deprecated_build_test opam ]
+     |> List.concat_map OpamFilter.commands_variables
+     |> List.exists (fun v -> String.equal (OpamVariable.Full.to_string v) variable)
+
 (* [with_test] and [with_doc] change what gets run rather than what gets
    solved, so a package with no test-only dependencies hashes the same either
    way and a tested run would be answered from an untested layer.  Only append

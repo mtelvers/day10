@@ -236,6 +236,46 @@ let hash_follows_the_package () =
    and the caches want rebuilding. *)
 let hash_is_stable () = hash base = "29ddeddd71e75c2ceadac7c2c76c6477"
 
+(* Whether asking for tests could change what a package does, which decides
+   whether the flag reaches the hash at all.  Sharing the layer when it cannot
+   is what stops a package built as someone else's dependency being rebuilt for
+   every test job, and opam-repo-ci asks for tests every time -- so this has to
+   say no for the eighteen thousand packages with no tests.
+
+   It has to say yes for both ways of writing them.  Only the {with-test}
+   filter was recognised, and the two packages the check was built against both
+   used it; 188 of the 537 packages with tests use the run-test field instead,
+   name the variable nowhere, and so were answered from the layer a plain build
+   left behind -- reporting success for a test job that ran no test. *)
+let acting_on_the_flag () =
+  let acts ~variable file = Util.can_act_on ~variable (opam_of_string file) in
+  let plain = {|opam-version: "2.0"
+build: [ "make" ]
+|} in
+  (* Nothing to run differently, so the build and test jobs share a layer. *)
+  (not (acts ~variable:"with-test" plain))
+  && (not (acts ~variable:"with-doc" plain))
+  (* The field opam appends on "if test then", naming no variable. *)
+  && acts ~variable:"with-test" (plain ^ {|run-test: [ "dune" "runtest" ]|} ^ "\n")
+  && acts ~variable:"with-test" (plain ^ {|build-test: [ "dune" "runtest" ]|} ^ "\n")
+  (* The older idiom: a filter on a build command. *)
+  && acts ~variable:"with-test" {|opam-version: "2.0"
+build: [
+  [ "make" ]
+  [ "dune" "runtest" ] {with-test}
+]
+|}
+  (* And the same both ways for documentation. *)
+  && acts ~variable:"with-doc" (plain ^ {|build-doc: [ "odoc" ]|} ^ "\n")
+  && acts ~variable:"with-doc" {|opam-version: "2.0"
+build: [
+  [ "make" ]
+  [ "odoc" ] {with-doc}
+]
+|}
+  (* Tests must not make the doc flag matter, or either would re-key both. *)
+  && not (acts ~variable:"with-doc" (plain ^ {|run-test: [ "dune" "runtest" ]|} ^ "\n"))
+
 (* Asking for tests has to reach the hash, or a run with them is answered from a
    layer built without them.  Not asking has to leave the hash alone, or every
    layer already in every cache is orphaned. *)
@@ -386,6 +426,7 @@ let checks =
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
+    ("acting on the flag", acting_on_the_flag);
     ("hash separates the flags", hash_separates_the_flags);
     ("hash follows the depexts", hash_follows_the_depexts);
     ("depexts are scoped to the platform", depexts_are_scoped_to_the_platform);
