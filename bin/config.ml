@@ -53,6 +53,29 @@ let is_local_package ~(config : t) pkg =
 let is_target_package ~(config : t) pkg =
   String.equal (OpamPackage.to_string pkg) config.package || is_local_package ~config pkg
 
+(* The family opam will compute inside the container: the first word of ID_LIKE
+   in its /etc/os-release, and the distribution where there is none
+   (opamSysPoll.ml, poll_os_family).  Derived here rather than polled from the
+   builder, which describes the builder: an alpine job on an Ubuntu worker was
+   given family debian, so every depext line keyed on the debian family matched,
+   and packages that were never installed went into the layer key.
+
+   Only the distributions whose ID_LIKE says something other than their own name
+   need listing.  opensuse splits on the version because Leap and Tumbleweed
+   disagree -- "suse opensuse" against "opensuse suse" -- and day10 calls them
+   both opensuse. *)
+let family ~given ~distribution ~version =
+  match given with
+  | Some family -> family
+  | None -> (
+      match (distribution, version) with
+      | ("debian" | "ubuntu"), _ -> "debian"
+      | ("centos" | "rhel" | "ol" | "almalinux" | "rocky"), _ -> "rhel"
+      | "opensuse", "tumbleweed" -> "opensuse"
+      | "opensuse", _ -> "suse"
+      | ("archlinux" | "arch"), _ -> "arch"
+      | distribution, _ -> distribution)
+
 let std_env ~(config : t) =
   Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
     ~ocaml_version:config.ocaml_version ()

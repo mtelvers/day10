@@ -151,6 +151,28 @@ let platforms_name_the_docker_arch () =
   ]
   |> List.for_all (fun (arch, expected) -> String.equal (Dockerfile_gen.platform arch) expected)
 
+(* The family opam will compute in the container, from the distribution rather
+   than from the builder.  Polling the builder gave an alpine job family debian,
+   which matched every depext line keyed on the debian family and folded
+   packages that were never installed into the layer key -- and made the key
+   depend on which machine built it. *)
+let family_follows_the_distribution () =
+  let derived distribution version = Config.family ~given:None ~distribution ~version in
+  derived "alpine" "3.24" = "alpine"
+  && derived "fedora" "42" = "fedora"
+  && derived "debian" "13" = "debian"
+  && derived "ubuntu" "26.04" = "debian"
+  && derived "centos" "9" = "rhel"
+  && derived "archlinux" "26.04" = "arch"
+  (* Leap and Tumbleweed disagree, and day10 calls both of them opensuse. *)
+  && derived "opensuse" "16.0" = "suse"
+  && derived "opensuse" "tumbleweed" = "opensuse"
+  (* A distribution with no ID_LIKE is its own family, which is also the right
+     answer for one nobody has listed yet. *)
+  && derived "gentoo" "2.17" = "gentoo"
+  (* An explicit value still wins, for a platform the table gets wrong. *)
+  && Config.family ~given:(Some "rhel") ~distribution:"alpine" ~version:"3.24" = "rhel"
+
 let base = {|opam-version: "2.0"
 build: [ "make" ]
 depends: [ "b" ]
@@ -450,6 +472,7 @@ let checks =
     ("platform names come apart", platform_names_come_apart);
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("platforms name the docker arch", platforms_name_the_docker_arch);
+    ("family follows the distribution", family_follows_the_distribution);
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("acting on the flag", acting_on_the_flag);
