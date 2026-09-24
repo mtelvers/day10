@@ -1,12 +1,18 @@
 open Dockerfile
 
+(* Three vocabularies meet here.  A caller passes opam's arch names -- that is
+   what opam-repo-ci normalises to before submitting -- or the uname ones if a
+   person typed it, and Docker wants a third set again.  Take both spellings:
+   the fallthrough is right only where the two happen to coincide, which is
+   arm64, s390x and riscv64 but not ppc64, x86_32 or arm32.  linux/ppc64 names
+   the big-endian platform, which no image publishes a manifest for. *)
 let platform = function
   | "x86_64" | "amd64" -> "linux/amd64"
-  | "i386" | "i486" | "i586" | "i686" -> "linux/386"
-  | "aarch64" -> "linux/arm64"
-  | "armv7l" -> "linux/arm/v7"
+  | "x86_32" | "i386" | "i486" | "i586" | "i686" -> "linux/386"
+  | "arm64" | "aarch64" -> "linux/arm64"
+  | "arm32" | "armv7l" -> "linux/arm/v7"
   | "armv6l" -> "linux/arm/v6"
-  | "ppc64le" -> "linux/ppc64le"
+  | "ppc64" | "ppc64le" -> "linux/ppc64le"
   | "riscv64" -> "linux/riscv64"
   | "s390x" -> "linux/s390x"
   | arch -> "linux/" ^ arch

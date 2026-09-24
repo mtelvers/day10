@@ -126,6 +126,31 @@ let centos_enables_codeready_builder () =
   && enabled ~distribution:"fedora" ~version:"42" ~os_family:"fedora" = None
   && enabled ~distribution:"debian" ~version:"13" ~os_family:"debian" = None
 
+(* The arch a caller gives is opam's name for it, which is what opam-repo-ci
+   normalises to, and Docker's platform vocabulary is a different one.  Where
+   the two coincide the fallthrough was right and nobody noticed the ones where
+   they do not: ppc64 became linux/ppc64, the big-endian platform, which no
+   image publishes a manifest for. *)
+let platforms_name_the_docker_arch () =
+  [
+    (* opam's names, which is what actually arrives *)
+    ("x86_64", "linux/amd64");
+    ("x86_32", "linux/386");
+    ("arm64", "linux/arm64");
+    ("arm32", "linux/arm/v7");
+    ("ppc64", "linux/ppc64le");
+    ("s390x", "linux/s390x");
+    ("riscv64", "linux/riscv64");
+    (* and the uname ones, for a caller who typed what the machine calls it *)
+    ("amd64", "linux/amd64");
+    ("i686", "linux/386");
+    ("aarch64", "linux/arm64");
+    ("armv7l", "linux/arm/v7");
+    ("armv6l", "linux/arm/v6");
+    ("ppc64le", "linux/ppc64le");
+  ]
+  |> List.for_all (fun (arch, expected) -> String.equal (Dockerfile_gen.platform arch) expected)
+
 let base = {|opam-version: "2.0"
 build: [ "make" ]
 depends: [ "b" ]
@@ -424,6 +449,7 @@ let checks =
     ("platforms are selected", platforms_are_selected);
     ("platform names come apart", platform_names_come_apart);
     ("centos enables codeready builder", centos_enables_codeready_builder);
+    ("platforms name the docker arch", platforms_name_the_docker_arch);
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("acting on the flag", acting_on_the_flag);
