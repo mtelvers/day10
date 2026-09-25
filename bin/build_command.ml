@@ -10,14 +10,20 @@
 let tests_requested ~(config : Config.t) pkg = config.with_test && Config.is_target_package ~config pkg
 
 (* [with_test] overrides that decision, for a caller splitting the work into a
-   run that installs and a run that tests. *)
-let for_package ~(config : Config.t) ?with_test pkg =
+   run that installs and a run that tests.  [reinstall] makes the driver remove
+   the package first, which the second of those runs needs: opam resolves a
+   build command against switch state, so a package that publishes a variable in
+   its own .config changes what its own command means once installed.
+   conf-libclang.22 builds with "configure.sh version", which is 22 until it is
+   installed and the detected llvm version afterwards, so building it a second
+   time failed.  opam reinstall removes first for the same reason. *)
+let for_package ~(config : Config.t) ?with_test ?(reinstall = false) pkg =
   let name = OpamPackage.to_string pkg in
   (* A package built from the project's own sources has to be pinned to them
      first, and the build run from there. *)
   let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ name ^ " $HOME/src/"; "cd src" ] else [] in
   let with_test = match with_test with Some requested -> requested | None -> tests_requested ~config pkg in
-  pin @ [ "day10-install -v " ^ (if with_test then "--with-test " else "") ^ name ]
+  pin @ [ "day10-install -v " ^ (if reinstall then "--reinstall " else "") ^ (if with_test then "--with-test " else "") ^ name ]
 
 (* The dune invocation that [day10 build] stands for.  Packages the caller named
    are passed on to dune, not merely used to decide what to solve for: dune

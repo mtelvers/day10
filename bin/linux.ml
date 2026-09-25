@@ -236,10 +236,13 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     match config.build_command with
     | Some { run; network } -> [ { suffix = ""; network; command = "cd src && " ^ run } ]
     | None ->
-        let command ~with_test = String.concat " && " (Build_command.for_package ~config ~with_test pkg) in
+        let command ?reinstall ~with_test () = String.concat " && " (Build_command.for_package ~config ?reinstall ~with_test pkg) in
         if Build_command.tests_requested ~config pkg then
-          [ { suffix = ""; network = true; command = command ~with_test:false }; { suffix = "-test"; network = false; command = command ~with_test:true } ]
-        else [ { suffix = ""; network = true; command = command ~with_test:false } ]
+          [
+            { suffix = ""; network = true; command = command ~with_test:false () };
+            { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () };
+          ]
+        else [ { suffix = ""; network = true; command = command ~with_test:false () } ]
   in
   let () =
     List.iter
