@@ -171,11 +171,17 @@ let effective_url u =
 
 (* The system packages this platform installs for a package.  Resolved rather
    than hashed whole, so an edit to one distribution's depexts leaves the others
-   alone.  A filter that will not evaluate counts as applying: over-keying costs
-   a rebuild, under-keying reuses a layer built without the package. *)
+   alone.
+
+   A filter that will not evaluate counts as not applying, which is what opam
+   itself does (OpamSwitchState.depexts_raw, eval_to_bool ~default:false), so
+   the key describes what will actually be installed.  A package variable in a
+   depexts filter parses but never resolves -- ocaml/opam#5836 -- so goblint's
+   ["libgraph-easy-perl"] {os-distribution = "ubuntu" & with-test} installs
+   nothing, and counting it as applying would have put it in the key. *)
 let depexts_for ~vars opam =
   OpamFile.OPAM.depexts opam
-  |> List.filter (fun (_, filter) -> OpamFilter.eval_to_bool ~default:true vars filter)
+  |> List.filter (fun (_, filter) -> OpamFilter.eval_to_bool ~default:false vars filter)
   |> List.fold_left (fun acc (names, _) -> OpamSysPkg.Set.union acc names) OpamSysPkg.Set.empty
 
 (* What day10 takes a layer to be.  Not opam's effective_part, which answers

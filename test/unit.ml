@@ -276,6 +276,22 @@ let hash_identifies_a_source_by_its_checksum () =
 let hash_follows_the_package () =
   hash ~pkg:"a.1.0" base <> hash ~pkg:"b.1.0" base && hash ~pkg:"a.1.0" base <> hash ~pkg:"a.2.0" base
 
+(* A depext filter naming something that cannot be resolved does not apply,
+   which is what opam does, so the key describes what will be installed.  A
+   package variable in a depexts filter parses but never resolves
+   (ocaml/opam#5836), so goblint's {os-distribution = "ubuntu" & with-test}
+   installs nothing on ubuntu and must not be keyed as though it did. *)
+let an_unresolvable_depext_filter_does_not_apply () =
+  let ubuntu = vars ~os_distribution:"ubuntu" ~os_family:"debian" ~os_version:"24.04" () in
+  let with_depext line = opam_of_string (base ^ Printf.sprintf "depexts: [ %s ]" line ^ "\n") in
+  let resolved line = Util.depexts_for ~vars:ubuntu (with_depext line) |> OpamSysPkg.Set.elements |> List.map OpamSysPkg.to_string in
+  (* The platform matches, but with-test never resolves, so the line is out. *)
+  resolved {|["libgraph-easy-perl"] {os-distribution = "ubuntu" & with-test}|} = []
+  (* Without it the same line applies, so it is the variable and not the rest. *)
+  && resolved {|["libgraph-easy-perl"] {os-distribution = "ubuntu"}|} = [ "libgraph-easy-perl" ]
+  (* And a platform that does not match is still out. *)
+  && resolved {|["libgraph-easy-perl"] {os-distribution = "alpine"}|} = []
+
 (* day10 owns this hash rather than borrowing opam's, so it is worth pinning.
    Any change to it orphans every layer in every cache on every builder, which
    is a thing to decide and then to do, not to discover afterwards.  If this
@@ -479,6 +495,7 @@ let checks =
     ("hash separates the flags", hash_separates_the_flags);
     ("hash follows the depexts", hash_follows_the_depexts);
     ("depexts are scoped to the platform", depexts_are_scoped_to_the_platform);
+    ("an unresolvable depext filter does not apply", an_unresolvable_depext_filter_does_not_apply);
     ("hash identifies a source by its checksum", hash_identifies_a_source_by_its_checksum);
     ("hash follows the package", hash_follows_the_package);
     ("hash is stable", hash_is_stable);
