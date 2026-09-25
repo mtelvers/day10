@@ -1114,36 +1114,44 @@ let prune_cmd =
     Arg.(value & opt (some string) None & info [ "max-size" ] ~docv:"SIZE" ~doc)
   in
   let distribution_arg, version_arg, arch_arg = platform_filter_terms in
+  let failed_arg =
+    let doc =
+      "Delete the layers that failed to build, so they are attempted again.  A failed layer is kept so its verdict can be replayed \
+       without rebuilding, which is right while the failure belongs to the package and wrong once it was day10's."
+    in
+    Arg.(value & flag & info [ "failed" ] ~doc)
+  in
   let prune_term =
     Term.(
-      const (fun dir distribution version arch np days percent max_size ->
+      const (fun dir distribution version arch np days percent max_size failed ->
           let mode =
-            match days, percent, max_size with
-            | Some d, None, None when d >= 0 -> Cache.Keep_days d
-            | None, Some p, None when p >= 0 && p <= 100 -> Cache.Keep_percent p
-            | None, None, Some size -> (
+            match days, percent, max_size, failed with
+            | Some d, None, None, false when d >= 0 -> Cache.Keep_days d
+            | None, Some p, None, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
+            | None, None, Some size, false -> (
                 match Cache.size_of_string size with
                 | Some bytes when bytes >= 0 -> Cache.Max_size bytes
                 | _ ->
                     OpamConsole.error "--max-size wants a size with a unit, such as 40G or 500M, not %S" size;
                     exit 1)
-            | None, None, None ->
-                OpamConsole.error "Specify one of --days N, --percent N or --max-size SIZE";
+            | None, None, None, true -> Cache.Failed
+            | None, None, None, false ->
+                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE or --failed";
                 exit 1
-            | Some _, None, None ->
+            | Some _, None, None, false ->
                 OpamConsole.error "--days must be >= 0";
                 exit 1
-            | None, Some _, None ->
+            | None, Some _, None, false ->
                 OpamConsole.error "--percent must be between 0 and 100";
                 exit 1
             | _ ->
-                OpamConsole.error "--days, --percent and --max-size are mutually exclusive";
+                OpamConsole.error "--days, --percent, --max-size and --failed are mutually exclusive";
                 exit 1
           in
           Cache.prune ~dir ~distribution ~version ~arch ?np mode)
-      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg)
   in
-  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries by age (--days), by count (--percent) or to fit a size (--max-size)" in
+  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size) or because they failed (--failed)" in
   Cmd.v prune_info prune_term
 
 let list_cmd =

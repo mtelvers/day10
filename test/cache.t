@@ -43,6 +43,7 @@ read from the records and is stable.
   $ cp -a cache prune-days
   $ cp -a cache prune-percent
   $ cp -a cache prune-size
+  $ cp -a cache prune-failed
 
   $ day10 cache-info --cache-dir cache 2>/dev/null
   
@@ -73,6 +74,7 @@ read from the records and is stable.
                  --days 30         24.0K      3 layers
                  --percent 90       8.0K      1 layer
                  --percent 50      24.0K      3 layers
+                 --failed           8.0K      1 layer
 
 Prune covers every platform and ranks across all of them, so a cutoff takes the
 stale platform and leaves the busy one alone.
@@ -115,11 +117,24 @@ bytes and empty the cache.
 The modes are mutually exclusive, and one is required.
 
   $ day10 prune --cache-dir prune-size --days 1 --percent 50
-  [ERROR] --days, --percent and --max-size are mutually exclusive
+  [ERROR] --days, --percent, --max-size and --failed are mutually exclusive
   [1]
   $ day10 prune --cache-dir prune-size
-  [ERROR] Specify one of --days N, --percent N or --max-size SIZE
+  [ERROR] Specify one of --days N, --percent N, --max-size SIZE or --failed
   [1]
+
+A failed layer is kept so its verdict can be replayed without rebuilding, which
+is right while the failure belongs to the package.  Once it was day10's -- a
+build run twice in one container, say -- every one of them is a wrong answer
+that will be served until it is deleted.
+
+  $ day10 prune --cache-dir prune-failed --failed 2>&1
+  [NOTE] Pruning 1 cache entries (failed to build): ubuntu-24.04-x86_64 1
+  [NOTE] Freed 8.0K
+  $ ls prune-failed/ubuntu-24.04-x86_64
+  base
+  hot1
+  hot2
 
 A platform filter narrows what is considered, so a cutoff that would have taken
 the stale platform takes nothing.

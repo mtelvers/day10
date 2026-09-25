@@ -22,6 +22,11 @@ type mode =
   | Keep_days of int
   | Keep_percent of int
   | Max_size of int
+  (* A layer that failed is kept so the verdict can be replayed without
+     rebuilding, which is right while the failure is the package's.  When it was
+     day10's, every one of them is a wrong answer that will be served until it
+     is deleted. *)
+  | Failed
 
 (* A platform is a directory holding a base image: base/fs is what every layer
    for it is built on, so a directory without one is not a platform whatever it
@@ -174,6 +179,7 @@ let freed_by_days now sized days =
   tally (List.filter (fun (layer, _) -> now -. layer.last_used > cutoff) sized)
 
 let freed_by_percent sized pct = tally (fit_to (sum sized * pct / 100) sized)
+let freed_by_failed sized = tally (List.filter (fun (layer, _) -> not layer.ok) sized)
 
 (* Sizes come from each layer's own record, measuring whatever has none, so the
    first run over an existing cache walks it and later runs do not. *)
@@ -212,16 +218,17 @@ let info ~dir ~distribution ~version ~arch ~np =
            from: a figure for one platform would understate the command. *)
         let () = Printf.printf "\n" in
         List.iteri
-          (fun i (flag, n, (count, bytes)) ->
+          (fun i (flag, (count, bytes)) ->
             Printf.printf "  %-12s %-14s %8s %6d %s\n%!"
               (if i = 0 then "would free" else "")
-              (Printf.sprintf "%s %d" flag n) (human bytes) count
+              flag (human bytes) count
               (if count = 1 then "layer" else "layers"))
           [
-            ("--days", 90, freed_by_days now sized 90);
-            ("--days", 30, freed_by_days now sized 30);
-            ("--percent", 90, freed_by_percent sized 90);
-            ("--percent", 50, freed_by_percent sized 50);
+            ("--days 90", freed_by_days now sized 90);
+            ("--days 30", freed_by_days now sized 30);
+            ("--percent 90", freed_by_percent sized 90);
+            ("--percent 50", freed_by_percent sized 50);
+            ("--failed", freed_by_failed sized);
           ]
 
 let prune ~dir ~distribution ~version ~arch ?np mode =
@@ -252,6 +259,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           let total = sum sized in
           let limit = total * pct / 100 in
           (List.map fst (fit_to limit sized), Printf.sprintf "keeping the newest %d%% of %s, so %s" pct (human total) (human limit))
+      | Failed -> (List.filter (fun l -> not l.ok) entries, "failed to build")
       | Max_size limit ->
           let sized = sized () in
           let total = sum sized in
