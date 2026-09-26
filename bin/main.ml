@@ -88,11 +88,18 @@ let rec find_local_packages dir =
            if name = "_build" || name = "_opam" || Filename.check_suffix name ".t" then []
            else find_local_packages path
          else if Filename.check_suffix name ".opam" then (
-           match OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) with
-           | opam -> [ (Filename.remove_extension name, opam) ]
-           | exception e ->
-               OpamConsole.warning "Ignoring %s: %s" path (Printexc.to_string e);
-               [])
+           let stem = Filename.remove_extension name in
+           (* The file is named after the package, and an opam name cannot
+              contain a dot, so a stem that will not parse as one is not a
+              package: a repository-style cstruct.6.2.0.opam is a fixture. *)
+           match OpamPackage.Name.of_string stem with
+           | exception _ -> []
+           | _ -> (
+               match OpamFile.OPAM.read (OpamFile.make (OpamFilename.raw path)) with
+               | opam -> [ (stem, opam) ]
+               | exception e ->
+                   OpamConsole.warning "Ignoring %s: %s" path (Printexc.to_string e);
+                   []))
          else [])
   with
   | Sys_error _ -> []

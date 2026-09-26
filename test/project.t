@@ -29,7 +29,13 @@ for their tests to generate over.
 
   $ printf 'opam-version: "2.0"\n' > project/sub.t/fixture.opam
 
-Only the real one is pinned into the solution, and neither of the others is
+A repository-style name is a fixture too: the file is named after the package
+and an opam name cannot contain a dot, so cstruct.6.2.0.opam is not a package
+dune builds.  Left in, the name reaches the solver, which rejects it.
+
+  $ printf 'opam-version: "2.0"\n' > project/cstruct.6.2.0.opam
+
+Only the real one is pinned into the solution, and none of the others is
 reported as a package that would not parse.
 
   $ day10 ci --dry-run --log --cache-dir cache --opam-repository repo \
