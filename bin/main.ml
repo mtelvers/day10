@@ -359,7 +359,14 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
          weeks ago and all we are reporting is the cached verdict.  Streaming
          has already shown it if we built it just now. *)
       let streamed = built && config.log in
-      if not streamed then OpamConsole.error "%s failed:\n%s" (OpamPackage.to_string pkg) (Os.read_from_file Path.(layer_dir / "build.log"));
+      (* The log goes out untagged.  opam reformats what it is given, indenting
+         every line under the tag and wrapping it to the terminal width, and a
+         reader matches opam's own errors at the start of a line: indented,
+         "[ERROR] Package ... depends on the unavailable system package" is not
+         recognised as the skip it is, and gates the job instead. *)
+      if not streamed then (
+        OpamConsole.error "%s failed:" (OpamPackage.to_string pkg);
+        OpamConsole.errmsg "%s\n" (Os.read_from_file Path.(layer_dir / "build.log")));
       (* A failure the maintainer has already declared expected here.  day10
          knows which platform was asked for, so it does the matching and emits
          the marker on its own line; the failure above says which package. *)

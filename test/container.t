@@ -34,6 +34,15 @@ The build runs as opam, not as root.
   $ day10 exec project -- sh -c 'id -un'
   opam
 
+The shell stays as the container's PID 1.  bash execs a lone simple command
+rather than forking it, which leaves the build itself as PID 1, and PID 1 is
+the only thing that reaps orphans: a suite that kills a process group and waits
+for it to go finds an unreaped zombie still answering kill (pid, 0), and calls
+it alive.  ppx_windtrap.0.2.0 failed that way on every platform.
+
+  $ day10 exec project -- cat /proc/1/comm
+  bash
+
 A build gets one job per core up to a ceiling.  The container sees every core
 the machine has however many other containers are running, so on a 256-core
 worker at 64 jobs a package building with "make -j jobs" asked for 255 apiece:
@@ -99,6 +108,23 @@ happened just now or weeks ago.
   $ grep -q THE-REAL-ERROR second.log && echo still present
   still present
   $ grep -c '^\[NOTE\] accept_failures$' second.log
+  1
+
+An error opam wrote is reported as opam wrote it, at the start of a line.
+Whatever reads day10's output matches opam's own errors anchored there, and
+that is how it tells an unavailable system package -- a package that does not
+apply to this platform, and so a skip -- from a real failure.  Passed through
+opam's tagged output instead, every line of the log is indented under the tag,
+the match is missed, and the job is gated on a package that was never going to
+build here.
+
+  $ mkdir -p repo/packages/nodep/nodep.1.0
+  $ cat > repo/packages/nodep/nodep.1.0/opam <<'EOF'
+  > opam-version: "2.0"
+  > depexts: [ ["day10-no-such-system-package"] ]
+  > EOF
+  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo nodep.1.0 > depext.log 2>&1
+  $ grep -c '^\[ERROR\] Package nodep.1.0 depends on the unavailable system package' depext.log
   1
 
 Tests run in a container of their own, with a network namespace of their own.
