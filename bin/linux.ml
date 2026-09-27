@@ -315,7 +315,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
      package being compiled, so it only speaks up when asked with --log. *)
   let tee = Option.is_some config.build_command || config.log in
   let run_phase ~append { suffix; network; command } =
-    let argv = [ "/usr/bin/env"; "bash"; "-c"; command ] in
+    (* The trailing command keeps the shell as PID 1: bash execs a lone simple
+       command rather than forking it, which would leave the package's own
+       build as PID 1.  PID 1 is the only thing that reaps the orphans a test
+       leaves behind, and a zombie still answers kill (pid, 0), so a suite that
+       kills a process group and waits for it to go sees it stay alive. *)
+    let argv = [ "/usr/bin/env"; "bash"; "-c"; command ^ "\nexit $?" ] in
     let config_runc = make ~root:rootfsdir ~cwd:"/home/opam" ~argv ~hostname ~uid:t.uid ~gid:t.gid ~env:(env ~config) ~mounts ~network in
     let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
     (* A name per phase, so one left behind is not taken for the other. *)
