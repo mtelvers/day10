@@ -1168,6 +1168,107 @@ let prune_cmd =
   let prune_info = Cmd.info "prune" ~doc:"Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size) or because they failed (--failed)" in
   Cmd.v prune_info prune_term
 
+(* The packages worth testing when [target] changes.
+
+   opam-repo-ci asks opam for this with three queries and unions them: the
+   direct and optional dependents, the closure over hard dependencies, and the
+   test-only dependents.  Not one query with every flag set: --recursive
+   composed with --depopts and --with-test walks the closure through optional
+   and test edges too, which for coq.9.2.0 turns 11 packages into 20. *)
+let dependents ~repo ~(config : Config.t) target =
+  (* Keyed by the name depended on, and holding the formula rather than just
+     the dependent, because depending on the name is not depending on this
+     version of it: a package wanting dune < 3.0 is no reverse dependency of
+     dune.3.20.2, and on a target that much of the repository mentions those
+     are most of what a name-only match would sweep in. *)
+  let hard_rdeps : (OpamPackage.Name.t, OpamPackage.t * OpamFormula.t) Hashtbl.t = Hashtbl.create 20000 in
+  let direct =
+    Repo.fold
+      (fun pkg direct ->
+        match Repo.opam repo pkg with
+        | None -> direct
+        | Some opam ->
+            let resolve ~tests formula =
+              let env v = if String.equal (OpamVariable.Full.to_string v) "with-test" then Some (OpamTypes.B tests) else opam_env ~config pkg v in
+              formula |> OpamFilter.partial_filter_formula env |> OpamFilter.filter_deps ~build:true ~post:true
+            in
+            let depends = OpamFile.OPAM.depends opam in
+            (* A package needing the target only to run its own tests is a
+               dependent, which is the third query -- but only directly.  The
+               closure below follows hard edges, so it is built without them. *)
+            let with_tests = resolve ~tests:true depends in
+            let depopts = resolve ~tests:true (OpamFile.OPAM.depopts opam) in
+            let hard = resolve ~tests:false depends in
+            let () = OpamFormula.fold_left (fun () (name, _) -> Hashtbl.add hard_rdeps name (pkg, hard)) () depends in
+            if OpamFormula.verifies with_tests target || OpamFormula.verifies depopts target then OpamPackage.Set.add pkg direct else direct)
+      repo OpamPackage.Set.empty
+  in
+  (* The closure follows hard edges only.  Reaching through an optional or test
+     edge is what the single-query form does, and why it answers a wider
+     question than the one asked. *)
+  let rec close seen = function
+    | [] -> seen
+    | pkg :: rest ->
+        let fresh =
+          Hashtbl.find_all hard_rdeps (OpamPackage.name pkg)
+          |> List.filter_map (fun (dependent, formula) -> if OpamFormula.verifies formula pkg && not (OpamPackage.Set.mem dependent seen) then Some dependent else None)
+        in
+        close (List.fold_left (fun acc pkg -> OpamPackage.Set.add pkg acc) seen fresh) (fresh @ rest)
+  in
+  (* Without the target: it is not its own reverse dependency, and testing it
+     against itself says nothing.  opam's --depends-on lists it. *)
+  OpamPackage.Set.union direct (close OpamPackage.Set.empty [ target ]) |> OpamPackage.Set.remove target
+
+(* A dependent is worth testing only if it can be installed alongside the
+   target: one pinning a different version of it, or wanting an OCaml this
+   variant does not have, would say nothing about the target.  Solving for the
+   two together at their exact versions asks precisely that, which is what
+   opam's --coinstallable-with answers.
+
+   Solving for the dependent alone does not: one that depends on the target
+   through depopts solves without it, and so passes for the wrong reason.
+
+   Depexts are not consulted.  Whether a system package can be installed is a
+   question for the distribution under test, whose package manager is in the
+   container, so answering it here would describe the machine doing the
+   solving instead.  A dependent whose depexts are missing is listed, and the
+   build it leads to reports itself as a skip. *)
+let run_revdeps (config : Config.t) =
+  let repo = make_repo config in
+  let target = OpamPackage.of_string config.package in
+  let candidates = dependents ~repo ~config target |> OpamPackage.Set.elements in
+  let () = if config.log then OpamConsole.note "%d dependents of %s" (List.length candidates) (OpamPackage.to_string target) in
+  let emit pkg =
+    (* One write per package, so the forked children interleave whole lines. *)
+    print_string (OpamPackage.to_string pkg ^ "\n");
+    flush stdout
+  in
+  let check pkg = match solve ~repo config [ target; pkg ] with Ok _ -> emit pkg | Error _ -> () in
+  match config.fork with
+  | None
+  | Some 1 ->
+      List.iter check candidates
+  | Some np ->
+      Repo.warm repo;
+      Os.fork ~np check candidates
+
+let revdeps_cmd =
+  let package_arg =
+    let doc = "Package to find the reverse dependencies of" in
+    Arg.(required & pos 0 (some string) None & info [] ~docv:"PACKAGE" ~doc)
+  in
+  let revdeps_term =
+    Term.(
+      const (fun ocaml_version opam_repositories package arch os os_distribution os_family os_version fork log ->
+          let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
+          let ocaml_version = OpamPackage.of_string ocaml_version in
+          run_revdeps
+            { dir = ""; ocaml_version; opam_repositories; package; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log; dry_run = true; fork; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false; opam_jobs = None })
+      $ ocaml_version_term $ opam_repository_term $ package_arg $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term $ log_term)
+  in
+  let revdeps_info = Cmd.info "revdeps" ~doc:"List the packages to test when a package changes" in
+  Cmd.v revdeps_info revdeps_term
+
 let list_cmd =
   let list_term =
     Term.(
@@ -1243,5 +1344,5 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; cache_info_cmd; refresh_base_cmd; prune_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; refresh_base_cmd; prune_cmd ] in
   exit (Cleanup.main (fun () -> Cmd.eval ~catch:false cmd))
