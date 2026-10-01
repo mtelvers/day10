@@ -22,6 +22,7 @@ let env ~(config : Config.t) =
   [
     ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
     ("HOME", "/home/opam");
+    ("CI", "true");
     ("OPAMYES", "1");
     ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
