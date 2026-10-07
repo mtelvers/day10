@@ -6,18 +6,6 @@ type t = {
 
 let hostname = "builder"
 
-(* opam gives a build one job per core, which suits a laptop running one build
-   and not a worker running dozens: the container sees every core the machine
-   has, however many other containers are doing the same.  z3 builds with
-   "make -j jobs" and each cc1plus holds about 375M, so on a 256-core worker at
-   64 jobs that asked for six terabytes and took the machine down.
-
-   Capped rather than replaced, because the count is only ever wrong upwards: on
-   a four-core board it already comes out at three.  Oversubscribing cores is
-   absorbed by the scheduler; oversubscribing memory is not, which is why the
-   ceiling is set by what a machine can hold rather than by what it can run. *)
-let default_jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
-
 let env ~(config : Config.t) =
   [
     ("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
@@ -27,7 +15,7 @@ let env ~(config : Config.t) =
     ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
-    ("OPAMJOBS", string_of_int (Option.value ~default:default_jobs config.opam_jobs));
+    ("OPAMJOBS", string_of_int (Option.value ~default:Os.default_jobs config.opam_jobs));
   ]
 
 (* This is a subset of the capabilities that Docker uses by default.

@@ -184,6 +184,14 @@ let run cmd =
 
 let nproc () = run "nproc" |> String.trim |> int_of_string
 
+(* How many of something to run at once here.  Capped rather than taken from the
+   core count, which is only ever wrong upwards: a container sees every core the
+   machine has however many others are running, and on a 256-core worker at 64
+   jobs that had z3 building with "make -j jobs" asking for 255 apiece, which is
+   six terabytes of cc1plus and took the machine down.  A four-core board
+   already comes out at three, so the cap only ever bites upwards. *)
+let default_jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
+
 let rec mkdir ?(parents = false) dir =
   if not (Sys.file_exists dir) then (
     (if parents then

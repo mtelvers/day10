@@ -1246,13 +1246,14 @@ let run_revdeps (config : Config.t) =
     flush stdout
   in
   let check pkg = match solve ~repo config [ target; pkg ] with Ok _ -> emit pkg | Error _ -> () in
+  (* Forked by default, unlike the commands that build: this one only solves, so
+     a child costs a process and no container, disk or cache.  Sequentially,
+     dune's dependents take an hour.  --fork 1 for one at a time. *)
   match config.fork with
-  | None
-  | Some 1 ->
-      List.iter check candidates
-  | Some np ->
+  | Some 1 -> List.iter check candidates
+  | np ->
       Repo.warm repo;
-      Os.fork ~np check candidates
+      Os.fork ~np:(Option.value ~default:Os.default_jobs np) check candidates
 
 let revdeps_cmd =
   let package_arg =
