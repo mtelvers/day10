@@ -182,8 +182,6 @@ let run cmd =
   | Unix.WSTOPPED _ ->
       failwith (Printf.sprintf "%s did not exit of its own accord" cmd)
 
-let nproc () = run "nproc" |> String.trim |> int_of_string
-
 (* How many of something to run at once here.  Capped rather than taken from the
    core count, which is only ever wrong upwards: a container sees every core the
    machine has however many others are running, and on a 256-core worker at 64
@@ -228,12 +226,12 @@ let rec rm ?(recursive = false) path =
 module IntSet = Set.Make (Int)
 
 let fork ?np f lst =
-  let nproc = Option.value ~default:(nproc ()) np in
+  let jobs = Option.value ~default:default_jobs np in
   List.fold_left
     (fun acc x ->
       let acc =
         let rec loop acc =
-          if IntSet.cardinal acc <= nproc then acc
+          if IntSet.cardinal acc <= jobs then acc
           else
             let running, finished =
               IntSet.partition

@@ -1253,7 +1253,7 @@ let run_revdeps (config : Config.t) =
   | Some 1 -> List.iter check candidates
   | np ->
       Repo.warm repo;
-      Os.fork ~np:(Option.value ~default:Os.default_jobs np) check candidates
+      Os.fork ?np check candidates
 
 let revdeps_cmd =
   let package_arg =
