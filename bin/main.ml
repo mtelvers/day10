@@ -45,10 +45,7 @@ let init t =
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
-
-(* let root = OpamStateConfig.opamroot ()
-let _ = OpamStateConfig.load_defaults root *)
-let () = OpamCoreConfig.init ?debug_level:(Some 10) ?debug_sections:(Some (OpamStd.String.Map.singleton "foo" (Some 10))) ()
+let () = OpamCoreConfig.init ()
 
 let opam_env ~(config : Config.t) pkg v =
   (*  if List.mem v OpamPackageVar.predefined_depends_variables then (Some (OpamTypes.B true))
@@ -1348,4 +1345,7 @@ let () =
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
   let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; refresh_base_cmd; prune_cmd ] in
-  exit (Cleanup.main (fun () -> Cmd.eval ~catch:false cmd))
+  (* opam's log directory.  read_command_output leaves its stdout log in it, so
+     opam's own rmdir at exit finds it not empty and gives up. *)
+  let opam_logs = Cleanup.Temp_dir OpamCoreConfig.(!r.log_dir) in
+  exit (Cleanup.main (fun () -> Cleanup.with_resource opam_logs (fun () -> Cmd.eval ~catch:false cmd)))
