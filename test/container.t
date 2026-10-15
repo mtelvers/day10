@@ -66,7 +66,7 @@ outside the sandbox because its files are root-owned and dune could not clean
 up after them.
 
   $ REAL=$(grep '^CACHE_DIR=' "$HOME/.day10" | cut -d= -f2)
-  $ OSKEY=$(ls "$REAL" | grep -v '^temp-' | head -1)
+  $ OSKEY=$(. /etc/os-release; echo "$ID-$VERSION_ID-$(uname -m)")
   $ CACHE=$(mktemp -d)
   $ mkdir -p "$CACHE/$OSKEY"
   $ sudo cp -al "$REAL/$OSKEY/base" "$CACHE/$OSKEY/base"
@@ -186,7 +186,10 @@ project that turns out to need it finds that out here rather than in CI.
   $ day10 exec netproject -- sh -c 'curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo ONLINE || echo OFFLINE'
   ONLINE
 
+dune echoes the command because the container sets CI, as OBuilder's does.
+
   $ day10 build netproject @netprobe
+  (cd _build/default && /usr/bin/sh -c 'curl -s -m 10 -o /dev/null https://opam.ocaml.org/index.tar.gz && echo ONLINE || echo OFFLINE')
   OFFLINE
 
   $ sudo rm -rf "$CACHE"
