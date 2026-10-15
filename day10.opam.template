@@ -1,8 +1,0 @@
-pin-depends: [
-  ["opam-client.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-  ["opam-core.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-  ["opam-format.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-  ["opam-repository.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-  ["opam-solver.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-  ["opam-state.2.4.1" "git+https://github.com/dra27/opam#6693-2.4.1"]
-]
