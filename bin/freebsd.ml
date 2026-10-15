@@ -4,7 +4,7 @@ type t = {
   gid : int;
 }
 
-let env = [ ("HOME", "/home/opam"); ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
+let env = [ ("HOME", "/home/opam"); ("OPAMYES", "1"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
 let install_script =
   {|#!/bin/sh

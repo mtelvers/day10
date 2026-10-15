@@ -79,7 +79,6 @@ let make_config ~arch layer_infos =
                   `String "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
                   `String "HOME=/home/opam";
                   `String "OPAMYES=1";
-                  `String "OPAMCONFIRMLEVEL=unsafe-yes";
                   `String "OPAMERRLOGLEN=0";
                   `String "OPAMPRECISETRACKING=1";
                 ] );

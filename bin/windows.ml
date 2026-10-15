@@ -5,7 +5,7 @@ type t = {
 }
 
 let hostname = "builder"
-let env = [ ("OPAMYES", "1"); ("OPAMCONFIRMLEVEL", "unsafe-yes"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
+let env = [ ("OPAMYES", "1"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
 
 let strings xs = `List (List.map (fun x -> `String x) xs)
 

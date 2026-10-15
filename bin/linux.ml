@@ -12,7 +12,6 @@ let env ~(config : Config.t) =
     ("HOME", "/home/opam");
     ("CI", "true");
     ("OPAMYES", "1");
-    ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
     ("OPAMJOBS", string_of_int (Option.value ~default:Os.default_jobs config.opam_jobs));

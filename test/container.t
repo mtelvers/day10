@@ -59,6 +59,16 @@ worth overriding where those differ.
   $ day10 exec --opam-jobs 7 project -- sh -c 'opam var jobs'
   7
 
+OPAMCONFIRMLEVEL is not exported.  Nothing in the container reads it -- the
+driver goes through the opam library rather than the CLI -- but a package that
+runs opam itself under the 2.0 CLI is told the variable was ignored, on
+stderr, and an expect-style test that captures opam's output fails on the
+extra line.  OPAMYES is enough to keep any such opam non-interactive, and is
+old enough not to be complained about.
+
+  $ day10 exec project -- sh -c 'echo "${OPAMCONFIRMLEVEL:-unset}"'
+  unset
+
 The rest need a build that fails, so they run against a cache of their own and
 leave nothing in the machine's.  The base image is hardlinked in rather than
 built: it takes minutes, and is the one thing here worth reusing.  It lives
