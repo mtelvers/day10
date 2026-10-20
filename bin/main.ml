@@ -225,8 +225,38 @@ let solve ~repo (config : Config.t) root_packages =
               expand (`Opam name) @ depopts |> OpamPackage.Name.Set.of_list |> fun x ->
               OpamPackage.Name.Set.diff x deppost |> OpamPackage.packages_of_names pkgs
             in
-            OpamPackage.Map.add pkg deps acc)
+            OpamPackage.Map.add pkg (deps, OpamPackage.packages_of_names pkgs deppost) acc)
           pkgs OpamPackage.Map.empty
+      in
+      let postdeps pkg = snd (OpamPackage.Map.find pkg deptree) in
+      let deptree = OpamPackage.Map.map fst deptree in
+      let root_pkgs = OpamPackage.Set.filter (fun p -> List.exists (fun r -> OpamPackage.name r = OpamPackage.name p) root_packages) (Solver.packages_of_result out |> OpamPackage.Set.of_list) in
+      (* The tests of the package under test run in a switch holding its post
+         dependencies: opam installs them, and a test that calls one -- merlin's
+         ocaml-index, catala's ninja -- does not run without it.
+
+         Only this package's own, and only when tests were asked for.  A
+         dependency is built, not tested, and post is precisely the promise that
+         it does not need them to build; taking everything's would put the
+         compiler's five in every tree in the repository.
+
+         Not where the post dependency leads back here, which is the case post
+         exists for: ocaml depends on ocaml-base-compiler, which names ocaml as
+         a post dependency, and an edge for that is a cycle. *)
+      let deptree =
+        if not config.with_test then deptree
+        else
+          let rec reaches target seen pkg =
+            OpamPackage.Set.mem target (OpamPackage.Map.find pkg deptree)
+            || OpamPackage.Set.exists
+                 (fun next -> (not (OpamPackage.Set.mem next seen)) && reaches target (OpamPackage.Set.add next seen) next)
+                 (OpamPackage.Map.find pkg deptree)
+          in
+          OpamPackage.Set.fold
+            (fun target tree ->
+              let keep = OpamPackage.Set.filter (fun p -> not (reaches target (OpamPackage.Set.singleton p) p)) (postdeps target) in
+              OpamPackage.Map.add target (OpamPackage.Set.union (OpamPackage.Map.find target tree) keep) tree)
+            root_pkgs deptree
       in
       let rec dfs map pkg =
         let deps = OpamPackage.Map.find pkg deptree in
@@ -237,7 +267,6 @@ let solve ~repo (config : Config.t) root_packages =
             | false -> dfs acc p)
           deps (OpamPackage.Map.add pkg deps map)
       in
-      let root_pkgs = OpamPackage.Set.filter (fun p -> List.exists (fun r -> OpamPackage.name r = OpamPackage.name p) root_packages) (Solver.packages_of_result out |> OpamPackage.Set.of_list) in
       Ok (context, OpamPackage.Set.fold (fun pkg acc -> dfs acc pkg) root_pkgs OpamPackage.Map.empty)
   | Error problem -> Error (Solver.diagnostics problem)
 

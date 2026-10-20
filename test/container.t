@@ -137,6 +137,37 @@ build here.
   $ grep -c '^\[ERROR\] Package nodep.1.0 depends on the unavailable system package' depext.log
   1
 
+A package's own post dependencies are in the switch its tests run in.  opam
+installs them and a test that calls one needs them there: merlin's suite runs
+ocaml-index, catala's runs ninja, and both failed here while passing under
+OBuilder.  Not for a build, where post is the promise they are not needed, and
+not for a dependency's -- the compiler names five, which would otherwise be in
+every tree in the repository.
+
+  $ mkdir -p repo/packages/postdep/postdep.1 repo/packages/needspost/needspost.1
+  $ cat > repo/packages/postdep/postdep.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > install: [ [ "sh" "-c" "mkdir -p %{lib}%/postdep && echo POSTDEP-PRESENT > %{lib}%/postdep/marker" ] ]
+  > EOF
+  $ cat > repo/packages/needspost/needspost.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > depends: [ "postdep" {post} ]
+  > run-test: [ [ "sh" "-c" "cat %{lib}%/postdep/marker" ] ]
+  > EOF
+
+Not built for a plain build.
+
+  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo needspost.1 > nopost.log 2>&1
+  $ grep -c 'Building postdep' nopost.log
+  0
+  [1]
+
+Built, and installed before the tests run, when tests are asked for.
+
+  $ day10 health-check --with-test --log --cache-dir "$CACHE" --opam-repository repo needspost.1 > withpost.log 2>&1
+  $ grep -c '^- POSTDEP-PRESENT$' withpost.log
+  1
+
 Tests run in a container of their own, with a network namespace of their own.
 A builder runs dozens of jobs at once against one localhost, so two suites
 binding the same fixed port would otherwise collide -- or worse, one would
