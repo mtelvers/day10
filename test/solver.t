@@ -246,3 +246,37 @@ the package under test alone -- never for something it depends on.
   }
   
   [NOTE] solution
+
+A depopt is resolved in its own package's environment, as depends are.
+with-test is true only for the package under test, so a depopt written
+{with-test} is nothing at all for a package that is merely a dependency.
+Taken unfiltered it became an ordering edge regardless, and here that closes a
+cycle opam does not have: out-channel-redirect declares wasm_of_ocaml-compiler
+{with-test} as a depopt, and wasm_of_ocaml-compiler declares
+out-channel-redirect {with-test} as a dependency.
+
+  $ pkg redirect 0.2 'depopts: [ "wasm" {with-test} ]'
+  $ pkg wasm 1.0 'depends: [ "b" "redirect" {with-test} ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 --with-test wasm.1.0
+  digraph opam {
+    "wasm.1.0" -> {"b.2.0" "redirect.0.2"}
+  }
+  
+  [NOTE] solution
+
+A cycle that is really there says which packages are in it.  The assertion it
+replaces reported a line number in main.ml and left the caller to work out
+which of a hundred packages were waiting on each other.
+
+  $ pkg tested 1.0 'depends: [ "tester-dep" {with-test} ]'
+  $ pkg tester-dep 1.0 'depends: [ "tested" ]'
+
+  $ solve --ocaml-version ocaml.5.4.1 --with-test tested.1.0
+  digraph opam {
+    "tested.1.0" -> "tester-dep.1.0";
+    "tester-dep.1.0" -> "tested.1.0";
+  }
+  
+  [ERROR] dependency cycle among tested.1.0 -> tester-dep.1.0, tester-dep.1.0 -> tested.1.0
+  [60]

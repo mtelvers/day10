@@ -86,6 +86,9 @@ let main f =
       | Killed n ->
           Printf.eprintf "day10: interrupted by signal %i, released outstanding resources\n%!" n;
           128 + n
+      (* opam stopping on purpose.  It has already said why, so reporting it as
+         an uncaught exception would bury the reason under a backtrace. *)
+      | OpamStd.Sys.Exit n -> n
       | e ->
           Printf.eprintf "day10: internal error, uncaught exception:\n       %s\n%!" (Printexc.to_string e);
           125)

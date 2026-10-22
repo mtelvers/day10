@@ -218,7 +218,18 @@ let solve ~repo (config : Config.t) root_packages =
                ocamlformat, printbox-text and re, and by nothing else in
                opam-repository. *)
             let deppost = OpamPackage.Name.Set.diff reached_only_through_post there_only_for_tests in
-            let depopts = OpamFile.OPAM.depopts opam |> OpamFormula.all_names in
+            (* Resolved in this package's own environment, as depends are.
+               with-test is true only for the package under test, so a depopt
+               written {with-test} is nothing at all for a package that is
+               merely a dependency.  Taken unfiltered it became an ordering
+               edge regardless: out-channel-redirect declares
+               wasm_of_ocaml-compiler {with-test} as a depopt, and
+               wasm_of_ocaml-compiler declares out-channel-redirect
+               {with-test} as a dependency, which closed a cycle that opam
+               does not have. *)
+            let depopts =
+              OpamFile.OPAM.depopts opam |> OpamFilter.partial_filter_formula (opam_env ~config pkg) |> OpamFilter.filter_deps ~build:true ~post:true |> OpamFormula.all_names
+            in
             let depopts = OpamPackage.Name.Set.inter depopts pkgnames |> OpamPackage.Name.Set.to_list in
             let name = OpamPackage.name pkg in
             let deps =
@@ -276,7 +287,19 @@ let rec topological_sort pkgs =
   | false ->
       (* Find all packages which can be installed *)
       let installable, remainder = OpamPackage.Map.partition (fun _ deps -> OpamPackage.Set.is_empty deps) pkgs in
-      let () = assert (not (OpamPackage.Map.is_empty installable)) in
+      (* Nothing installable and packages left over is a cycle.  Name it: an
+         assertion here says only that main.ml has a line 279, and the caller
+         is left to work out which of a hundred packages were waiting on each
+         other. *)
+      let () =
+        if OpamPackage.Map.is_empty installable then
+          OpamConsole.error_and_exit `Solver_failure "dependency cycle among %s"
+            (OpamPackage.Map.to_list pkgs
+            |> List.map (fun (pkg, deps) ->
+                   Printf.sprintf "%s -> %s" (OpamPackage.to_string pkg)
+                     (OpamPackage.Set.elements deps |> List.map OpamPackage.to_string |> String.concat " "))
+            |> String.concat ", ")
+      in
       let installable = OpamPackage.Map.to_list installable |> List.map fst in
       (* Remove the dependency on any installable package from the remaining packages *)
       let pkgs = OpamPackage.Map.map (fun deps -> List.fold_left (fun acc pkg -> OpamPackage.Set.remove pkg acc) deps installable) remainder in
