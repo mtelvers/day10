@@ -231,32 +231,32 @@ let solve ~repo (config : Config.t) root_packages =
       let postdeps pkg = snd (OpamPackage.Map.find pkg deptree) in
       let deptree = OpamPackage.Map.map fst deptree in
       let root_pkgs = OpamPackage.Set.filter (fun p -> List.exists (fun r -> OpamPackage.name r = OpamPackage.name p) root_packages) (Solver.packages_of_result out |> OpamPackage.Set.of_list) in
-      (* The tests of the package under test run in a switch holding its post
-         dependencies: opam installs them, and a test that calls one -- merlin's
-         ocaml-index, catala's ninja -- does not run without it.
+      (* The package under test is built in a switch holding its post
+         dependencies, as opam would install it.  Its tests need them -- merlin
+         runs ocaml-index, catala runs ninja -- and so does the package itself:
+         ocaml-option-llvm names ocaml-variants, and without it a package
+         flagged compiler was installed into a switch with no compiler in it
+         and the result reported as a success.
 
-         Only this package's own, and only when tests were asked for.  A
-         dependency is built, not tested, and post is precisely the promise that
-         it does not need them to build; taking everything's would put the
-         compiler's five in every tree in the repository.
+         Only this package's own.  A dependency is built rather than exercised,
+         and taking everything's would put the compiler's four in every tree in
+         the repository and change every layer hash with them.
 
          Not where the post dependency leads back here, which is the case post
          exists for: ocaml depends on ocaml-base-compiler, which names ocaml as
          a post dependency, and an edge for that is a cycle. *)
       let deptree =
-        if not config.with_test then deptree
-        else
-          let rec reaches target seen pkg =
-            OpamPackage.Set.mem target (OpamPackage.Map.find pkg deptree)
-            || OpamPackage.Set.exists
-                 (fun next -> (not (OpamPackage.Set.mem next seen)) && reaches target (OpamPackage.Set.add next seen) next)
-                 (OpamPackage.Map.find pkg deptree)
-          in
-          OpamPackage.Set.fold
-            (fun target tree ->
-              let keep = OpamPackage.Set.filter (fun p -> not (reaches target (OpamPackage.Set.singleton p) p)) (postdeps target) in
-              OpamPackage.Map.add target (OpamPackage.Set.union (OpamPackage.Map.find target tree) keep) tree)
-            root_pkgs deptree
+        let rec reaches target seen pkg =
+          OpamPackage.Set.mem target (OpamPackage.Map.find pkg deptree)
+          || OpamPackage.Set.exists
+               (fun next -> (not (OpamPackage.Set.mem next seen)) && reaches target (OpamPackage.Set.add next seen) next)
+               (OpamPackage.Map.find pkg deptree)
+        in
+        OpamPackage.Set.fold
+          (fun target tree ->
+            let keep = OpamPackage.Set.filter (fun p -> not (reaches target (OpamPackage.Set.singleton p) p)) (postdeps target) in
+            OpamPackage.Map.add target (OpamPackage.Set.union (OpamPackage.Map.find target tree) keep) tree)
+          root_pkgs deptree
       in
       let rec dfs map pkg =
         let deps = OpamPackage.Map.find pkg deptree in

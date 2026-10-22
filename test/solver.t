@@ -130,22 +130,23 @@ version that was asked for, so passing the flag on every job is safe.
   
   [NOTE] solution
 
-A post dependency is required but does not constrain build order.  It is
-therefore not an ordering edge, and a package reached only through one does not
-appear in the solution at all.
+A post dependency is required but does not constrain build order.  The package
+under test is built with its own, as opam would install it: its tests may call
+one, and so may the package -- ocaml-option-llvm names ocaml-variants, without
+which it is a compiler option applied to no compiler.
 
   $ pkg plain-post 1.0
   $ pkg needs-post 1.0 'depends: [ "b" "plain-post" {post} ]'
 
   $ solve --ocaml-version ocaml.5.4.1 needs-post.1.0
   digraph opam {
-    "needs-post.1.0" -> "b.2.0";
+    "needs-post.1.0" -> {"b.2.0" "plain-post.1.0"}
   }
   
   [NOTE] solution
 
-That exclusion is what lets a cycle through a post dependency resolve, which is
-what post is for: without it the ordering has no starting point.
+Only its own, though.  A dependency is built rather than exercised, so its post
+dependencies stay out -- otherwise the compiler's would be in every tree.
 
   $ pkg cyc-a 1.0 'depends: [ "cyc-b" ]'
   $ pkg cyc-b 1.0 'depends: [ "cyc-a" {post} ]'
@@ -153,6 +154,16 @@ what post is for: without it the ordering has no starting point.
   $ solve --ocaml-version ocaml.5.4.1 cyc-a.1.0
   digraph opam {
     "cyc-a.1.0" -> "cyc-b.1.0";
+  }
+  
+  [NOTE] solution
+
+And dropped where it leads back to the package naming it, which is what post is
+for: an edge there is a cycle, and the ordering would have no starting point.
+
+  $ solve --ocaml-version ocaml.5.4.1 cyc-b.1.0
+  digraph opam {
+    "cyc-b.1.0";
   }
   
   [NOTE] solution

@@ -137,12 +137,12 @@ build here.
   $ grep -c '^\[ERROR\] Package nodep.1.0 depends on the unavailable system package' depext.log
   1
 
-A package's own post dependencies are in the switch its tests run in.  opam
-installs them and a test that calls one needs them there: merlin's suite runs
+A package's own post dependencies are in the switch it is built and tested in,
+as opam would install it.  Its tests may call one -- merlin's suite runs
 ocaml-index, catala's runs ninja, and both failed here while passing under
-OBuilder.  Not for a build, where post is the promise they are not needed, and
-not for a dependency's -- the compiler names five, which would otherwise be in
-every tree in the repository.
+OBuilder -- and so may the package: ocaml-option-llvm names ocaml-variants,
+without which it is a compiler option applied to no compiler.  Not a
+dependency's, which the compiler would otherwise put in every tree.
 
   $ mkdir -p repo/packages/postdep/postdep.1 repo/packages/needspost/needspost.1
   $ cat > repo/packages/postdep/postdep.1/opam <<'EOF'
@@ -155,14 +155,13 @@ every tree in the repository.
   > run-test: [ [ "sh" "-c" "cat %{lib}%/postdep/marker" ] ]
   > EOF
 
-Not built for a plain build.
+Built for a plain build, not only when tests are asked for.
 
   $ day10 health-check --cache-dir "$CACHE" --opam-repository repo needspost.1 > nopost.log 2>&1
   $ grep -c 'Building postdep' nopost.log
-  0
-  [1]
+  1
 
-Built, and installed before the tests run, when tests are asked for.
+And in place before the tests run.
 
   $ day10 health-check --with-test --log --cache-dir "$CACHE" --opam-repository repo needspost.1 > withpost.log 2>&1
   $ grep -c '^- POSTDEP-PRESENT$' withpost.log
