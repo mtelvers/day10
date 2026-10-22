@@ -167,6 +167,33 @@ And in place before the tests run.
   $ grep -c '^- POSTDEP-PRESENT$' withpost.log
   1
 
+What a layer deleted stays deleted once the layers are flattened into one.
+overlayfs records a removal as a 0:0 character device rather than an absence,
+and carrying those across as they stand defeats the merge: cp will not put a
+directory over a device node, so a package that removed one its dependency
+installed failed the build outright.  Installing libx11 on Arch upgrades
+thirty-odd packages and so removes each of their old pacman database
+directories, which is how conf-libXft.1 came to fail.
+
+  $ mkdir -p repo/packages/provides/provides.1 repo/packages/removes/removes.1 repo/packages/sees/sees.1
+  $ cat > repo/packages/provides/provides.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > install: [ [ "sh" "-c" "mkdir -p %{lib}%/provides/sub && echo marker > %{lib}%/provides/sub/marker" ] ]
+  > EOF
+  $ cat > repo/packages/removes/removes.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > depends: [ "provides" ]
+  > install: [ [ "sh" "-c" "rm -r %{lib}%/provides/sub" ] ]
+  > EOF
+  $ cat > repo/packages/sees/sees.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > depends: [ "provides" "removes" ]
+  > build: [ [ "sh" "-c" "test -e %{lib}%/provides/sub && echo STILL-THERE || echo REMOVED" ] ]
+  > EOF
+  $ day10 health-check --log --cache-dir "$CACHE" --opam-repository repo sees.1 > merge.log 2>&1
+  $ grep -c '^- REMOVED$' merge.log
+  1
+
 Tests run in a container of their own, with a network namespace of their own.
 A builder runs dozens of jobs at once against one localhost, so two suites
 binding the same fixed port would otherwise collide -- or worse, one would

@@ -223,6 +223,79 @@ let rec rm ?(recursive = false) path =
       with
       | _ -> ())
 
+(* Flatten a stack of overlay layers into one directory, base-most first.
+
+   A layer is an overlayfs upper directory, in which a path the build removed
+   is not absent but recorded as a 0:0 character device.  Flattened into a
+   single directory those markers stand for nothing, there being nothing left
+   beneath them to hide, so each is replayed as the deletion it means and then
+   dropped.
+
+   Carried across instead they are worse than inert: cp will not put a
+   directory over a device node, so a layer that removed one an earlier layer
+   still has fails the merge outright, and where the copy skips the marker
+   rather than failing, the removed path comes back.  Installing libx11 on Arch
+   upgrades thirty-six packages, so removes each of their old pacman database
+   directories, and both halves of that were seen.
+
+   Hardlinked rather than copied, so a layer costs inodes and not bytes, and
+   each layer overwrites the ones below it, which is what installing them in
+   this order did. *)
+let merge_layers ~layers ~target =
+  (* One find over every layer rather than one apiece.  Walking a hundred of
+     them costs a tenth of a second and the copy that follows wants the same
+     metadata anyway; it was sudo that was expensive, at ten milliseconds a
+     time to start.  Not with an empty list, which would send find to the
+     current directory. *)
+  let found =
+    if layers = [] then []
+    else
+      capture "sudo" (("find" :: layers) @ [ "-type"; "c"; "-printf"; "%H\\t%P\\0" ])
+      |> String.split_on_char '\000'
+      |> List.filter_map (fun record ->
+             (* Both halves have to be there: a record without the separator is
+                not ours to act on, and one with an empty path would name the
+                target itself. *)
+             match String.index_opt record '\t' with
+             | Some i when i + 1 < String.length record -> Some (String.sub record 0 i, String.sub record (i + 1) (String.length record - i - 1))
+             | Some _ | None -> None)
+  in
+  let run what argv = match sudo argv with 0 -> () | code -> failwith (Printf.sprintf "%s exited with status %i" what code) in
+  (* cp takes any number of sources, applies them left to right and hardlinks
+     as it goes, so a run of layers goes on in one call.  Given as fs/. because
+     it is the contents that merge, which is also what --no-target-directory
+     said for the single source this used to take. *)
+  let copy sources =
+    if sources <> [] then
+      run
+        (Printf.sprintf "merging %i layer(s) into %s" (List.length sources) target)
+        (([ "cp"; "--force"; "--archive"; "--no-dereference"; "--recursive"; "--link" ] @ List.map (fun fs -> Filename.concat fs ".") sources) @ [ target ])
+  in
+  (* A layer with deletions to replay stands alone, since they are made once
+     everything below it is in place and its markers dropped before anything
+     above it arrives.  Every other layer joins the batch, which is all of them
+     for all but one merge in a thousand. *)
+  let batch =
+    List.fold_left
+      (fun batch fs ->
+        match List.filter_map (fun (layer, path) -> if String.equal layer fs then Some (Filename.concat target path) else None) found with
+        | [] -> fs :: batch
+        | whiteouts ->
+            copy (List.rev batch);
+            (* Checked, not ignored: a marker left behind is one overlayfs is
+               handed in the merged layer, which is what this is here to
+               prevent.  cp has no way to leave them where they are -- archive
+               hardlinks a device node like anything else -- so they come
+               across and go once the deletion has been made. *)
+            let replay argv = run (Printf.sprintf "replaying the deletions in %s" fs) (argv @ whiteouts) in
+            replay [ "rm"; "-rf"; "--" ];
+            copy [ fs ];
+            replay [ "rm"; "-f"; "--" ];
+            [])
+      [] layers
+  in
+  copy (List.rev batch)
+
 module IntSet = Set.Make (Int)
 
 let fork ?np f lst =
