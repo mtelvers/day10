@@ -85,6 +85,11 @@ A repository of its own, holding one package that fails and is declared as
 expected to fail on this platform.  The platform is the cache directory's name
 without the architecture.
 
+The compiler is named on every call below rather than left to the default,
+because ~/.day10 -- read above for the cache directory -- may set one of its
+own, and this repository holds exactly one version of ocaml.  A machine
+configured for another answered no_solution instead.
+
   $ mkdir -p repo/packages/ocaml/ocaml.5.4.1 repo/packages/boom/boom.1.0
   $ printf 'opam-version: "2.0"\n' > repo/repo
   $ printf 'opam-version: "2.0"\n' > repo/packages/ocaml/ocaml.5.4.1/opam
@@ -94,7 +99,7 @@ without the architecture.
   > x-ci-accept-failures: [ "${OSKEY%-*}" ]
   > EOF
 
-  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo boom.1.0 > first.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --cache-dir "$CACHE" --opam-repository repo boom.1.0 > first.log 2>&1
 
 The log is the whole explanation of a failure, so it has to be there.
 
@@ -111,7 +116,7 @@ Asking again answers from the cached layer without rebuilding, and still says
 both things: a verdict with no log is no use to the caller whether the failure
 happened just now or weeks ago.
 
-  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo boom.1.0 > second.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --cache-dir "$CACHE" --opam-repository repo boom.1.0 > second.log 2>&1
   $ grep -c 'Building boom' second.log
   0
   [1]
@@ -133,7 +138,7 @@ build here.
   > opam-version: "2.0"
   > depexts: [ ["day10-no-such-system-package"] ]
   > EOF
-  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo nodep.1.0 > depext.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --cache-dir "$CACHE" --opam-repository repo nodep.1.0 > depext.log 2>&1
   $ grep -c '^\[ERROR\] Package nodep.1.0 depends on the unavailable system package' depext.log
   1
 
@@ -157,13 +162,13 @@ dependency's, which the compiler would otherwise put in every tree.
 
 Built for a plain build, not only when tests are asked for.
 
-  $ day10 health-check --cache-dir "$CACHE" --opam-repository repo needspost.1 > nopost.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --cache-dir "$CACHE" --opam-repository repo needspost.1 > nopost.log 2>&1
   $ grep -c 'Building postdep' nopost.log
   1
 
 And in place before the tests run.
 
-  $ day10 health-check --with-test --log --cache-dir "$CACHE" --opam-repository repo needspost.1 > withpost.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --with-test --log --cache-dir "$CACHE" --opam-repository repo needspost.1 > withpost.log 2>&1
   $ grep -c '^- POSTDEP-PRESENT$' withpost.log
   1
 
@@ -190,7 +195,7 @@ directories, which is how conf-libXft.1 came to fail.
   > depends: [ "provides" "removes" ]
   > build: [ [ "sh" "-c" "test -e %{lib}%/provides/sub && echo STILL-THERE || echo REMOVED" ] ]
   > EOF
-  $ day10 health-check --log --cache-dir "$CACHE" --opam-repository repo sees.1 > merge.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --log --cache-dir "$CACHE" --opam-repository repo sees.1 > merge.log 2>&1
   $ grep -c '^- REMOVED$' merge.log
   1
 
@@ -214,7 +219,7 @@ has none still finds its sources and its depexts in place.
   $ NET=$(mktemp -d)
   $ mkdir -p "$NET/$OSKEY"
   $ sudo cp -al "$REAL/$OSKEY/base" "$NET/$OSKEY/base"
-  $ day10 health-check --with-test --log --cache-dir "$NET" --opam-repository repo netprobe.1.0 > net.log 2>&1
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --with-test --log --cache-dir "$NET" --opam-repository repo netprobe.1.0 > net.log 2>&1
   $ grep -c '^- BUILD-ONLINE$' net.log
   1
   $ grep -c '^- TEST-OFFLINE$' net.log
