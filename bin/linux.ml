@@ -234,7 +234,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   (* Reversed: ordered_hashes runs outwards from the package, and a layer has
      to go on after the ones it was built on top of. *)
-  let () = Os.merge_layers ~layers:(List.rev_map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ordered_hashes) ~target:lowerdir in
+  let () = Os.merge_layers ~base_beneath:true ~layers:(List.rev_map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ordered_hashes) ~target:lowerdir in
   (* Only one layer's dpkg status survives the merge above, so opam reports the
      depexts installed by the others as no longer found.  Write the union of
      them over it, in the merged lower layer, which is discarded with the rest

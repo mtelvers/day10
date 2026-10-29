@@ -227,21 +227,33 @@ let rec rm ?(recursive = false) path =
 
    A layer is an overlayfs upper directory, in which a path the build removed
    is not absent but recorded as a 0:0 character device.  Flattened into a
-   single directory those markers stand for nothing, there being nothing left
-   beneath them to hide, so each is replayed as the deletion it means and then
-   dropped.
+   single directory a marker over a path an earlier layer provided stands for
+   nothing, there being nothing left beneath it to hide, so each is replayed as
+   the deletion it means.
 
-   Carried across instead they are worse than inert: cp will not put a
-   directory over a device node, so a layer that removed one an earlier layer
-   still has fails the merge outright, and where the copy skips the marker
-   rather than failing, the removed path comes back.  Installing libx11 on Arch
-   upgrades thirty-six packages, so removes each of their old pacman database
-   directories, and both halves of that were seen.
+   Whether the marker then stays depends on what is under the merge.  With
+   [base_beneath], the merged directory is not the bottom of the overlay: the
+   base is mounted under it as a lower layer of its own, and a path a layer
+   removed from the base was never in the merge to delete.  There the marker is
+   the only thing hiding the base's copy, so it is kept, unless a later layer
+   puts a real entry at that path, since cp will not write a directory over a
+   device node.  Three conf layers on Arch each replaced the base's brotli,
+   libldap and patch database entries; with their markers dropped the old
+   entries showed through beside the new, and pacman reported a duplicated
+   database entry for each.  Without a base beneath -- the docker import, which
+   merges the base in -- every marker is dropped, the deletion having been made
+   and a device node being no part of an image.
+
+   Carried across as they stood they were worse than inert: cp failed the merge
+   outright where a layer removed a directory an earlier one still had, and
+   where the copy skipped the marker instead, the removed path came back.
+   Installing libx11 on Arch upgrades thirty-six packages, so removes each of
+   their old pacman database directories, and both halves of that were seen.
 
    Hardlinked rather than copied, so a layer costs inodes and not bytes, and
    each layer overwrites the ones below it, which is what installing them in
    this order did. *)
-let merge_layers ~layers ~target =
+let merge_layers ~base_beneath ~layers ~target =
   (* One find over every layer rather than one apiece.  Walking a hundred of
      them costs a tenth of a second and the copy that follows wants the same
      metadata anyway; it was sudo that was expensive, at ten milliseconds a
@@ -271,30 +283,34 @@ let merge_layers ~layers ~target =
         (Printf.sprintf "merging %i layer(s) into %s" (List.length sources) target)
         (([ "cp"; "--force"; "--archive"; "--no-dereference"; "--recursive"; "--link" ] @ List.map (fun fs -> Filename.concat fs ".") sources) @ [ target ])
   in
+  (* Whether a later layer has an entry of its own at [path].  The layers are
+     root-owned, so a directory this process cannot look into is taken to
+     provide the path: the marker is then dropped, which is the safe side, the
+     merge going on as it did before markers were kept at all. *)
+  let provided_by layers path = List.exists (fun fs -> match Unix.lstat (Filename.concat fs path) with _ -> true | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false) layers in
   (* A layer with deletions to replay stands alone, since they are made once
-     everything below it is in place and its markers dropped before anything
+     everything below it is in place and its markers settled before anything
      above it arrives.  Every other layer joins the batch, which is all of them
      for all but one merge in a thousand. *)
-  let batch =
-    List.fold_left
-      (fun batch fs ->
-        match List.filter_map (fun (layer, path) -> if String.equal layer fs then Some (Filename.concat target path) else None) found with
-        | [] -> fs :: batch
-        | whiteouts ->
+  let rec go batch = function
+    | [] -> copy (List.rev batch)
+    | fs :: later -> (
+        match List.filter_map (fun (layer, path) -> if String.equal layer fs then Some path else None) found with
+        | [] -> go (fs :: batch) later
+        | paths ->
             copy (List.rev batch);
-            (* Checked, not ignored: a marker left behind is one overlayfs is
-               handed in the merged layer, which is what this is here to
-               prevent.  cp has no way to leave them where they are -- archive
+            (* cp has no way to leave the markers where they are -- archive
                hardlinks a device node like anything else -- so they come
-               across and go once the deletion has been made. *)
-            let replay argv = run (Printf.sprintf "replaying the deletions in %s" fs) (argv @ whiteouts) in
-            replay [ "rm"; "-rf"; "--" ];
+               across with the layer, and the ones that must not stay go once
+               the deletion has been made.  Checked, not ignored: a marker left
+               where a later layer needs the path fails that layer's copy. *)
+            let replay what argv paths = if paths <> [] then run (Printf.sprintf "%s in %s" what fs) (argv @ List.map (Filename.concat target) paths) in
+            replay "replaying the deletions" [ "rm"; "-rf"; "--" ] paths;
             copy [ fs ];
-            replay [ "rm"; "-f"; "--" ];
-            [])
-      [] layers
+            replay "dropping the markers" [ "rm"; "-f"; "--" ] (if base_beneath then List.filter (provided_by later) paths else paths);
+            go [] later)
   in
-  copy (List.rev batch)
+  go [] layers
 
 module IntSet = Set.Make (Int)
 

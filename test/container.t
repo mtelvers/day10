@@ -199,6 +199,37 @@ directories, which is how conf-libXft.1 came to fail.
   $ grep -c '^- REMOVED$' merge.log
   1
 
+The base is not part of that merge: it is mounted beneath the merged layers as
+a lower layer of its own.  So a path a layer removed from the base cannot be
+deleted from the merge, there being nothing there to delete, and the marker is
+the only thing that hides it.  Dropping the marker brings the base's copy back.
+A package upgrade on Arch removes the old entry under /var/lib/pacman/local and
+creates the new one beside it; with the old one showing through again pacman
+reported a duplicated database entry for brotli, libldap and patch, and refused
+every transaction after.
+
+The probe is planted in the test's own copy of the base, where a new directory
+costs the real base nothing.
+
+  $ sudo mkdir -p "$CACHE/$OSKEY/base/fs/opt/day10-probe/pkg-1.0"
+  $ echo old | sudo tee "$CACHE/$OSKEY/base/fs/opt/day10-probe/pkg-1.0/desc" > /dev/null
+  $ mkdir -p repo/packages/upgrades/upgrades.1 repo/packages/beside/beside.1 repo/packages/lists/lists.1
+  $ cat > repo/packages/upgrades/upgrades.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > install: [ [ "sh" "-c" "sudo rm -r /opt/day10-probe/pkg-1.0 && sudo mkdir /opt/day10-probe/pkg-1.1" ] ]
+  > EOF
+  $ cat > repo/packages/beside/beside.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > EOF
+  $ cat > repo/packages/lists/lists.1/opam <<'EOF'
+  > opam-version: "2.0"
+  > depends: [ "upgrades" "beside" ]
+  > build: [ [ "sh" "-c" "ls /opt/day10-probe | sed 's/^/ENTRY /'" ] ]
+  > EOF
+  $ day10 health-check --ocaml-version ocaml.5.4.1 --log --cache-dir "$CACHE" --opam-repository repo lists.1 > base.log 2>&1
+  $ grep '^- ENTRY ' base.log
+  - ENTRY pkg-1.1
+
 Tests run in a container of their own, with a network namespace of their own.
 A builder runs dozens of jobs at once against one localhost, so two suites
 binding the same fixed port would otherwise collide -- or worse, one would

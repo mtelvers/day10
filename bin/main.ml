@@ -600,7 +600,7 @@ let output (config : Config.t) results =
         let () = OpamConsole.note "Importing layers into Docker with tag: %s" tag in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "docker-import-" "" in
         let cp s d = [ "cp"; "--update=none"; "--archive"; "--no-dereference"; "--recursive"; "--link"; "--no-target-directory"; s; d ] in
-        let () = Os.merge_layers ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir in
+        let () = Os.merge_layers ~base_beneath:false ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir in
         let () =
           match layers with
           | hash :: _ ->
