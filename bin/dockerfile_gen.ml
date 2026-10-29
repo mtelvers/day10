@@ -41,12 +41,25 @@ let day10_install ~(dist : Dist.t) ~arch base_image =
   @@ run "opam exec -- dune build --release"
   @@ run "install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install"
 
+(* Fill the package manager's download cache with every depext the repository
+   names for this platform, so that a build installs from the base and never
+   from a mirror that has since moved on.  One line per distinct depext set,
+   resolved on its own since the union of them all is not co-installable; a
+   set that fails as a whole, one of its names being unknown here, is retried a
+   package at a time so the rest are still fetched. *)
+let prefetch ~(dist : Dist.t) =
+  Printf.sprintf {|while read -r s; do [ -n "$s" ] || continue; %s || for p in $s; do %s || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch|}
+    (dist.download "$s") (dist.download "$p")
+
 let dockerfile ~(dist : Dist.t) ~arch ~base_image ~uid ~gid =
   (opam ~dist ~arch base_image) @@ (day10_install ~dist ~arch base_image)
   @@ from ~platform:(platform arch) base_image
-  (* One RUN, so the package index cannot be served from a stale cached layer
-     while the mirror has moved on -- that combination 404s on every package. *)
-  @@ run "%s" (Dist.shell dist [ dist.update; dist.upgrade; dist.install dist.deps_runtime ])
+  @@ copy ~src:[ "depexts" ] ~dst:"/tmp/depexts" ()
+  (* One RUN, so the index, the system upgraded to it and the packages
+     fetched against it are from the same moment: served from a stale cached
+     layer while the mirror has moved on, any one of them apart from the others
+     404s on every package.  The index is never refreshed after this. *)
+  @@ run "%s" (Dist.shell dist ([ dist.update; dist.upgrade; dist.install dist.deps_runtime ] @ dist.keep_downloads @ [ prefetch ~dist ]))
   @@ copy ~from:"opam-builder" ~src:[ "/usr/local/bin/opam" ] ~dst:"/usr/local/bin/opam" ()
   @@ copy ~from:"day10-install-builder" ~src:[ "/usr/local/bin/day10-install" ] ~dst:"/usr/local/bin/day10-install" ()
   @@ dist.noninteractive

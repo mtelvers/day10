@@ -17,7 +17,8 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 archlinux:latest
-RUN pacman -Sy --noconfirm && pacman -Su --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap
+COPY [ "depexts", "/tmp/depexts" ]
+RUN pacman -Sy --noconfirm && pacman -Su --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap && while read -r s; do [ -n "$s" ] || continue; pacman -Sw --noconfirm $s || for p in $s; do pacman -Sw --noconfirm $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi

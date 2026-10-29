@@ -17,7 +17,8 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 debian:13
-RUN apt update && apt upgrade -y && apt install -y build-essential unzip bubblewrap git sudo curl rsync
+COPY [ "depexts", "/tmp/depexts" ]
+RUN apt update && apt upgrade -y && apt install -y build-essential unzip bubblewrap git sudo curl rsync && rm -f /etc/apt/apt.conf.d/docker-clean && while read -r s; do [ -n "$s" ] || continue; apt-get install -y --download-only $s || for p in $s; do apt-get install -y --download-only $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections

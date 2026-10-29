@@ -17,7 +17,8 @@ RUN opam exec -- dune build --release
 RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 alpine:3.22
-RUN apk update && apk upgrade && apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap
+COPY [ "depexts", "/tmp/depexts" ]
+RUN apk update && apk upgrade && apk add build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap && ln -sf /var/cache/apk /etc/apk/cache && while read -r s; do [ -n "$s" ] || continue; rm -rf /tmp/prefetch && apk add --root /tmp/prefetch --initdb --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories --cache-dir /etc/apk/cache $s || for p in $s; do rm -rf /tmp/prefetch && apk add --root /tmp/prefetch --initdb --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories --cache-dir /etc/apk/cache $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN addgroup -g 1000 opam

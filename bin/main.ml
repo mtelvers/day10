@@ -30,6 +30,27 @@ let container =
 
 module Container = (val container)
 
+(* Every distinct set of system packages the repository names for this
+   platform, one per line, for the base image to fetch into its download cache.
+   Resolved against the platform first, so a depext for another distribution
+   is not asked for here.  Every version of every package is read, since an old
+   version may name a package the latest no longer does and still be built. *)
+let write_depext_sets ~(config : Config.t) path =
+  let repo = Repo.create (List.map Repo.parse_source config.opam_repositories) in
+  let vars = Config.platform_vars ~config in
+  let sets =
+    Repo.fold
+      (fun pkg acc ->
+        match Repo.opam repo pkg with
+        | None -> acc
+        | Some opam ->
+            let depexts = Util.depexts_for ~vars opam in
+            if OpamSysPkg.Set.is_empty depexts then acc else OpamSysPkg.Set.elements depexts |> List.map OpamSysPkg.to_string |> String.concat " " |> fun line -> line :: acc)
+      repo []
+    |> List.sort_uniq String.compare
+  in
+  Os.write_to_file path (String.concat "\n" sets ^ "\n")
+
 let init t =
   let config = Container.config ~t in
   let os_dir = Path.(config.dir / Config.os_key ~config) in
@@ -40,6 +61,7 @@ let init t =
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
     Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
     let opam_repository = Util.create_opam_repository temp_dir in
+    let () = write_depext_sets ~config Path.(temp_dir / "depexts") in
     let build_log = Path.(temp_dir / "build.log") in
     let _ = Container.run ~t ~temp_dir opam_repository build_log in
     Unix.rename temp_dir target_dir

@@ -15,6 +15,8 @@ type t = {
   deps_opam : string;  (** needed to build opam from source *)
   deps_day10_install : string;  (** needed to build day10-install from source *)
   deps_runtime : string;  (** needed in the final image *)
+  keep_downloads : string list;  (** shell commands making the package manager keep what it downloads and never refresh its index *)
+  download : string -> string;  (** shell command fetching the given packages into the download cache without installing them *)
   noninteractive : Dockerfile.t;  (** stop the package manager prompting *)
   add_user : uid:int -> gid:int -> Dockerfile.t;
 }
@@ -50,6 +52,12 @@ let apt =
     deps_opam = "build-essential git curl libcap-dev sudo";
     deps_day10_install = "build-essential git curl unzip bubblewrap";
     deps_runtime = "build-essential unzip bubblewrap git sudo curl rsync";
+    (* The Docker images hook apt-get clean onto every dpkg run, which would
+       empty the cache in the base and, worse, in every layer that installs a
+       depext, hiding it from the layers above.  apt-get does not otherwise
+       drop a download, and install consults no expiry. *)
+    keep_downloads = [ "rm -f /etc/apt/apt.conf.d/docker-clean" ];
+    download = (fun packages -> "apt-get install -y --download-only " ^ packages);
     noninteractive = run "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections";
     add_user = useradd;
   }
@@ -66,6 +74,13 @@ let yum =
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel";
     deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap";
+    (* dnf discards downloads unless told to keep them, and refuses to install
+       once its metadata is older than the repository's metadata_expire, which
+       every stock .repo file sets, so that is overridden in each of them as
+       well as in the defaults. *)
+    keep_downloads =
+      [ "printf 'keepcache=True\\nmetadata_expire=never\\n' >> /etc/dnf/dnf.conf"; "sed -i 's/^metadata_expire=.*/metadata_expire=never/' /etc/yum.repos.d/*.repo" ];
+    download = (fun packages -> "yum install -y --downloadonly " ^ packages);
     noninteractive = empty;
     add_user = useradd;
   }
@@ -79,6 +94,14 @@ let apk =
     deps_opam = "build-base patch unzip bzip2 tar git curl openssl sudo linux-headers libcap-dev";
     deps_day10_install = "build-base patch unzip bzip2 tar git curl bubblewrap";
     deps_runtime = "build-base patch unzip bzip2 tar xz git curl sudo rsync bash coreutils diffutils bubblewrap";
+    (* apk caches only when /etc/apk/cache exists.  It has no download-only
+       verb and its cache names a file by content hash, so the way to fill the
+       cache is to install into a throwaway root that shares it. *)
+    keep_downloads = [ "ln -sf /var/cache/apk /etc/apk/cache" ];
+    download =
+      (fun packages ->
+        "rm -rf /tmp/prefetch && apk add --root /tmp/prefetch --initdb --keys-dir /etc/apk/keys --repositories-file /etc/apk/repositories --cache-dir /etc/apk/cache "
+        ^ packages);
     noninteractive = empty;
     (* Alpine ships busybox's adduser rather than shadow's useradd, and its
        flags are not the same. *)
@@ -99,6 +122,11 @@ let zypper =
     deps_opam = "gcc gcc-c++ make patch unzip bzip2 tar git curl sudo diffutils findutils libcap-devel gzip";
     deps_day10_install = "gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils gzip";
     deps_runtime = "gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which gzip";
+    (* zypper skips a repository whose refresh fails, so autorefresh has to go,
+       on the service that manages the repositories as well as on them, since a
+       service refresh would put it back. *)
+    keep_downloads = [ "zypper -n mr -k --all"; "zypper -n ms -R --all"; "zypper -n mr -R --all" ];
+    download = (fun packages -> "zypper -n install --download-only " ^ packages);
     noninteractive = empty;
     add_user = useradd;
   }
@@ -112,6 +140,9 @@ let pacman =
     deps_opam = "gcc make patch unzip bzip2 tar git curl sudo diffutils libcap";
     deps_day10_install = "gcc make patch unzip bzip2 tar git curl diffutils bubblewrap";
     deps_runtime = "gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap";
+    (* pacman keeps every download and refreshes only when asked with -y. *)
+    keep_downloads = [];
+    download = (fun packages -> "pacman -Sw --noconfirm " ^ packages);
     noninteractive = empty;
     add_user = useradd;
   }
