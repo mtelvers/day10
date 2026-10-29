@@ -1,12 +1,12 @@
 FROM --platform=linux/amd64 quay.io/centos/centos:stream9 AS opam-builder
-RUN dnf config-manager --set-enabled crb && yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel
+RUN dnf config-manager --set-enabled crb && dnf install -y epel-release && yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl openssl sudo diffutils findutils libcap-devel
 RUN git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam
 WORKDIR /tmp/opam
 RUN make cold
 RUN make install
 
 FROM --platform=linux/amd64 quay.io/centos/centos:stream9 AS day10-install-builder
-RUN dnf config-manager --set-enabled crb && yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap
+RUN dnf config-manager --set-enabled crb && dnf install -y epel-release && yum makecache && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar git curl diffutils findutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
 ADD [ "https://api.github.com/repos/mtelvers/day10-install/git/refs/heads/master", "/tmp/day10-install.ref" ]
@@ -18,7 +18,7 @@ RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 quay.io/centos/centos:stream9
 COPY [ "depexts", "/tmp/depexts" ]
-RUN dnf config-manager --set-enabled crb && yum makecache && yum update -y && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap && printf 'keepcache=True\nmetadata_expire=never\n' >> /etc/dnf/dnf.conf && sed -i 's/^metadata_expire=.*/metadata_expire=never/' /etc/yum.repos.d/*.repo && while read -r s; do [ -n "$s" ] || continue; yum install -y --downloadonly $s || for p in $s; do yum install -y --downloadonly $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
+RUN dnf config-manager --set-enabled crb && dnf install -y epel-release && yum makecache && yum update -y && yum install -y --allowerasing gcc gcc-c++ make patch unzip bzip2 tar xz git curl openssl sudo rsync diffutils findutils m4 gawk which bubblewrap && printf 'keepcache=True\nmetadata_expire=never\n' >> /etc/dnf/dnf.conf && sed -i 's/^metadata_expire=.*/metadata_expire=never/' /etc/yum.repos.d/*.repo && while read -r s; do [ -n "$s" ] || continue; yum install -y --downloadonly $s || for p in $s; do yum install -y --downloadonly $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi

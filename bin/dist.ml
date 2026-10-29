@@ -176,12 +176,16 @@ let of_os_family = function
 
 (* CentOS keeps many of the -devel and -static packages opam names as depexts in
    CodeReady Builder, and ships it disabled, so installing them reports no such
-   package.  It was called powertools on 8 and crb from 9 on.  Nothing else in
-   the matrix holds a repository back this way. *)
+   package.  It was called powertools on 8 and crb from 9 on.  Another 59 of the
+   names live only in EPEL, which is enabled by installing epel-release.  opam
+   does that itself when a package's depexts name epel-release, but a layer
+   holds one package's depexts, and 28 packages name an EPEL package without
+   naming epel-release, relying on another package in the same install to
+   bring it.  Nothing else in the matrix holds a repository back this way. *)
 let codeready_builder : Distro.t option -> string option = function
   | Some (`CentOS (`V6 | `V7)) -> None
-  | Some (`CentOS `V8) -> Some "dnf config-manager --set-enabled powertools"
-  | Some (`CentOS _) -> Some "dnf config-manager --set-enabled crb"
+  | Some (`CentOS `V8) -> Some "dnf config-manager --set-enabled powertools && dnf install -y epel-release"
+  | Some (`CentOS _) -> Some "dnf config-manager --set-enabled crb && dnf install -y epel-release"
   | Some _ | None -> None
 
 let of_config ~os_family ~distribution ~version =
