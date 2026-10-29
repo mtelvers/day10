@@ -1216,9 +1216,9 @@ let prune_cmd =
   in
   let depexts_arg =
     let doc =
-      "Delete the layers that installed system packages, so they are rebuilt against the current base.  For after the base image has been \
-       rebuilt against a newer package index: those layers carry the old base's package database and were linked against its libraries, \
-       while every other layer was compiled against the same ABI and is kept."
+      "Delete the layers that installed system packages before the current base image was built, so they are rebuilt against it.  For \
+       after the base image has been rebuilt against a newer package index: those layers carry the old base's package database and were \
+       linked against its libraries, while every other layer was compiled against the same ABI and is kept."
     in
     Arg.(value & flag & info [ "depexts" ] ~doc)
   in

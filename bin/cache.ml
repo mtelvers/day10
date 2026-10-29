@@ -30,7 +30,8 @@ type mode =
   (* A layer that installed system packages carries the base's package database
      with its own additions, and was linked against whatever the base then
      held.  When the base is rebuilt against a newer index those layers are the
-     ones to rebuild; the rest were compiled against the same ABI and stand. *)
+     ones to rebuild; the rest were compiled against the same ABI and stand.
+     A layer built after the current base is already against it. *)
   | Depexts
 
 (* A platform is a directory holding a base image: base/fs is what every layer
@@ -196,6 +197,15 @@ let installed_depexts layer =
     (fun p -> Sys.file_exists Path.(layer.dir / "fs" / p))
     [ "var/lib/dpkg/status"; "var/lib/rpm"; "usr/lib/sysimage/rpm"; "lib/apk/db/installed"; "var/lib/pacman/local" ]
 
+(* The base directory is renamed into place complete, and nothing adds to it
+   afterwards, so its mtime is when the base was built.  A layer records when
+   it finished, and one that finished before the base existed was built on the
+   base before it. *)
+let older_than_base layer =
+  match Unix.stat Path.(Filename.dirname layer.dir / "base") with
+  | { Unix.st_mtime; _ } -> Util.load_layer_info_created Path.(layer.dir / "layer.json") < st_mtime
+  | exception _ -> true
+
 (* Sizes come from each layer's own record, measuring whatever has none, so the
    first run over an existing cache walks it and later runs do not. *)
 let info ~dir ~distribution ~version ~arch ~np =
@@ -275,7 +285,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           let limit = total * pct / 100 in
           (List.map fst (fit_to limit sized), Printf.sprintf "keeping the newest %d%% of %s, so %s" pct (human total) (human limit))
       | Failed -> (List.filter (fun l -> not l.ok) entries, "failed to build")
-      | Depexts -> (List.filter installed_depexts entries, "installed system packages")
+      | Depexts -> (List.filter (fun l -> installed_depexts l && older_than_base l) entries, "installed system packages before the current base was built")
       | Max_size limit ->
           let sized = sized () in
           let total = sum sized in

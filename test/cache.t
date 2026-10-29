@@ -139,7 +139,9 @@ that will be served until it is deleted.
 A layer that installed system packages holds the package manager's database in
 its own tree: dpkg's status file, rpm's database, apk's installed file or
 pacman's local directory.  After the base image is rebuilt those are the layers
-to build again; every other layer is kept.
+to build again, if they were built before it; every other layer is kept.  The
+fixture layers record no creation time, which counts as before anything, and
+the one that records a time after the base was built is already against it.
 
   $ cp -a cache prune-depexts
   $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg
@@ -147,8 +149,11 @@ to build again; every other layer is kept.
   $ mkdir -p prune-depexts/debian-13-riscv64/old2/fs/usr/lib/sysimage/rpm
   $ mkdir -p prune-depexts/debian-13-riscv64/old3/fs/var/lib/pacman/local
   $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot2/fs/var/lib/dpkg/info
+  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/fresh/fs/lib/apk/db
+  $ touch prune-depexts/ubuntu-24.04-x86_64/fresh/fs/lib/apk/db/installed
+  $ echo '{"package":"s.1","exit_status":0,"created":4102444800.0}' > prune-depexts/ubuntu-24.04-x86_64/fresh/layer.json
   $ day10 prune --cache-dir prune-depexts --depexts 2>&1
-  [NOTE] Pruning 3 cache entries (installed system packages): debian-13-riscv64 2, ubuntu-24.04-x86_64 1
+  [NOTE] Pruning 3 cache entries (installed system packages before the current base was built): debian-13-riscv64 2, ubuntu-24.04-x86_64 1
   [NOTE] Freed 24.0K
   $ ls prune-depexts/debian-13-riscv64 prune-depexts/ubuntu-24.04-x86_64
   prune-depexts/debian-13-riscv64:
@@ -158,6 +163,7 @@ to build again; every other layer is kept.
   prune-depexts/ubuntu-24.04-x86_64:
   base
   broken
+  fresh
   hot2
 
 A platform filter narrows what is considered, so a cutoff that would have taken

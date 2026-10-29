@@ -104,6 +104,12 @@ let load_layer_info_exit_status name =
   let json = Yojson.Safe.from_file name in
   Yojson.Safe.Util.(json |> member "exit_status" |> to_int)
 
+(* When the layer finished building.  A layer.json from before the field was
+   written is as old as it gets. *)
+let load_layer_info_created name =
+  let json = Yojson.Safe.from_file name in
+  Yojson.Safe.Util.(json |> member "created" |> to_number_option) |> Option.value ~default:0.0
+
 let load_layer_info_package_name name =
   let json = Yojson.Safe.from_file name in
   Yojson.Safe.Util.(json |> member "package" |> to_string)
