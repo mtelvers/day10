@@ -475,6 +475,42 @@ let dpkg_status_merges () =
   && List.exists (fun line -> String.equal line "Status: install ok installed") (List.concat stanzas)
   && not (List.exists (fun line -> String.equal line "Status: deinstall") (List.concat stanzas))
 
+(* A layer that upgraded a system package carries the new stanza; a sibling
+   that never touched it still carries the base's old one, since every layer's
+   status is a full copy.  Which comes first is an accident of the dependency
+   order, so the union has to pick by version, not by position: the files on
+   disk are the upgraded ones whatever the order, because a layer that did not
+   touch the package has none of its files to overwrite them with.  On
+   debian-12 the conf-freetype layer held libbrotli-dev pinned to libbrotli1
+   1.0.9-2+deb12u1 while conf-glew's copy of the status still said 1.0.9-2+b6,
+   and apt refused to install anything until the two agreed. *)
+let dpkg_status_keeps_the_upgrade () =
+  let stanza ?(extra = "") name version = Printf.sprintf "Package: %s\nStatus: install ok installed\nArchitecture: amd64\nVersion: %s\n%s" name version extra in
+  let untouched = stanza "libbrotli1" "1.0.9-2+b6" in
+  let upgraded = stanza "libbrotli1" "1.0.9-2+deb12u1" ^ "\n" ^ stanza "libbrotli-dev" "1.0.9-2+deb12u1" ~extra:"Depends: libbrotli1 (= 1.0.9-2+deb12u1)\n" in
+  let version_of merged name =
+    Dpkg.stanzas merged
+    |> List.find_map (fun lines ->
+           match Dpkg.key lines with
+           | Some (p, _) when String.equal p name -> List.find_map (fun line -> if String.starts_with ~prefix:"Version: " line then Some (String.sub line 9 (String.length line - 9)) else None) lines
+           | _ -> None)
+  in
+  (* Either order: the sibling first, as the dependency sort happened to put
+     it, and the upgrading layer first. *)
+  version_of (Dpkg.union [ untouched; upgraded ]) "libbrotli1" = Some "1.0.9-2+deb12u1"
+  && version_of (Dpkg.union [ upgraded; untouched ]) "libbrotli1" = Some "1.0.9-2+deb12u1"
+  && version_of (Dpkg.union [ untouched; upgraded ]) "libbrotli-dev" = Some "1.0.9-2+deb12u1"
+
+(* Debian's ordering, not a string's: an epoch outranks everything, a tilde
+   sorts before the empty string, and 10 is more than 9. *)
+let dpkg_versions_order_like_dpkg () =
+  let stanza version = Printf.sprintf "Package: p\nStatus: install ok installed\nArchitecture: amd64\nVersion: %s\n" version in
+  let winner a b =
+    Dpkg.union [ stanza a; stanza b ] |> Dpkg.stanzas |> List.concat
+    |> List.find_map (fun line -> if String.starts_with ~prefix:"Version: " line then Some (String.sub line 9 (String.length line - 9)) else None)
+  in
+  winner "1.10" "1.9" = Some "1.10" && winner "1.9" "1.10" = Some "1.10" && winner "2.0" "1:1.0" = Some "1:1.0" && winner "1.0~rc1" "1.0" = Some "1.0"
+
 let checks =
   [
     ("lock reports the writer", lock_reports_the_writer);
@@ -506,6 +542,8 @@ let checks =
     ("git repo keeps files", git_repo_keeps_files);
     ("any treeish resolves", any_treeish_resolves);
     ("dpkg status merges", dpkg_status_merges);
+    ("dpkg status keeps the upgrade", dpkg_status_keeps_the_upgrade);
+    ("dpkg versions order like dpkg", dpkg_versions_order_like_dpkg);
   ]
 
 let () =

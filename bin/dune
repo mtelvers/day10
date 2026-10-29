@@ -12,7 +12,7 @@
 (library
  (name day10)
  (modules :standard \ main)
- (libraries opam-0install yojson ppx_deriving_yojson.runtime cmdliner dockerfile dockerfile-opam ocaml-version tar)
+ (libraries opam-core opam-0install yojson ppx_deriving_yojson.runtime cmdliner dockerfile dockerfile-opam ocaml-version tar)
  (preprocess
   (pps ppx_deriving_yojson)))
 
