@@ -117,10 +117,10 @@ bytes and empty the cache.
 The modes are mutually exclusive, and one is required.
 
   $ day10 prune --cache-dir prune-size --days 1 --percent 50
-  [ERROR] --days, --percent, --max-size, --failed and --depexts are mutually exclusive
+  [ERROR] --days, --percent, --max-size, --failed and --depexts are mutually exclusive; --base goes only with --days
   [1]
   $ day10 prune --cache-dir prune-size
-  [ERROR] Specify one of --days N, --percent N, --max-size SIZE, --failed or --depexts
+  [ERROR] Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts or --base --days N
   [1]
 
 A failed layer is kept so its verdict can be replayed without rebuilding, which
@@ -165,6 +165,48 @@ the one that records a time after the base was built is already against it.
   broken
   fresh
   hot2
+
+--base --days N replaces the base images built more than that long ago, read
+from the mtime of each base's build log, and takes what --depexts would: the
+layers that installed system packages on a base that has gone, and on one
+rebuilt since.
+
+  $ cp -a cache prune-base
+  $ mkdir -p prune-base/debian-13-riscv64/old2/fs/var/lib/rpm
+  $ touch -d '40 days ago' prune-base/debian-13-riscv64/base/build.log
+  $ mkdir -p prune-base/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg
+  $ touch prune-base/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg/status
+  $ day10 prune --cache-dir prune-base --base --days 30 2>&1
+  [NOTE] Removing 1 base image(s) built more than 30 day(s) ago, for the next build to remake: debian-13-riscv64
+  [NOTE] Pruning 2 cache entries (installed system packages before the current base was built): debian-13-riscv64 1, ubuntu-24.04-x86_64 1
+  [NOTE] Freed 16.0K
+  $ ls prune-base/debian-13-riscv64 prune-base/ubuntu-24.04-x86_64
+  prune-base/debian-13-riscv64:
+  old1
+  old3
+  
+  prune-base/ubuntu-24.04-x86_64:
+  base
+  broken
+  hot2
+
+A platform whose base has gone is not a platform until the next build makes
+one, and a base young enough is left alone, so a second run finds nothing and
+this is safe to call on every idle window.
+
+  $ day10 prune --cache-dir prune-base --base --days 30 2>&1
+  [NOTE] No base image built more than 30 day(s) ago
+  [NOTE] No cache entries to prune (installed system packages before the current base was built)
+
+--base says how old a base has to be, so that it is never mistaken for the
+harmless --depexts.
+
+  $ day10 prune --cache-dir prune-base --base 2>&1
+  [ERROR] --base wants --days N, the age beyond which a base image is replaced; 0 replaces every base in scope
+  [1]
+  $ day10 prune --cache-dir prune-base --base --depexts 2>&1
+  [ERROR] --days, --percent, --max-size, --failed and --depexts are mutually exclusive; --base goes only with --days
+  [1]
 
 A platform filter narrows what is considered, so a cutoff that would have taken
 the stale platform takes nothing.

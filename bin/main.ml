@@ -696,102 +696,6 @@ let run_build (config : Config.t) =
   in
   exit exit_code
 
-(* Bring a base image's package index up to date without rebuilding the base.
-   A stale index is what makes a depext install fetch a version the mirror has
-   withdrawn, which arrives as a 404 and looks like the package's fault.
-
-   [max_age] makes this safe to call on every idle window: a platform whose
-   index is younger than that is left alone.  The caller decides when -- an
-   ocluster worker knows when it is idle and can pause -- and day10 knows how. *)
-let refresh_one ~dir ~log ~max_age (platform, path) =
-  (* The base's own log is the record: it already says what has happened to this
-     base, and a refresh is one of those things.  Its mtime therefore answers
-     how old the index is without a file of day10's own alongside -- and answers
-     it from the start, because an unrefreshed base's log is as old as the base,
-     which is exactly how old its index is.  A marker would have read as
-     infinitely old instead, and refreshed everything on a first sweep whatever
-     --max-age said. *)
-  let history = Path.(path / "base" / "build.log") in
-  let hours_since_refresh =
-    match (Unix.stat history).st_mtime with
-    (* Clamped, because a log appended to a moment ago can carry an mtime a
-       shade later than Unix.time reads, which would otherwise print as -0. *)
-    | mtime -> Float.max 0.0 ((Unix.time () -. mtime) /. 3600.0)
-    | exception _ -> infinity
-  in
-  match max_age with
-  | Some hours when hours_since_refresh < float_of_int hours ->
-      OpamConsole.note "%s: refreshed %.0f hour(s) ago, within %d" platform hours_since_refresh hours;
-      0
-  | _ -> (
-      match Cache.components platform with
-      | None ->
-          OpamConsole.warning "%s: cannot tell which distribution this is, so leaving it alone" platform;
-          0
-      | Some (os_distribution, os_version, arch) ->
-          OpamConsole.note "%s: refreshing" platform;
-          let config =
-            {
-              Config.dir;
-              ocaml_version = OpamPackage.of_string "ocaml.0.0.0";
-              opam_repositories = [];
-              package = "";
-              arch;
-              os = "linux";
-              os_distribution;
-              os_family = Config.family ~given:None ~distribution:os_distribution ~version:os_version;
-              os_version;
-              directory = None;
-              md = None;
-              json = None;
-              dot = None;
-              with_test = false;
-              with_doc = false;
-              tag = None;
-              oci = None;
-              log;
-              dry_run = false;
-              fork = None;
-              build_command = None;
-              local_packages = [];
-              prefer_oldest = false;
-              update_invariant = false;
-              opam_jobs = None;
-            }
-          in
-          let t = Container.init ~config in
-          let temp_dir = Filename.temp_dir ~temp_dir:dir ~perms:0o755 "temp-" "" in
-          let code =
-            Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
-            let refresh_log = Path.(temp_dir / "refresh.log") in
-            match Container.refresh ~t ~temp_dir refresh_log with
-            | 0 ->
-                (* Appended only when it worked, so the mtime means the last
-                   successful refresh.  Recording a failure would leave the
-                   index stale while claiming to be fresh, and --max-age would
-                   then skip it. *)
-                Os.append_to_file history (Printf.sprintf "\n=== index refreshed %s ===\n%s" (Util.timestamp ()) (Os.read_from_file refresh_log));
-                OpamConsole.note "%s: index up to date" platform;
-                0
-            | code ->
-                OpamConsole.error "%s: refreshing the index failed with exit code %d:\n%s" platform code (Os.read_from_file refresh_log);
-                code
-          in
-          Container.deinit ~t;
-          code)
-
-(* Every platform in the cache unless one was named, as cache-info and prune do:
-   a builder serving the whole matrix has nineteen of them, and the one that
-   goes stale unnoticed is the one nobody thought to name. *)
-let run_refresh_base ~dir ~distribution ~version ~arch ~log max_age =
-  match Cache.platforms ~distribution ~version ~arch dir with
-  | [] ->
-      OpamConsole.warning "No base image to refresh in %s" dir;
-      exit 0
-  | platforms ->
-      let codes = List.map (refresh_one ~dir ~log ~max_age) platforms in
-      exit (if List.exists (fun code -> code <> 0) codes then 1 else 0)
-
 let run_ci ?repo (config : Config.t) =
   let repo = match repo with Some r -> r | None -> make_repo config in
   let package = OpamPackage.of_string (config.package ^ ".dev") in
@@ -1165,34 +1069,6 @@ let cache_info_cmd =
   in
   Cmd.v cache_info_info cache_info_term
 
-let refresh_base_cmd =
-  let max_age_arg =
-    let doc = "Leave a platform alone if its index was refreshed less than $(docv) hours ago, so this is safe to call on every idle window." in
-    Arg.(value & opt (some int) None & info [ "max-age" ] ~docv:"HOURS" ~doc)
-  in
-  let distribution_arg, version_arg, arch_arg = platform_filter_terms in
-  let refresh_base_term =
-    Term.(
-      const (fun dir distribution version arch log max_age -> run_refresh_base ~dir ~distribution ~version ~arch ~log max_age)
-      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ log_term $ max_age_arg)
-  in
-  let refresh_base_info =
-    Cmd.info "refresh-base" ~doc:"Bring base images' package indexes up to date, in place"
-      ~man:
-        [
-          `S Manpage.s_description;
-          `P
-            "Runs the distribution's index update inside each base image. The index is build-time state rather than something a cached layer was \
-             compiled against, so layers built on a base stay valid -- unlike rebuilding it, which would leave them standing on libraries they never \
-             saw and cost a rebuild of every one.";
-          `P "Every platform in the cache, unless --os-distribution, --os-version or --arch names one.";
-          `P
-            "Intended to be driven by whatever knows the machine is idle: an ocluster worker can pause, call this, and resume. Nothing else may be \
-             building while it runs, since it writes into a base that every build reads.";
-        ]
-  in
-  Cmd.v refresh_base_info refresh_base_term
-
 let prune_cmd =
   let days_arg =
     let doc = "Delete cache entries unused for more than $(docv) days." in
@@ -1222,42 +1098,55 @@ let prune_cmd =
     in
     Arg.(value & flag & info [ "depexts" ] ~doc)
   in
+  let base_arg =
+    let doc =
+      "With --days N, delete the base images built more than N days ago, and the layers that installed system packages on them, as --depexts \
+       would.  The next build on the platform makes a fresh base from the current package index, with every depext in its download cache.  \
+       Nothing may be building on the platform meanwhile; an ocluster worker pauses, calls this, and resumes."
+    in
+    Arg.(value & flag & info [ "base" ] ~doc)
+  in
   let prune_term =
     Term.(
-      const (fun dir distribution version arch np days percent max_size failed depexts ->
+      const (fun dir distribution version arch np days percent max_size failed depexts base ->
           let mode =
-            match days, percent, max_size, failed, depexts with
-            | Some d, None, None, false, false when d >= 0 -> Cache.Keep_days d
-            | None, Some p, None, false, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
-            | None, None, Some size, false, false -> (
+            match days, percent, max_size, failed, depexts, base with
+            | Some d, None, None, false, false, false when d >= 0 -> Cache.Keep_days d
+            | Some d, None, None, false, false, true when d >= 0 -> Cache.Rebase d
+            | None, Some p, None, false, false, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
+            | None, None, Some size, false, false, false -> (
                 match Cache.size_of_string size with
                 | Some bytes when bytes >= 0 -> Cache.Max_size bytes
                 | _ ->
                     OpamConsole.error "--max-size wants a size with a unit, such as 40G or 500M, not %S" size;
                     exit 1)
-            | None, None, None, true, false -> Cache.Failed
-            | None, None, None, false, true -> Cache.Depexts
-            | None, None, None, false, false ->
-                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE, --failed or --depexts";
+            | None, None, None, true, false, false -> Cache.Failed
+            | None, None, None, false, true, false -> Cache.Depexts
+            | None, None, None, false, false, true ->
+                OpamConsole.error "--base wants --days N, the age beyond which a base image is replaced; 0 replaces every base in scope";
                 exit 1
-            | Some _, None, None, false, false ->
+            | None, None, None, false, false, false ->
+                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts or --base --days N";
+                exit 1
+            | Some _, None, None, false, false, _ ->
                 OpamConsole.error "--days must be >= 0";
                 exit 1
-            | None, Some _, None, false, false ->
+            | None, Some _, None, false, false, false ->
                 OpamConsole.error "--percent must be between 0 and 100";
                 exit 1
             | _ ->
-                OpamConsole.error "--days, --percent, --max-size, --failed and --depexts are mutually exclusive";
+                OpamConsole.error "--days, --percent, --max-size, --failed and --depexts are mutually exclusive; --base goes only with --days";
                 exit 1
           in
           Cache.prune ~dir ~distribution ~version ~arch ?np mode)
-      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg $ depexts_arg)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg $ depexts_arg
+      $ base_arg)
   in
   let prune_info =
     Cmd.info "prune"
       ~doc:
-        "Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size), because they failed (--failed) or because \
-         they installed system packages (--depexts)"
+        "Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size), because they failed (--failed), because \
+         they installed system packages (--depexts), or base images by age along with those layers (--base --days)"
   in
   Cmd.v prune_info prune_term
 
@@ -1391,6 +1280,9 @@ let main_info =
       `P "Use '$(mname) list' list packages in opam repository.";
       `P "Use '$(mname) prune --days N' to delete cache entries older than N days, or '$(mname) prune --percent N' to keep only the newest N% of entries.";
       `P "Use '$(mname) prune --depexts' after rebuilding a base image, to delete the layers that installed system packages against the old one.";
+      `P
+        "Use '$(mname) prune --base --days N' periodically to replace the base images built more than N days ago: each is deleted with the layers \
+         that installed system packages on it, and the next build makes a fresh one from the current package index.";
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";
@@ -1441,7 +1333,7 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; refresh_base_cmd; prune_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd ] in
   (* opam's log directory.  read_command_output leaves its stdout log in it, so
      opam's own rmdir at exit finds it not empty and gives up. *)
   let opam_logs = Cleanup.Temp_dir OpamCoreConfig.(!r.log_dir) in

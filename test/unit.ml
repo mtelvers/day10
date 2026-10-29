@@ -78,19 +78,6 @@ let sizes_format () =
 let buckets_scale_to_the_data () =
   Cache.bucket_width 1.0 = 6 && Cache.bucket_width 46.0 = 6 && Cache.bucket_width 3360.0 = 336
 
-(* A platform's name comes apart into the three parts os_key built it from, so
-   something can act on the platform and not merely select it.  The awkward ones
-   are versions that are words rather than numbers. *)
-let platform_names_come_apart () =
-  [
-    ("ubuntu-24.04-x86_64", Some ("ubuntu", "24.04", "x86_64"));
-    ("debian-13-riscv64", Some ("debian", "13", "riscv64"));
-    ("debian-testing-x86_64", Some ("debian", "testing", "x86_64"));
-    ("opensuse-tumbleweed-x86_64", Some ("opensuse", "tumbleweed", "x86_64"));
-    ("nonsense", None);
-  ]
-  |> List.for_all (fun (key, expected) -> Cache.components key = expected)
-
 (* Every platform unless a component was given, and never a temp directory. *)
 let platforms_are_selected () =
   let root = scratch () in
@@ -550,7 +537,6 @@ let checks =
     ("sizes format", sizes_format);
     ("buckets scale to the data", buckets_scale_to_the_data);
     ("platforms are selected", platforms_are_selected);
-    ("platform names come apart", platform_names_come_apart);
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("platforms name the docker arch", platforms_name_the_docker_arch);
     ("family follows the distribution", family_follows_the_distribution);

@@ -33,6 +33,12 @@ type mode =
      ones to rebuild; the rest were compiled against the same ABI and stand.
      A layer built after the current base is already against it. *)
   | Depexts
+  (* The base images built more than so many days ago, for the next build to
+     remake from the current package index, and with them whatever --depexts
+     would take once they are gone: every layer that installed system packages
+     on them.  Nothing else about a base goes stale -- the compiled layers
+     stand -- so this is the whole of keeping a platform current. *)
+  | Rebase of int
 
 (* A platform is a directory holding a base image: base/fs is what every layer
    for it is built on, so a directory without one is not a platform whatever it
@@ -72,22 +78,6 @@ let layers_of (platform, path) =
            match ((Unix.stat layer_json).st_mtime, Util.load_layer_info_exit_status layer_json) with
            | last_used, exit_status -> Some { dir; platform; last_used; ok = exit_status = 0 }
            | exception _ -> None)
-
-(* The three parts of a platform directory's name, for when something has to
-   act on the platform rather than merely select it.  Config.os_key writes it as
-   distribution-version-arch, so the arch comes off the last dash and the
-   distribution off the first, leaving the version between: debian-testing and
-   opensuse-tumbleweed both come apart correctly.  A version containing a dash
-   would not, and nothing writes one. *)
-let components key =
-  match String.rindex_opt key '-' with
-  | None -> None
-  | Some last -> (
-      let arch = String.sub key (last + 1) (String.length key - last - 1) in
-      let rest = String.sub key 0 last in
-      match String.index_opt rest '-' with
-      | None -> None
-      | Some first -> Some (String.sub rest 0 first, String.sub rest (first + 1) (String.length rest - first - 1), arch))
 
 let by_platform ~distribution ~version ~arch dir = platforms ~distribution ~version ~arch dir |> List.map (fun p -> (fst p, layers_of p))
 
@@ -197,14 +187,19 @@ let installed_depexts layer =
     (fun p -> Sys.file_exists Path.(layer.dir / "fs" / p))
     [ "var/lib/dpkg/status"; "var/lib/rpm"; "usr/lib/sysimage/rpm"; "lib/apk/db/installed"; "var/lib/pacman/local" ]
 
-(* The base directory is renamed into place complete, and nothing adds to it
-   afterwards, so its mtime is when the base was built.  A layer records when
-   it finished, and one that finished before the base existed was built on the
-   base before it. *)
+(* The base's build log is written as the base is built and renamed into place
+   with it, so its mtime is when the base was built.  None when there is no
+   base, or one without a log, which is not one day10 built. *)
+let base_built platform_dir =
+  match Unix.stat Path.(platform_dir / "base" / "build.log") with { Unix.st_mtime; _ } -> Some st_mtime | exception _ -> None
+
+(* A layer records when it finished, and one that finished before the base was
+   built was built on the base before it.  Where there is no base to compare
+   with, the layer was built on one that has gone, which is older still. *)
 let older_than_base layer =
-  match Unix.stat Path.(Filename.dirname layer.dir / "base") with
-  | { Unix.st_mtime; _ } -> Util.load_layer_info_created Path.(layer.dir / "layer.json") < st_mtime
-  | exception _ -> true
+  match base_built (Filename.dirname layer.dir) with
+  | Some built -> Util.load_layer_info_created Path.(layer.dir / "layer.json") < built
+  | None -> true
 
 (* Sizes come from each layer's own record, measuring whatever has none, so the
    first run over an existing cache walks it and later runs do not. *)
@@ -259,7 +254,8 @@ let info ~dir ~distribution ~version ~arch ~np =
 let prune ~dir ~distribution ~version ~arch ?np mode =
   if not (Sys.file_exists dir) then OpamConsole.warning "Cache directory %s does not exist" dir
   else
-    let entries = by_platform ~distribution ~version ~arch dir |> List.concat_map snd in
+    let found = platforms ~distribution ~version ~arch dir in
+    let entries = List.concat_map layers_of found in
     (* Sizes are wanted by the two modes that talk about size, so measure
        whatever has no record.  A periodic call pays for that once and reads the
        records afterwards.  --days is about time alone and never measures. *)
@@ -271,6 +267,19 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
       in
       List.map (fun l -> (l, Util.layer_size l.dir)) entries
     in
+    (* A batch at a time rather than piped into xargs, which was only ever
+       keeping each command line inside the kernel's limit. *)
+    let rec remove = function
+      | [] -> ()
+      | paths ->
+          let batch = List.filteri (fun i _ -> i < 500) paths in
+          let rest = List.filteri (fun i _ -> i >= 500) paths in
+          (match Os.sudo ("rm" :: "-rf" :: batch) with
+          | 0 -> ()
+          | code -> OpamConsole.error "rm -rf exited with status %d" code);
+          remove rest
+    in
+    let depexts = "installed system packages before the current base was built" in
     (* Ranked across every platform in scope rather than within each: a layer
        nothing has wanted for months should go before a busy platform's recent
        ones, wherever it happens to live. *)
@@ -285,7 +294,22 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           let limit = total * pct / 100 in
           (List.map fst (fit_to limit sized), Printf.sprintf "keeping the newest %d%% of %s, so %s" pct (human total) (human limit))
       | Failed -> (List.filter (fun l -> not l.ok) entries, "failed to build")
-      | Depexts -> (List.filter (fun l -> installed_depexts l && older_than_base l) entries, "installed system packages before the current base was built")
+      | Depexts -> (List.filter (fun l -> installed_depexts l && older_than_base l) entries, depexts)
+      | Rebase days ->
+          let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
+          let stale = List.filter (fun (_, path) -> Option.fold ~none:true ~some:(fun built -> built < cutoff) (base_built path)) found in
+          let () =
+            match stale with
+            | [] -> OpamConsole.note "No base image built more than %d day(s) ago" days
+            | _ ->
+                OpamConsole.note "Removing %d base image(s) built more than %d day(s) ago, for the next build to remake: %s" (List.length stale) days
+                  (String.concat ", " (List.map fst stale));
+                remove (List.map (fun (_, path) -> Path.(path / "base")) stale)
+          in
+          (* Removed first, so that every layer that installed system packages
+             on one of them is now older than a base that is not there, and
+             the one test serves both. *)
+          (List.filter (fun l -> installed_depexts l && older_than_base l) entries, depexts)
       | Max_size limit ->
           let sized = sized () in
           let total = sum sized in
@@ -301,18 +325,6 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           |> List.map (fun p -> Printf.sprintf "%s %d" p (List.length (List.filter (fun l -> String.equal l.platform p) to_delete)))
         in
         OpamConsole.note "Pruning %d cache entries (%s): %s" (List.length to_delete) summary (String.concat ", " counted);
-        (* A batch at a time rather than piped into xargs, which was only ever
-           keeping each command line inside the kernel's limit. *)
-        let rec remove = function
-          | [] -> ()
-          | paths ->
-              let batch = List.filteri (fun i _ -> i < 500) paths in
-              let rest = List.filteri (fun i _ -> i >= 500) paths in
-              (match Os.sudo ("rm" :: "-rf" :: batch) with
-              | 0 -> ()
-              | code -> OpamConsole.error "rm -rf exited with status %d" code);
-              remove rest
-        in
         (* Read before removing, and only what was already recorded: measuring
            the rest would walk trees that rm is about to walk anyway.  Where a
            layer has no record the total is a floor rather than the figure. *)
