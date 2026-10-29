@@ -117,10 +117,10 @@ bytes and empty the cache.
 The modes are mutually exclusive, and one is required.
 
   $ day10 prune --cache-dir prune-size --days 1 --percent 50
-  [ERROR] --days, --percent, --max-size and --failed are mutually exclusive
+  [ERROR] --days, --percent, --max-size, --failed and --depexts are mutually exclusive
   [1]
   $ day10 prune --cache-dir prune-size
-  [ERROR] Specify one of --days N, --percent N, --max-size SIZE or --failed
+  [ERROR] Specify one of --days N, --percent N, --max-size SIZE, --failed or --depexts
   [1]
 
 A failed layer is kept so its verdict can be replayed without rebuilding, which
@@ -134,6 +134,30 @@ that will be served until it is deleted.
   $ ls prune-failed/ubuntu-24.04-x86_64
   base
   hot1
+  hot2
+
+A layer that installed system packages holds the package manager's database in
+its own tree: dpkg's status file, rpm's database, apk's installed file or
+pacman's local directory.  After the base image is rebuilt those are the layers
+to build again; every other layer is kept.
+
+  $ cp -a cache prune-depexts
+  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg
+  $ touch prune-depexts/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg/status
+  $ mkdir -p prune-depexts/debian-13-riscv64/old2/fs/usr/lib/sysimage/rpm
+  $ mkdir -p prune-depexts/debian-13-riscv64/old3/fs/var/lib/pacman/local
+  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot2/fs/var/lib/dpkg/info
+  $ day10 prune --cache-dir prune-depexts --depexts 2>&1
+  [NOTE] Pruning 3 cache entries (installed system packages): debian-13-riscv64 2, ubuntu-24.04-x86_64 1
+  [NOTE] Freed 24.0K
+  $ ls prune-depexts/debian-13-riscv64 prune-depexts/ubuntu-24.04-x86_64
+  prune-depexts/debian-13-riscv64:
+  base
+  old1
+  
+  prune-depexts/ubuntu-24.04-x86_64:
+  base
+  broken
   hot2
 
 A platform filter narrows what is considered, so a cutoff that would have taken

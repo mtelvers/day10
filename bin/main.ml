@@ -1214,37 +1214,51 @@ let prune_cmd =
     in
     Arg.(value & flag & info [ "failed" ] ~doc)
   in
+  let depexts_arg =
+    let doc =
+      "Delete the layers that installed system packages, so they are rebuilt against the current base.  For after the base image has been \
+       rebuilt against a newer package index: those layers carry the old base's package database and were linked against its libraries, \
+       while every other layer was compiled against the same ABI and is kept."
+    in
+    Arg.(value & flag & info [ "depexts" ] ~doc)
+  in
   let prune_term =
     Term.(
-      const (fun dir distribution version arch np days percent max_size failed ->
+      const (fun dir distribution version arch np days percent max_size failed depexts ->
           let mode =
-            match days, percent, max_size, failed with
-            | Some d, None, None, false when d >= 0 -> Cache.Keep_days d
-            | None, Some p, None, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
-            | None, None, Some size, false -> (
+            match days, percent, max_size, failed, depexts with
+            | Some d, None, None, false, false when d >= 0 -> Cache.Keep_days d
+            | None, Some p, None, false, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
+            | None, None, Some size, false, false -> (
                 match Cache.size_of_string size with
                 | Some bytes when bytes >= 0 -> Cache.Max_size bytes
                 | _ ->
                     OpamConsole.error "--max-size wants a size with a unit, such as 40G or 500M, not %S" size;
                     exit 1)
-            | None, None, None, true -> Cache.Failed
-            | None, None, None, false ->
-                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE or --failed";
+            | None, None, None, true, false -> Cache.Failed
+            | None, None, None, false, true -> Cache.Depexts
+            | None, None, None, false, false ->
+                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE, --failed or --depexts";
                 exit 1
-            | Some _, None, None, false ->
+            | Some _, None, None, false, false ->
                 OpamConsole.error "--days must be >= 0";
                 exit 1
-            | None, Some _, None, false ->
+            | None, Some _, None, false, false ->
                 OpamConsole.error "--percent must be between 0 and 100";
                 exit 1
             | _ ->
-                OpamConsole.error "--days, --percent, --max-size and --failed are mutually exclusive";
+                OpamConsole.error "--days, --percent, --max-size, --failed and --depexts are mutually exclusive";
                 exit 1
           in
           Cache.prune ~dir ~distribution ~version ~arch ?np mode)
-      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg)
+      $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg $ depexts_arg)
   in
-  let prune_info = Cmd.info "prune" ~doc:"Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size) or because they failed (--failed)" in
+  let prune_info =
+    Cmd.info "prune"
+      ~doc:
+        "Delete cache entries by age (--days), by count (--percent), to fit a size (--max-size), because they failed (--failed) or because \
+         they installed system packages (--depexts)"
+  in
   Cmd.v prune_info prune_term
 
 (* The packages worth testing when [target] changes.
@@ -1376,6 +1390,7 @@ let main_info =
       `P "Use '$(mname) health-check @FILENAME' to run health checks on multiple packages listed in FILENAME (JSON format: {\"packages\":[...]})";
       `P "Use '$(mname) list' list packages in opam repository.";
       `P "Use '$(mname) prune --days N' to delete cache entries older than N days, or '$(mname) prune --percent N' to keep only the newest N% of entries.";
+      `P "Use '$(mname) prune --depexts' after rebuilding a base image, to delete the layers that installed system packages against the old one.";
       `P "Add --md flag to output results in markdown format.";
       `S Manpage.s_examples;
       `P "$(mname) ci --cache-dir /tmp/cache --opam-repository /tmp/opam-repository /path/to/project";

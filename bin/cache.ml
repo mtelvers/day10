@@ -27,6 +27,11 @@ type mode =
      day10's, every one of them is a wrong answer that will be served until it
      is deleted. *)
   | Failed
+  (* A layer that installed system packages carries the base's package database
+     with its own additions, and was linked against whatever the base then
+     held.  When the base is rebuilt against a newer index those layers are the
+     ones to rebuild; the rest were compiled against the same ABI and stand. *)
+  | Depexts
 
 (* A platform is a directory holding a base image: base/fs is what every layer
    for it is built on, so a directory without one is not a platform whatever it
@@ -181,6 +186,16 @@ let freed_by_days now sized days =
 let freed_by_percent sized pct = tally (fit_to (sum sized * pct / 100) sized)
 let freed_by_failed sized = tally (List.filter (fun (layer, _) -> not layer.ok) sized)
 
+(* Installing a system package writes the package manager's database, so a
+   layer that did so holds a copy of it in its own tree, and one that did not
+   holds nothing under these paths.  One path per family: dpkg's status file,
+   rpm's database in either of its homes, apk's installed file, and pacman's
+   local directory. *)
+let installed_depexts layer =
+  List.exists
+    (fun p -> Sys.file_exists Path.(layer.dir / "fs" / p))
+    [ "var/lib/dpkg/status"; "var/lib/rpm"; "usr/lib/sysimage/rpm"; "lib/apk/db/installed"; "var/lib/pacman/local" ]
+
 (* Sizes come from each layer's own record, measuring whatever has none, so the
    first run over an existing cache walks it and later runs do not. *)
 let info ~dir ~distribution ~version ~arch ~np =
@@ -260,6 +275,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           let limit = total * pct / 100 in
           (List.map fst (fit_to limit sized), Printf.sprintf "keeping the newest %d%% of %s, so %s" pct (human total) (human limit))
       | Failed -> (List.filter (fun l -> not l.ok) entries, "failed to build")
+      | Depexts -> (List.filter installed_depexts entries, "installed system packages")
       | Max_size limit ->
           let sized = sized () in
           let total = sum sized in
