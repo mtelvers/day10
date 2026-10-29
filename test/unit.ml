@@ -156,6 +156,33 @@ let platforms_name_the_docker_arch () =
    which matched every depext line keyed on the debian family and folded
    packages that were never installed into the layer key -- and made the key
    depend on which machine built it. *)
+(* opam reads os-distribution from the image's /etc/os-release, which says arch
+   where the CI says archlinux, and opensuse-leap or opensuse-tumbleweed where
+   day10 says opensuse.  A depext keyed on opam's value -- 252 lines of the
+   repository say {os-distribution = "arch"} -- was being left out of the layer
+   key and the base's prefetch, then installed by opam regardless. *)
+let distribution_is_what_opam_polls () =
+  let polled distribution version = Config.distribution ~distribution ~version in
+  polled "archlinux" "latest" = "arch"
+  && polled "arch" "latest" = "arch"
+  && polled "opensuse" "16.0" = "opensuse-leap"
+  && polled "opensuse" "tumbleweed" = "opensuse-tumbleweed"
+  && polled "ubuntu" "26.04" = "ubuntu"
+  && polled "debian" "testing" = "debian"
+  && polled "centos" "9" = "centos"
+  && polled "alpine" "3.24" = "alpine"
+  && polled "fedora" "44" = "fedora"
+
+(* The CI names Arch without a version, and the default came from the host, so
+   the platform was keyed archlinux-26.04 on an Ubuntu 26.04 worker. *)
+let version_defaults_only_to_the_hosts_own () =
+  let host = ("ubuntu", "26.04") in
+  Config.version ~host ~distribution:"archlinux" None = Some "latest"
+  && Config.version ~host ~distribution:"ubuntu" None = Some "26.04"
+  && Config.version ~host ~distribution:"debian" None = None
+  && Config.version ~host ~distribution:"debian" (Some "13") = Some "13"
+  && Config.version ~host ~distribution:"archlinux" (Some "rolling") = Some "rolling"
+
 let family_follows_the_distribution () =
   let derived distribution version = Config.family ~given:None ~distribution ~version in
   derived "alpine" "3.24" = "alpine"
@@ -525,6 +552,8 @@ let checks =
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("platforms name the docker arch", platforms_name_the_docker_arch);
     ("family follows the distribution", family_follows_the_distribution);
+    ("distribution is what opam polls in the image", distribution_is_what_opam_polls);
+    ("version defaults only to the host's own", version_defaults_only_to_the_hosts_own);
     ("hash ignores metadata", hash_ignores_metadata);
     ("hash follows the build", hash_follows_the_build);
     ("acting on the flag", acting_on_the_flag);

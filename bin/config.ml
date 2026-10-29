@@ -76,21 +76,47 @@ let family ~given ~distribution ~version =
       | ("archlinux" | "arch"), _ -> "arch"
       | distribution, _ -> distribution)
 
+(* The distribution opam will compute inside the container: the ID field of its
+   /etc/os-release (opamSysPoll.ml, os_distribution).  The names the CI and the
+   cache use for a platform are not always that: the Arch image says arch, and
+   the two openSUSE images say opensuse-leap and opensuse-tumbleweed where day10
+   calls both opensuse.  A depext filter written against opam's value has to be
+   evaluated against opam's value, or the layer key and the base's prefetch
+   leave out what opam then installs. *)
+let distribution ~distribution ~version =
+  match (distribution, version) with
+  | ("archlinux" | "arch"), _ -> "arch"
+  | "opensuse", "tumbleweed" -> "opensuse-tumbleweed"
+  | "opensuse", _ -> "opensuse-leap"
+  | distribution, _ -> distribution
+
+(* The version to build when none was given.  The host's version is only an
+   answer when the distribution is the host's too; otherwise an Ubuntu worker
+   would label every other distribution 26.04.  Arch has no version, so its
+   image is tagged latest.  None asks the caller to say. *)
+let version ~host:(host_distribution, host_version) ~distribution = function
+  | Some version -> Some version
+  | None -> (
+      match distribution with
+      | "archlinux" | "arch" -> Some "latest"
+      | _ when String.equal distribution host_distribution -> Some host_version
+      | _ -> None)
+
 let std_env ~(config : t) =
-  Util.std_env ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
-    ~ocaml_version:config.ocaml_version ()
+  Util.std_env ~arch:config.arch ~os:config.os
+    ~os_distribution:(distribution ~distribution:config.os_distribution ~version:config.os_version)
+    ~os_family:config.os_family ~os_version:config.os_version ~ocaml_version:config.ocaml_version ()
 
 let platform_vars ~(config : t) =
-  Util.platform_vars ~arch:config.arch ~os:config.os ~os_distribution:config.os_distribution ~os_family:config.os_family ~os_version:config.os_version
+  Util.platform_vars ~arch:config.arch ~os:config.os
+    ~os_distribution:(distribution ~distribution:config.os_distribution ~version:config.os_version)
+    ~os_family:config.os_family ~os_version:config.os_version
 
 (* The platform as x-ci-accept-failures names it: distribution and version,
    without the architecture that os_key carries. *)
 let platform ~(config : t) = config.os_distribution ^ "-" ^ config.os_version
 
-let os_key ~(config : t) =
-  let os =
-    List.map
-      (fun v -> std_env ~config v |> Option.map OpamVariable.string_of_variable_contents |> Option.value ~default:"unknown")
-      [ "os-distribution"; "os-version"; "arch" ]
-  in
-  String.concat "-" os
+(* The platform directory in the cache, named as the CI names the platform
+   rather than as opam reports it, so that the openSUSE directories keep their
+   names. *)
+let os_key ~(config : t) = String.concat "-" [ config.os_distribution; config.os_version; config.arch ]
