@@ -527,27 +527,61 @@ let dpkg_versions_order_like_dpkg () =
   in
   winner "1.10" "1.9" = Some "1.10" && winner "1.9" "1.10" = Some "1.10" && winner "2.0" "1:1.0" = Some "1:1.0" && winner "1.0~rc1" "1.0" = Some "1.0"
 
-(* Whether a later layer provides a path decides if a marker stays, and a path
-   under something that is not a directory is not provided: a layer that removed
-   a whole directory holds a marker where it was, so a path inside raises
-   ENOTDIR rather than ENOENT.  util-linux upgraded on Fedora left one layer
-   with markers over its old build-id links and conf-pango's with a marker over
-   their directory, and the merge died on the stat. *)
-let a_marked_directory_provides_nothing_beneath () =
-  let layer = scratch () in
-  Os.mkdir ~parents:true (Filename.concat layer "kept");
-  Os.write_to_file (Filename.concat layer "kept/file") "";
-  (* A regular file stands in for the device node, which takes root to make;
-     lstat fails the same way through either. *)
-  Os.write_to_file (Filename.concat layer "gone") "";
-  Os.provided ~by:layer "kept/file"
-  && (not (Os.provided ~by:layer "kept/other"))
-  && not (Os.provided ~by:layer "gone/file")
+(* The merge writes each layer over the ones below and makes the deletions the
+   markers record.  A marker takes the path out of the merge and stays, so that
+   it hides the base's copy under the overlay, until a later layer provides the
+   path again; a marker over a directory takes everything under it, including
+   an earlier layer's marker inside it, which is the case the stat-based merge
+   died on.  Without markers wanted, the deletion is made and nothing left.  An
+   empty file stands in for the device node, which takes root to make. *)
+let merge_makes_the_deletions () =
+  let root = scratch () in
+  let layer n path = Filename.concat (Filename.concat root (string_of_int n)) path in
+  let file path contents =
+    Os.mkdir ~parents:true (Filename.dirname path);
+    Os.write_to_file path contents
+  in
+  let is_marker _ (st : Unix.stats) = st.st_kind = S_REG && st.st_size = 0 in
+  (* 1 provides d/a, d/b, e and f.  2 deletes d/a, replaces f, deletes g, which
+     only the base has, and puts a directory where e was.  3 deletes d.
+     4 provides d/c. *)
+  file (layer 1 "d/a") "a";
+  file (layer 1 "d/b") "b";
+  file (layer 1 "e") "e";
+  file (layer 1 "f") "old";
+  file (layer 2 "d/a") "";
+  file (layer 2 "f") "new";
+  file (layer 2 "g") "";
+  file (layer 2 "e/x") "x";
+  file (layer 3 "d") "";
+  file (layer 4 "d/c") "c";
+  let merge ~markers n =
+    let target = Filename.concat root (Printf.sprintf "merged-%b-%d" markers n) in
+    Merge.layers ~is_marker ~markers ~target (List.init n (fun i -> Filename.concat root (string_of_int (i + 1))));
+    target
+  in
+  let kind target path = match Unix.lstat (Filename.concat target path) with st -> Some st.st_kind | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None in
+  let contents target path = Os.read_from_file (Filename.concat target path) in
+  let two = merge ~markers:true 2 in
+  let three = merge ~markers:true 3 in
+  let four = merge ~markers:true 4 in
+  let bare = merge ~markers:false 4 in
+  (* After 2: the deletion is made and marked, the replacement shows, and the
+     file became a directory. *)
+  contents two "d/a" = "" && contents two "d/b" = "b" && contents two "f" = "new" && contents two "g" = "" && kind two "e" = Some S_DIR
+  (* After 3: the directory and everything in it, markers included, is one marker. *)
+  && kind three "d" = Some S_REG && contents three "d" = ""
+  (* After 4: the later layer's directory replaces the marker and holds only its own. *)
+  && kind four "d" = Some S_DIR && contents four "d/c" = "c" && kind four "d/a" = None && kind four "d/b" = None
+  (* Hardlinked, not copied. *)
+  && (Unix.stat (Filename.concat four "d/c")).st_ino = (Unix.stat (layer 4 "d/c")).st_ino
+  (* No markers: the deletions are made and nothing is left to say so. *)
+  && kind bare "g" = None && kind bare "d/a" = None && contents bare "d/c" = "c"
 
 let checks =
   [
     ("lock reports the writer", lock_reports_the_writer);
-    ("a marked directory provides nothing beneath", a_marked_directory_provides_nothing_beneath);
+    ("merge makes the deletions", merge_makes_the_deletions);
     ("lock cleaned up after failure", lock_cleaned_up_after_failure);
     ("tree size allocates by block", tree_size_allocates_by_block);
     ("tree size counts a hardlink once", tree_size_counts_a_hardlink_once);

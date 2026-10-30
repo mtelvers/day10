@@ -622,7 +622,7 @@ let output (config : Config.t) results =
         let () = OpamConsole.note "Importing layers into Docker with tag: %s" tag in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "docker-import-" "" in
         let cp s d = [ "cp"; "--update=none"; "--archive"; "--no-dereference"; "--recursive"; "--link"; "--no-target-directory"; s; d ] in
-        let () = Os.merge_layers ~base_beneath:false ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir in
+        let () = Os.merge_layers ~markers:false ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir in
         let () =
           match layers with
           | hash :: _ ->
@@ -1046,6 +1046,31 @@ let platform_filter_terms =
   in
   (distribution, version, arch)
 
+(* What day10 runs under sudo to flatten layers, in place of cp: see Merge. *)
+let cp_cmd =
+  let no_markers_arg =
+    let doc =
+      "Make each layer's deletions but leave no deletion marker in the result, for a merge that will become an image rather than a lower \
+       layer of an overlay."
+    in
+    Arg.(value & flag & info [ "no-markers" ] ~doc)
+  in
+  let target_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TARGET" ~doc:"The directory to flatten into, created if absent.") in
+  let layers_arg = Arg.(non_empty & pos_right 0 string [] & info [] ~docv:"LAYER" ~doc:"A layer's filesystem, lowest first.") in
+  let cp_term = Term.(const (fun no_markers target layers -> Merge.layers ~markers:(not no_markers) ~target layers) $ no_markers_arg $ target_arg $ layers_arg) in
+  let cp_info =
+    Cmd.info "cp" ~doc:"Flatten overlay layers into one directory, hardlinking"
+      ~man:
+        [
+          `S Manpage.s_description;
+          `P
+            "Writes each layer over the ones before it, hardlinking files rather than copying them, and applies the deletions a layer recorded \
+             as 0:0 character devices. day10 runs this under sudo when it assembles a build's lower layer; the layers are root-owned, and \
+             only root can read all of one.";
+        ]
+  in
+  Cmd.v cp_info cp_term
+
 let cache_info_cmd =
   let distribution_arg, version_arg, arch_arg = platform_filter_terms in
   let cache_info_term =
@@ -1333,7 +1358,7 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd; cp_cmd ] in
   (* opam's log directory.  read_command_output leaves its stdout log in it, so
      opam's own rmdir at exit finds it not empty and gives up. *)
   let opam_logs = Cleanup.Temp_dir OpamCoreConfig.(!r.log_dir) in

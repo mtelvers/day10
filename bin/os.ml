@@ -223,105 +223,17 @@ let rec rm ?(recursive = false) path =
       with
       | _ -> ())
 
-(* Flatten a stack of overlay layers into one directory, base-most first.
-
-   A layer is an overlayfs upper directory, in which a path the build removed
-   is not absent but recorded as a 0:0 character device.  Flattened into a
-   single directory a marker over a path an earlier layer provided stands for
-   nothing, there being nothing left beneath it to hide, so each is replayed as
-   the deletion it means.
-
-   Whether the marker then stays depends on what is under the merge.  With
-   [base_beneath], the merged directory is not the bottom of the overlay: the
-   base is mounted under it as a lower layer of its own, and a path a layer
-   removed from the base was never in the merge to delete.  There the marker is
-   the only thing hiding the base's copy, so it is kept, unless a later layer
-   puts a real entry at that path, since cp will not write a directory over a
-   device node.  Three conf layers on Arch each replaced the base's brotli,
-   libldap and patch database entries; with their markers dropped the old
-   entries showed through beside the new, and pacman reported a duplicated
-   database entry for each.  Without a base beneath -- the docker import, which
-   merges the base in -- every marker is dropped, the deletion having been made
-   and a device node being no part of an image.
-
-   Carried across as they stood they were worse than inert: cp failed the merge
-   outright where a layer removed a directory an earlier one still had, and
-   where the copy skipped the marker instead, the removed path came back.
-   Installing libx11 on Arch upgrades thirty-six packages, so removes each of
-   their old pacman database directories, and both halves of that were seen.
-
-   Hardlinked rather than copied, so a layer costs inodes and not bytes, and
-   each layer overwrites the ones below it, which is what installing them in
-   this order did. *)
-(* Whether the layer at [by] has an entry of its own at [path].  Not when a
-   component above it is something other than a directory: a layer that
-   removed a whole directory records a marker where the directory was, and a
-   path inside it is gone with it.  util-linux upgraded on Fedora leaves one
-   layer with a marker over each of its old build-id links and a later one with
-   a marker over the directory they were in.  The layers are root-owned, so a
-   directory this process cannot look into is taken to provide the path: the
-   marker is then dropped, which is the safe side, the merge going on as it did
-   before markers were kept at all. *)
-let provided ~by path =
-  match Unix.lstat (Filename.concat by path) with
-  | _ -> true
-  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> false
-  | exception Unix.Unix_error (Unix.EACCES, _, _) -> true
-
-let merge_layers ~base_beneath ~layers ~target =
-  (* One find over every layer rather than one apiece.  Walking a hundred of
-     them costs a tenth of a second and the copy that follows wants the same
-     metadata anyway; it was sudo that was expensive, at ten milliseconds a
-     time to start.  Not with an empty list, which would send find to the
-     current directory. *)
-  let found =
-    if layers = [] then []
-    else
-      capture "sudo" (("find" :: layers) @ [ "-type"; "c"; "-printf"; "%H\\t%P\\0" ])
-      |> String.split_on_char '\000'
-      |> List.filter_map (fun record ->
-             (* Both halves have to be there: a record without the separator is
-                not ours to act on, and one with an empty path would name the
-                target itself. *)
-             match String.index_opt record '\t' with
-             | Some i when i + 1 < String.length record -> Some (String.sub record 0 i, String.sub record (i + 1) (String.length record - i - 1))
-             | Some _ | None -> None)
-  in
-  let run what argv = match sudo argv with 0 -> () | code -> failwith (Printf.sprintf "%s exited with status %i" what code) in
-  (* cp takes any number of sources, applies them left to right and hardlinks
-     as it goes, so a run of layers goes on in one call.  Given as fs/. because
-     it is the contents that merge, which is also what --no-target-directory
-     said for the single source this used to take. *)
-  let copy sources =
-    if sources <> [] then
-      run
-        (Printf.sprintf "merging %i layer(s) into %s" (List.length sources) target)
-        (([ "cp"; "--force"; "--archive"; "--no-dereference"; "--recursive"; "--link" ] @ List.map (fun fs -> Filename.concat fs ".") sources) @ [ target ])
-  in
-  let provided_by layers path = List.exists (fun fs -> provided ~by:fs path) layers in
-  (* A layer with deletions to replay stands alone, since they are made once
-     everything below it is in place and its markers settled before anything
-     above it arrives.  Every other layer joins the batch, which is all of them
-     for all but one merge in a thousand. *)
-  let rec go batch = function
-    | [] -> copy (List.rev batch)
-    | fs :: later -> (
-        match List.filter_map (fun (layer, path) -> if String.equal layer fs then Some path else None) found with
-        | [] -> go (fs :: batch) later
-        | paths ->
-            copy (List.rev batch);
-            (* cp has no way to leave the markers where they are -- archive
-               hardlinks a device node like anything else -- so they come
-               across with the layer, and the ones that must not stay go once
-               the deletion has been made.  Checked, not ignored: a marker left
-               where a later layer needs the path fails that layer's copy. *)
-            let replay what argv paths = if paths <> [] then run (Printf.sprintf "%s in %s" what fs) (argv @ List.map (Filename.concat target) paths) in
-            replay "replaying the deletions" [ "rm"; "-rf"; "--" ] paths;
-            copy [ fs ];
-            replay "dropping the markers" [ "rm"; "-f"; "--" ] (if base_beneath then List.filter (provided_by later) paths else paths);
-            go [] later)
-  in
-  go [] layers
+(* Flatten a stack of overlay layers into one directory, base-most first: see
+   Merge, which does the work.  It runs as root, under sudo as day10 cp, since
+   the layers are root-owned and only root can read all of one; this process
+   is the user when day10 builds a project on their own machine.  [markers]
+   keeps each layer's deletion markers in the result, which a lower layer of an
+   overlay wants and an image cannot carry. *)
+let merge_layers ~markers ~layers ~target =
+  if layers <> [] then
+    match sudo ((Sys.executable_name :: "cp" :: (if markers then [] else [ "--no-markers" ])) @ ("--" :: target :: layers)) with
+    | 0 -> ()
+    | code -> failwith (Printf.sprintf "merging %i layer(s) into %s exited with status %i" (List.length layers) target code)
 
 module IntSet = Set.Make (Int)
 
