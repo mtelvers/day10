@@ -253,6 +253,21 @@ let rec rm ?(recursive = false) path =
    Hardlinked rather than copied, so a layer costs inodes and not bytes, and
    each layer overwrites the ones below it, which is what installing them in
    this order did. *)
+(* Whether the layer at [by] has an entry of its own at [path].  Not when a
+   component above it is something other than a directory: a layer that
+   removed a whole directory records a marker where the directory was, and a
+   path inside it is gone with it.  util-linux upgraded on Fedora leaves one
+   layer with a marker over each of its old build-id links and a later one with
+   a marker over the directory they were in.  The layers are root-owned, so a
+   directory this process cannot look into is taken to provide the path: the
+   marker is then dropped, which is the safe side, the merge going on as it did
+   before markers were kept at all. *)
+let provided ~by path =
+  match Unix.lstat (Filename.concat by path) with
+  | _ -> true
+  | exception Unix.Unix_error ((Unix.ENOENT | Unix.ENOTDIR), _, _) -> false
+  | exception Unix.Unix_error (Unix.EACCES, _, _) -> true
+
 let merge_layers ~base_beneath ~layers ~target =
   (* One find over every layer rather than one apiece.  Walking a hundred of
      them costs a tenth of a second and the copy that follows wants the same
@@ -283,11 +298,7 @@ let merge_layers ~base_beneath ~layers ~target =
         (Printf.sprintf "merging %i layer(s) into %s" (List.length sources) target)
         (([ "cp"; "--force"; "--archive"; "--no-dereference"; "--recursive"; "--link" ] @ List.map (fun fs -> Filename.concat fs ".") sources) @ [ target ])
   in
-  (* Whether a later layer has an entry of its own at [path].  The layers are
-     root-owned, so a directory this process cannot look into is taken to
-     provide the path: the marker is then dropped, which is the safe side, the
-     merge going on as it did before markers were kept at all. *)
-  let provided_by layers path = List.exists (fun fs -> match Unix.lstat (Filename.concat fs path) with _ -> true | exception Unix.Unix_error (Unix.ENOENT, _, _) -> false) layers in
+  let provided_by layers path = List.exists (fun fs -> provided ~by:fs path) layers in
   (* A layer with deletions to replay stands alone, since they are made once
      everything below it is in place and its markers settled before anything
      above it arrives.  Every other layer joins the batch, which is all of them

@@ -527,9 +527,27 @@ let dpkg_versions_order_like_dpkg () =
   in
   winner "1.10" "1.9" = Some "1.10" && winner "1.9" "1.10" = Some "1.10" && winner "2.0" "1:1.0" = Some "1:1.0" && winner "1.0~rc1" "1.0" = Some "1.0"
 
+(* Whether a later layer provides a path decides if a marker stays, and a path
+   under something that is not a directory is not provided: a layer that removed
+   a whole directory holds a marker where it was, so a path inside raises
+   ENOTDIR rather than ENOENT.  util-linux upgraded on Fedora left one layer
+   with markers over its old build-id links and conf-pango's with a marker over
+   their directory, and the merge died on the stat. *)
+let a_marked_directory_provides_nothing_beneath () =
+  let layer = scratch () in
+  Os.mkdir ~parents:true (Filename.concat layer "kept");
+  Os.write_to_file (Filename.concat layer "kept/file") "";
+  (* A regular file stands in for the device node, which takes root to make;
+     lstat fails the same way through either. *)
+  Os.write_to_file (Filename.concat layer "gone") "";
+  Os.provided ~by:layer "kept/file"
+  && (not (Os.provided ~by:layer "kept/other"))
+  && not (Os.provided ~by:layer "gone/file")
+
 let checks =
   [
     ("lock reports the writer", lock_reports_the_writer);
+    ("a marked directory provides nothing beneath", a_marked_directory_provides_nothing_beneath);
     ("lock cleaned up after failure", lock_cleaned_up_after_failure);
     ("tree size allocates by block", tree_size_allocates_by_block);
     ("tree size counts a hardlink once", tree_size_counts_a_hardlink_once);
