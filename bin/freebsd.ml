@@ -116,6 +116,17 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
+let fork = Os.fork
+
+(* As opam names it, since the layer key resolves filters against it: uname
+   says amd64 where opam in the jail says x86_64. *)
+let arch () = OpamSysPoll.arch OpamVariable.Map.empty |> Option.value ~default:(Os.arch ())
+
+(* A layer is root-owned, since the jail ran as root to install depexts, so
+   only root can delete it. *)
+let remove = Os.sudo_rm
+let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
+
 let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   let jailname = Filename.basename temp_dir in
   let fstab = Path.(temp_dir / "fstab") in

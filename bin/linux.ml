@@ -167,6 +167,18 @@ let init ~(config : Config.t) =
 let deinit ~t:_ = ()
 let config ~t = t.config
 
+let arch = Os.arch
+let fork = Os.fork
+
+(* A layer is root-owned, since the container ran as root to install depexts,
+   so only root can delete it. *)
+let remove = Os.sudo_rm
+let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
+
+(* What a build holds, and how each is let go of when it ends: see Cleanup. *)
+let mount path () = if Os.sudo ~stdout:Os.no_input ~stderr:Os.no_input [ "mountpoint"; "-q"; path ] = 0 then Os.quiet "sudo" [ "umount"; path ]
+let runc_container name () = Os.quiet "sudo" [ "runc"; "delete"; "-f"; name ]
+
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   match Dist.of_config ~os_family:config.os_family ~distribution:config.os_distribution ~version:config.os_version with
@@ -240,7 +252,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let ud = "upperdir=" ^ upperdir in
   let wd = "workdir=" ^ workdir in
   let _ = Os.sudo [ "mount"; "-t"; "overlay"; "overlay"; rootfsdir; "-o"; String.concat "," [ ld; ud; wd ] ] in
-  Cleanup.with_resource (Cleanup.Mount rootfsdir) @@ fun () ->
+  Cleanup.with_resource (mount rootfsdir) @@ fun () ->
   let mounts =
     [
       { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
@@ -267,7 +279,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     let () = Os.write_to_file Path.(temp_dir / "config.json") (Yojson.Safe.pretty_to_string config_runc) in
     (* A name per phase, so one left behind is not taken for the other. *)
     let container = Filename.basename temp_dir ^ suffix in
-    Cleanup.with_resource (Cleanup.Runc_container container) @@ fun () ->
+    Cleanup.with_resource (runc_container container) @@ fun () ->
     Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee ~append [ "runc"; "run"; "-b"; temp_dir; container ]
   in
   (* Stop at the first failure and report it: testing after a failed install

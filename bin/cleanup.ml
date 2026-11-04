@@ -9,11 +9,12 @@
    that scope ends by returning, by raising, or by being killed: the signal
    handler raises, so the finalisers run on the way out. *)
 
-type t =
-  | Temp_dir of string
-  | Mount of string
-  | Docker_container of string
-  | Runc_container of string
+(* A resource is whatever releases it.  Best effort, and quiet: the normal
+   path has usually released it already, and a failure here must not mask
+   whatever we are unwinding from.  What there is to release is the platform's
+   business -- an overlay to unmount, a container to delete, a snapshot to
+   remove, a directory in the cache -- so each platform makes its own. *)
+type t = unit -> unit
 
 exception Killed of int
 
@@ -37,18 +38,7 @@ let uninterruptible f =
   let previous = List.map (fun (signal, _) -> (signal, Sys.signal signal Sys.Signal_ignore)) signals in
   Fun.protect ~finally:(fun () -> List.iter (fun (signal, behaviour) -> Sys.set_signal signal behaviour) previous) f
 
-(* Best effort, and quiet: the normal path has usually released the resource
-   already, and a failure here must not mask whatever we are unwinding from. *)
-let release r =
-  let quiet cmd = ignore (Os.sudo ~stdout:"/dev/null" ~stderr:"/dev/null" cmd) in
-  let mounted path = Os.sudo ~stdout:"/dev/null" ~stderr:"/dev/null" [ "mountpoint"; "-q"; path ] = 0 in
-  match r with
-  | Mount path -> if mounted path then quiet [ "umount"; path ]
-  | Docker_container name -> quiet [ "docker"; "rm"; "-f"; name ]
-  | Runc_container name -> quiet [ "runc"; "delete"; "-f"; name ]
-  | Temp_dir path -> if Sys.file_exists path then quiet [ "rm"; "-rf"; path ]
-
-let with_resource r f = Fun.protect ~finally:(fun () -> uninterruptible (fun () -> release r)) f
+let with_resource (release : t) f = Fun.protect ~finally:(fun () -> uninterruptible release) f
 
 (* Raising from the handler rather than exiting is what lets the finalisers run.
    The exception surfaces at the next safe point, which is as soon as the signal

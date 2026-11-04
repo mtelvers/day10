@@ -127,6 +127,11 @@ let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) ?(append = fa
 
 let sudo ?stdin ?stdout ?stderr ?tee ?append cmd = fst (spawn ?stdin ?stdout ?stderr ?tee ?append "sudo" cmd)
 
+(* Run and forget: no output and no exit status.  For releasing what a build
+   holds, where the normal path has usually released it already and a failure
+   must not mask whatever is being unwound from. *)
+let quiet prog args = ignore (fst (spawn ~stdout:no_input ~stderr:no_input prog args))
+
 let exec ?stdout ?stderr ?tee cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
   fst (spawn ?stdout ?stderr ?tee (List.hd cmd) (List.tl cmd))
@@ -189,6 +194,7 @@ let run cmd =
    six terabytes of cc1plus and took the machine down.  A four-core board
    already comes out at three, so the cap only ever bites upwards. *)
 let default_jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
+let arch () = (OpamStd.Sys.uname ()).machine
 
 let rec mkdir ?(parents = false) dir =
   if not (Sys.file_exists dir) then (
@@ -196,6 +202,19 @@ let rec mkdir ?(parents = false) dir =
        let parent_dir = Filename.dirname dir in
        if parent_dir <> dir then mkdir ~parents:true parent_dir);
     Sys.mkdir dir 0o755)
+
+(* rm -rf as root, for trees a container left root-owned.  A batch at a time
+   rather than piped into xargs, which was only ever keeping each command line
+   inside the kernel's limit. *)
+let rec sudo_rm = function
+  | [] -> ()
+  | paths ->
+      let batch = List.filteri (fun i _ -> i < 500) paths in
+      let rest = List.filteri (fun i _ -> i >= 500) paths in
+      (match sudo ("rm" :: "-rf" :: batch) with
+      | 0 -> ()
+      | code -> OpamConsole.error "rm -rf exited with status %d" code);
+      sudo_rm rest
 
 let rec rm ?(recursive = false) path =
   try

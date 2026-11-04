@@ -179,6 +179,16 @@ let freed_by_days now sized days =
 let freed_by_percent sized pct = tally (fit_to (sum sized * pct / 100) sized)
 let freed_by_failed sized = tally (List.filter (fun (layer, _) -> not layer.ok) sized)
 
+(* Measuring a layer means walking it, so measure the ones with no recorded
+   size in parallel.  Each child writes its own file, which is how the result
+   reaches the parent -- a forked child cannot return anything. *)
+let warm_layer_sizes ?np dirs =
+  match List.filter (fun dir -> Option.is_none (Util.load_layer_size dir)) dirs with
+  | [] -> 0
+  | missing ->
+      Platform.fork ?np (fun dir -> ignore (Util.layer_size dir)) missing;
+      List.length missing
+
 (* The base's build log is written as the base is built and renamed into place
    with it, so its mtime is when the base was built.  None when there is no
    base, or one without a log, which is not one day10 built. *)
@@ -201,7 +211,7 @@ let info ~dir ~distribution ~version ~arch ~np =
     let found = by_platform ~distribution ~version ~arch dir in
     let all = List.concat_map snd found in
     let () =
-      match Util.warm_layer_sizes ?np (List.map (fun l -> l.dir) all) with
+      match warm_layer_sizes ?np (List.map (fun l -> l.dir) all) with
       | 0 -> ()
       | n -> OpamConsole.note "Measuring %d layer(s) with no recorded size; later runs read the recorded ones" n
     in
@@ -253,23 +263,11 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
        records afterwards.  --days is about time alone and never measures. *)
     let sized () =
       let () =
-        match Util.warm_layer_sizes ?np (List.map (fun l -> l.dir) entries) with
+        match warm_layer_sizes ?np (List.map (fun l -> l.dir) entries) with
         | 0 -> ()
         | n -> OpamConsole.note "Measuring %d layer(s) with no recorded size" n
       in
       List.map (fun l -> (l, Util.layer_size l.dir)) entries
-    in
-    (* A batch at a time rather than piped into xargs, which was only ever
-       keeping each command line inside the kernel's limit. *)
-    let rec remove = function
-      | [] -> ()
-      | paths ->
-          let batch = List.filteri (fun i _ -> i < 500) paths in
-          let rest = List.filteri (fun i _ -> i >= 500) paths in
-          (match Os.sudo ("rm" :: "-rf" :: batch) with
-          | 0 -> ()
-          | code -> OpamConsole.error "rm -rf exited with status %d" code);
-          remove rest
     in
     let depexts = "installed system packages before the current base was built" in
     (* Ranked across every platform in scope rather than within each: a layer
@@ -296,7 +294,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
             | _ ->
                 OpamConsole.note "Removing %d base image(s) built more than %d day(s) ago, for the next build to remake: %s" (List.length stale) days
                   (String.concat ", " (List.map fst stale));
-                remove (List.map (fun (_, path) -> Path.(path / "base")) stale)
+                Platform.remove (List.map (fun (_, path) -> Path.(path / "base")) stale)
           in
           (* Removed first, so that every layer that installed system packages
              on one of them is now older than a base that is not there, and
@@ -321,7 +319,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
            the rest would walk trees that rm is about to walk anyway.  Where a
            layer has no record the total is a floor rather than the figure. *)
         let recorded = List.filter_map (fun l -> Util.load_layer_size l.dir) to_delete in
-        remove (List.map (fun l -> l.dir) to_delete);
+        Platform.remove (List.map (fun l -> l.dir) to_delete);
         (* Silence rather than a floor of zero when nothing was recorded at all,
            which is what --days on a cache no report has run over looks like. *)
         if recorded <> [] then

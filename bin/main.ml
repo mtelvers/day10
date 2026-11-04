@@ -21,15 +21,6 @@ let layer_hash_of ~(config : Config.t) ctx pkg pkgs =
   Util.layer_hash ~with_test:(matters config.with_test "with-test") ~with_doc:(matters config.with_doc "with-doc")
     ~vars:(Config.platform_vars ~config) (List.map (resolve_opam ctx) pkgs)
 
-let container =
-  match OpamSysPoll.os OpamVariable.Map.empty with
-  | Some "linux" -> (module Linux : S.CONTAINER)
-  | Some "freebsd" -> (module Freebsd : S.CONTAINER)
-  | Some "win32" -> (module Windows : S.CONTAINER)
-  | _ -> (module Dummy : S.CONTAINER)
-
-module Container = (val container)
-
 (* Every distinct set of system packages the repository names for this
    platform, one per line, for the base image to fetch into its download cache.
    Resolved against the platform first, so a depext for another distribution
@@ -52,18 +43,18 @@ let write_depext_sets ~(config : Config.t) path =
   Os.write_to_file path (String.concat "\n" sets ^ "\n")
 
 let init t =
-  let config = Container.config ~t in
+  let config = Platform.config ~t in
   let os_dir = Path.(config.dir / Config.os_key ~config) in
   let () = Os.mkdir ~parents:true os_dir in
   let root = Path.(os_dir / "base") in
   if not (Sys.file_exists root) then
     ignore @@ Os.create_directory_exclusively root @@ fun target_dir ->
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-    Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
+    Cleanup.with_resource (Platform.temp_dir temp_dir) @@ fun () ->
     let opam_repository = Util.create_opam_repository temp_dir in
     let () = write_depext_sets ~config Path.(temp_dir / "depexts") in
     let build_log = Path.(temp_dir / "build.log") in
-    let _ = Container.run ~t ~temp_dir opam_repository build_log in
+    let _ = Platform.run ~t ~temp_dir opam_repository build_log in
     Unix.rename temp_dir target_dir
 
 let () = OpamFormatConfig.init ()
@@ -392,17 +383,17 @@ let print_build_result = function
   | Success _ -> OpamConsole.note "success"
 
 let build_layer ctx t pkg hash ordered_deps ordered_hashes =
-  let config = Container.config ~t in
+  let config = Platform.config ~t in
   let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
   let layer_json = Path.(layer_dir / "layer.json") in
   let write_layer target_dir =
     let () = OpamConsole.note "Building %s" (OpamPackage.to_string pkg) in
     let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
-    Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
+    Cleanup.with_resource (Platform.temp_dir temp_dir) @@ fun () ->
     let opam_repo = Util.create_opam_repository temp_dir in
     let () = Repo.materialise (Repo_context.repo ctx) (pkg :: ordered_deps) ~dest:opam_repo in
     let build_log = Path.(temp_dir / "build.log") in
-    let status = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
+    let status = Platform.build ~t ~temp_dir build_log pkg ordered_hashes in
     (* Whether the layer installed system packages is what the solution says
        the package needs on this platform: the build is trusted, not
        inspected.  Record the layer before publishing it: the rename is
@@ -456,7 +447,7 @@ let build ~repo config packages =
   | Ok (ctx, solution) ->
       let () = if config.log then Dot_solution.to_string solution |> print_endline in
       let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
-      let t = Container.init ~config in
+      let t = Platform.init ~config in
       init t;
       let ordered_installation = topological_sort solution in
       let dependencies = pkg_deps solution ordered_installation in
@@ -480,7 +471,7 @@ let build ~repo config packages =
         else false
       in
       if config.dry_run && not all_layers_exist then (
-        Container.deinit ~t;
+        Platform.deinit ~t;
         [ Solution solution ]
       )
       else
@@ -514,7 +505,7 @@ let build ~repo config packages =
             | _ -> (Dependency_failed :: res, OpamPackage.Map.add pkg Dependency_failed m))
           ([], OpamPackage.Map.empty) ordered_installation
       in
-      Container.deinit ~t;
+      Platform.deinit ~t;
       results @ [ Solution solution ]
   | Error s ->
       let () = if config.log then print_endline s in
@@ -682,20 +673,20 @@ let run_build (config : Config.t) =
           List.filter_map (function Success h -> Some h | _ -> None) results
         in
         let build_config = { config with build_command = Some build_command } in
-        let t = Container.init ~config:build_config in
+        let t = Platform.init ~config:build_config in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "temp-" "" in
         let r =
-          Cleanup.with_resource (Cleanup.Temp_dir temp_dir) @@ fun () ->
+          Cleanup.with_resource (Platform.temp_dir temp_dir) @@ fun () ->
           let _opam_repo = Util.create_opam_repository temp_dir in
           let build_log = Path.(temp_dir / "build.log") in
           let dummy_pkg = List.hd local_pkgs in
-          let r = Container.build ~t ~temp_dir build_log dummy_pkg all_hashes in
+          let r = Platform.build ~t ~temp_dir build_log dummy_pkg all_hashes in
           (* The output arrived as it was produced, so there is nothing left to
              print but the verdict. *)
           if r <> 0 then OpamConsole.error "build failed with exit code %i" r;
           r
         in
-        Container.deinit ~t;
+        Platform.deinit ~t;
         r
   in
   exit exit_code
@@ -741,7 +732,7 @@ let run_health_check_multi (config : Config.t) package_arg =
       | None -> List.iter run_with_package packages
       | Some np ->
           Repo.warm repo;
-          Os.fork ~np run_with_package packages
+          Platform.fork ~np run_with_package packages
 
 let cache_dir_term =
   let doc = "Directory to use for caching (required)" in
@@ -804,7 +795,7 @@ let oci_term =
 let arch_term =
   let doc = "Architecture (default: detected from system)" in
   let env = Cmd.Env.info "DAY10_ARCH" in
-  let default = (OpamStd.Sys.uname ()).machine in
+  let default = Platform.arch () in
   Arg.(value & opt string default & info [ "arch" ] ~env ~docv:"ARCH" ~doc)
 
 let os_term =
@@ -1262,7 +1253,7 @@ let run_revdeps (config : Config.t) =
   | Some 1 -> List.iter check candidates
   | np ->
       Repo.warm repo;
-      Os.fork ?np check candidates
+      Platform.fork ?np check candidates
 
 let revdeps_cmd =
   let package_arg =
@@ -1365,5 +1356,5 @@ let () =
   let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd; cp_cmd ] in
   (* opam's log directory.  read_command_output leaves its stdout log in it, so
      opam's own rmdir at exit finds it not empty and gives up. *)
-  let opam_logs = Cleanup.Temp_dir OpamCoreConfig.(!r.log_dir) in
+  let opam_logs = Platform.temp_dir OpamCoreConfig.(!r.log_dir) in
   exit (Cleanup.main (fun () -> Cleanup.with_resource opam_logs (fun () -> Cmd.eval ~catch:false cmd)))

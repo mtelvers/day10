@@ -92,16 +92,6 @@ let layer_size dir =
       save_layer_size dir size;
       size
 
-(* Measuring a layer means walking it, so measure the ones with no recorded
-   size in parallel.  Each child writes its own file, which is how the result
-   reaches the parent -- a forked child cannot return anything. *)
-let warm_layer_sizes ?np dirs =
-  match List.filter (fun dir -> Option.is_none (load_layer_size dir)) dirs with
-  | [] -> 0
-  | missing ->
-      Os.fork ?np (fun dir -> ignore (layer_size dir)) missing;
-      List.length missing
-
 let load_layer_info_exit_status name =
   let json = Yojson.Safe.from_file name in
   Yojson.Safe.Util.(json |> member "exit_status" |> to_int)

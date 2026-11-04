@@ -1,3 +1,7 @@
+(* The container the image is exported from, let go of when the export ends:
+   see Cleanup. *)
+let container name () = Os.quiet "sudo" [ "docker"; "rm"; "-f"; name ]
+
 let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir _opam_repository build_log uid gid =
   let base_image = Dist.base_image ~arch:config.arch ~distribution:config.os_distribution ~version:config.os_version in
   let dockerfile = Dockerfile_gen.dockerfile ~dist ~arch:config.arch ~base_image ~uid ~gid in
@@ -11,12 +15,12 @@ let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir _opam_repository build
   match build_result with
   | 0 ->
       let rootfs = Path.(temp_dir / "fs") in
-      let container = Filename.basename temp_dir in
+      let name = Filename.basename temp_dir in
       let () = Os.mkdir rootfs in
-      Cleanup.with_resource (Cleanup.Docker_container container) @@ fun () ->
-      let _ = Os.sudo [ "docker"; "create"; "--name"; container; tag ] in
-      let () = Os.run (String.concat " " [ "sudo"; "docker"; "export"; container; "|"; "sudo"; "tar"; "-xf"; "-"; "-C"; rootfs ]) |> print_string in
-      let _ = Os.sudo [ "docker"; "rm"; container ] in
+      Cleanup.with_resource (container name) @@ fun () ->
+      let _ = Os.sudo [ "docker"; "create"; "--name"; name; tag ] in
+      let () = Os.run (String.concat " " [ "sudo"; "docker"; "export"; name; "|"; "sudo"; "tar"; "-xf"; "-"; "-C"; rootfs ]) |> print_string in
+      let _ = Os.sudo [ "docker"; "rm"; name ] in
       let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
       0
   | build_result -> build_result

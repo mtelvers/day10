@@ -38,6 +38,17 @@ let init ~(config : Config.t) = { config; network = Os.capture "hcn-namespace" [
 let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
 let config ~t = t.config
 
+(* opam's uname is Unix only; its arch poll asks Windows itself. *)
+let arch () = OpamSysPoll.arch OpamVariable.Map.empty |> Option.value ~default:"x86_64"
+
+(* The layers are the user's own, so nothing more than unlink is needed. *)
+let remove = List.iter (Os.rm ~recursive:true)
+
+let temp_dir path () = if Sys.file_exists path then try Os.rm ~recursive:true path with Unix.Unix_error _ | Sys_error _ -> ()
+
+(* Windows has no fork, so one at a time. *)
+let fork ?np:_ f xs = List.iter f xs
+
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
