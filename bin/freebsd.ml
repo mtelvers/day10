@@ -285,8 +285,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         lowerdir;
         workdir;
         Path.(upperdir / "tmp");
-        Path.(upperdir / "home" / "opam" / "default" / ".opam-switch" / "sources");
-        Path.(upperdir / "home" / "opam" / "default" / ".opam-switch" / "build");
+        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "sources");
+        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "build");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment");
       ]
