@@ -477,6 +477,19 @@ let any_treeish_resolves () =
   [ rev_parse dir "HEAD"; "fixture-tag"; rev_parse dir "HEAD^{tree}" ]
   |> List.for_all (fun rev -> Repo.opam (Repo.create [ Repo.parse_source (dir ^ ":" ^ rev) ]) pkg <> None)
 
+(* Whether a layer installed system packages is recorded by its build, and
+   read from the record alone: a layer from before the field is refused, not
+   guessed about, since the migration script should have seen it. *)
+let layer_records_its_depexts () =
+  let layer fields =
+    let platform = scratch () in
+    let dir = Filename.concat platform "h" in
+    Sys.mkdir dir 0o755;
+    Yojson.Safe.to_file (Filename.concat dir "layer.json") (`Assoc ([ ("package", `String "p.1"); ("exit_status", `Int 0) ] @ fields));
+    match Cache.layers_of ("x", platform) with [ l ] -> Some l.Cache.depexts | _ | (exception _) -> None
+  in
+  layer [ ("depexts", `Bool true) ] = Some true && layer [ ("depexts", `Bool false) ] = Some false && layer [] = None
+
 (* Merging layers keeps the first copy of a path, so without this only one
    layer's dpkg status survived and every depext the others installed looked
    uninstalled. *)
@@ -591,6 +604,7 @@ let checks =
     ("platforms are selected", platforms_are_selected);
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("platforms name the docker arch", platforms_name_the_docker_arch);
+    ("layer records its depexts", layer_records_its_depexts);
     ("family follows the distribution", family_follows_the_distribution);
     ("distribution is what opam polls in the image", distribution_is_what_opam_polls);
     ("version defaults only to the host's own", version_defaults_only_to_the_hosts_own);

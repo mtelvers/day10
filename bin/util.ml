@@ -47,7 +47,7 @@ let accept_failures opam =
       | _ -> [])
   |> Option.value ~default:[]
 
-let save_layer_info name pkg deps hashes rc =
+let save_layer_info name pkg deps hashes ~depexts rc =
   Yojson.Safe.to_file name
     (`Assoc
        [
@@ -56,7 +56,15 @@ let save_layer_info name pkg deps hashes rc =
          ("deps", `List (List.map (fun p -> `String (OpamPackage.to_string p)) deps));
          ("hashes", `List (List.map (fun h -> `String h) hashes));
          ("created", `Float (Unix.time ()));
+         ("depexts", `Bool depexts);
        ])
+
+(* Whether the layer installed system packages.  A layer from before the field
+   was recorded is given it by scripts/migrate-depexts.py, run once over the
+   cache; one the script has not seen is refused rather than guessed about. *)
+let load_layer_info_depexts name =
+  let json = Yojson.Safe.from_file name in
+  Yojson.Safe.Util.(json |> member "depexts" |> to_bool)
 
 (* A layer records its own size so that reporting on the cache does not mean
    walking all of it again.  The file sits beside layer.json rather than in it:

@@ -402,10 +402,14 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
     let opam_repo = Util.create_opam_repository temp_dir in
     let () = Repo.materialise (Repo_context.repo ctx) (pkg :: ordered_deps) ~dest:opam_repo in
     let build_log = Path.(temp_dir / "build.log") in
-    let r = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
-    (* Record the layer before publishing it: the rename is atomic, so what
-       makes the directory a layer has to be in place before it happens. *)
-    let () = Util.save_layer_info Path.(temp_dir / "layer.json") pkg ordered_deps ordered_hashes r in
+    let status = Container.build ~t ~temp_dir build_log pkg ordered_hashes in
+    (* Whether the layer installed system packages is what the solution says
+       the package needs on this platform: the build is trusted, not
+       inspected.  Record the layer before publishing it: the rename is
+       atomic, so what makes the directory a layer has to be in place before
+       it happens. *)
+    let depexts = not (OpamSysPkg.Set.is_empty (Util.depexts_for ~vars:(Config.platform_vars ~config) (resolve_opam ctx pkg))) in
+    let () = Util.save_layer_info Path.(temp_dir / "layer.json") pkg ordered_deps ordered_hashes ~depexts status in
     Unix.rename temp_dir target_dir
   in
   (* A layer built just now streamed its output as it went and announced itself

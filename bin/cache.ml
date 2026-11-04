@@ -16,6 +16,8 @@ type layer = {
      built, and both operations here are about use rather than age. *)
   last_used : float;
   ok : bool;
+  (* Whether its build installed system packages, as its layer.json records. *)
+  depexts : bool;
 }
 
 type mode =
@@ -76,7 +78,7 @@ let layers_of (platform, path) =
          if not (Sys.file_exists layer_json) then None
          else
            match ((Unix.stat layer_json).st_mtime, Util.load_layer_info_exit_status layer_json) with
-           | last_used, exit_status -> Some { dir; platform; last_used; ok = exit_status = 0 }
+           | last_used, exit_status -> Some { dir; platform; last_used; ok = exit_status = 0; depexts = Util.load_layer_info_depexts layer_json }
            | exception _ -> None)
 
 let by_platform ~distribution ~version ~arch dir = platforms ~distribution ~version ~arch dir |> List.map (fun p -> (fst p, layers_of p))
@@ -176,16 +178,6 @@ let freed_by_days now sized days =
 
 let freed_by_percent sized pct = tally (fit_to (sum sized * pct / 100) sized)
 let freed_by_failed sized = tally (List.filter (fun (layer, _) -> not layer.ok) sized)
-
-(* Installing a system package writes the package manager's database, so a
-   layer that did so holds a copy of it in its own tree, and one that did not
-   holds nothing under these paths.  One path per family: dpkg's status file,
-   rpm's database in either of its homes, apk's installed file, and pacman's
-   local directory. *)
-let installed_depexts layer =
-  List.exists
-    (fun p -> Sys.file_exists Path.(layer.dir / "fs" / p))
-    [ "var/lib/dpkg/status"; "var/lib/rpm"; "usr/lib/sysimage/rpm"; "lib/apk/db/installed"; "var/lib/pacman/local" ]
 
 (* The base's build log is written as the base is built and renamed into place
    with it, so its mtime is when the base was built.  None when there is no
@@ -294,7 +286,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           let limit = total * pct / 100 in
           (List.map fst (fit_to limit sized), Printf.sprintf "keeping the newest %d%% of %s, so %s" pct (human total) (human limit))
       | Failed -> (List.filter (fun l -> not l.ok) entries, "failed to build")
-      | Depexts -> (List.filter (fun l -> installed_depexts l && older_than_base l) entries, depexts)
+      | Depexts -> (List.filter (fun l -> l.depexts && older_than_base l) entries, depexts)
       | Rebase days ->
           let cutoff = Unix.time () -. (float_of_int days *. 86400.0) in
           let stale = List.filter (fun (_, path) -> Option.fold ~none:true ~some:(fun built -> built < cutoff) (base_built path)) found in
@@ -309,7 +301,7 @@ let prune ~dir ~distribution ~version ~arch ?np mode =
           (* Removed first, so that every layer that installed system packages
              on one of them is now older than a base that is not there, and
              the one test serves both. *)
-          (List.filter (fun l -> installed_depexts l && older_than_base l) entries, depexts)
+          (List.filter (fun l -> l.depexts && older_than_base l) entries, depexts)
       | Max_size limit ->
           let sized = sized () in
           let total = sum sized in

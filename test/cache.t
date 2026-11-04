@@ -13,19 +13,19 @@ differ between runs.
 
   $ for d in debian-13-riscv64/old1 debian-13-riscv64/old2 debian-13-riscv64/old3; do
   >   mkdir -p cache/$d
-  >   echo '{"package":"p.1","exit_status":0}' > cache/$d/layer.json
+  >   echo '{"package":"p.1","exit_status":0,"depexts":false}' > cache/$d/layer.json
   >   touch -d '100 days ago' cache/$d/layer.json
   > done
   $ for d in ubuntu-24.04-x86_64/hot1 ubuntu-24.04-x86_64/hot2; do
   >   mkdir -p cache/$d
-  >   echo '{"package":"q.1","exit_status":0}' > cache/$d/layer.json
+  >   echo '{"package":"q.1","exit_status":0,"depexts":false}' > cache/$d/layer.json
   >   touch -d '80 hours ago' cache/$d/layer.json
   > done
 
 A failed layer is counted apart from the rest.
 
   $ mkdir -p cache/ubuntu-24.04-x86_64/broken
-  $ echo '{"package":"r.1","exit_status":1}' > cache/ubuntu-24.04-x86_64/broken/layer.json
+  $ echo '{"package":"r.1","exit_status":1,"depexts":false}' > cache/ubuntu-24.04-x86_64/broken/layer.json
   $ touch -d '80 hours ago' cache/ubuntu-24.04-x86_64/broken/layer.json
 
 Neither of these is a layer: base/ holds no layer.json, and a temp directory
@@ -136,22 +136,19 @@ that will be served until it is deleted.
   hot1
   hot2
 
-A layer that installed system packages holds the package manager's database in
-its own tree: dpkg's status file, rpm's database, apk's installed file or
-pacman's local directory.  After the base image is rebuilt those are the layers
-to build again, if they were built before it; every other layer is kept.  The
-fixture layers record no creation time, which counts as before anything, and
-the one that records a time after the base was built is already against it.
+A layer that installed system packages says so in its record, as its build
+found out.  After the base image is rebuilt those are the layers to build
+again, if they were built before it; every other layer is kept.  The fixture
+layers record no creation time, which counts as before anything, and the one
+that records a time after the base was built is already against it.
 
   $ cp -a cache prune-depexts
-  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg
-  $ touch prune-depexts/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg/status
-  $ mkdir -p prune-depexts/debian-13-riscv64/old2/fs/usr/lib/sysimage/rpm
-  $ mkdir -p prune-depexts/debian-13-riscv64/old3/fs/var/lib/pacman/local
-  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/hot2/fs/var/lib/dpkg/info
-  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/fresh/fs/lib/apk/db
-  $ touch prune-depexts/ubuntu-24.04-x86_64/fresh/fs/lib/apk/db/installed
-  $ echo '{"package":"s.1","exit_status":0,"created":4102444800.0}' > prune-depexts/ubuntu-24.04-x86_64/fresh/layer.json
+  $ mark() { echo "{\"package\":\"$2\",\"exit_status\":0,\"depexts\":true$3}" > $1/layer.json; }
+  $ mark prune-depexts/ubuntu-24.04-x86_64/hot1 q.1
+  $ mark prune-depexts/debian-13-riscv64/old2 p.1
+  $ mark prune-depexts/debian-13-riscv64/old3 p.1
+  $ mkdir -p prune-depexts/ubuntu-24.04-x86_64/fresh
+  $ mark prune-depexts/ubuntu-24.04-x86_64/fresh s.1 ',"created":4102444800.0'
   $ day10 prune --cache-dir prune-depexts --depexts 2>&1
   [NOTE] Pruning 3 cache entries (installed system packages before the current base was built): debian-13-riscv64 2, ubuntu-24.04-x86_64 1
   [NOTE] Freed 24.0K
@@ -172,10 +169,9 @@ layers that installed system packages on a base that has gone, and on one
 rebuilt since.
 
   $ cp -a cache prune-base
-  $ mkdir -p prune-base/debian-13-riscv64/old2/fs/var/lib/rpm
+  $ mark prune-base/debian-13-riscv64/old2 p.1
   $ touch -d '40 days ago' prune-base/debian-13-riscv64/base/build.log
-  $ mkdir -p prune-base/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg
-  $ touch prune-base/ubuntu-24.04-x86_64/hot1/fs/var/lib/dpkg/status
+  $ mark prune-base/ubuntu-24.04-x86_64/hot1 q.1
   $ day10 prune --cache-dir prune-base --base --days 30 2>&1
   [NOTE] Removing 1 base image(s) built more than 30 day(s) ago, for the next build to remake: debian-13-riscv64
   [NOTE] Pruning 2 cache entries (installed system packages before the current base was built): debian-13-riscv64 1, ubuntu-24.04-x86_64 1
