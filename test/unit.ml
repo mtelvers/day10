@@ -510,6 +510,15 @@ let cygwin_db_merges () =
   (* The order of the inputs does not decide the version. *)
   && String.equal (Cygwin.union [ base; layer ]) "INSTALLED.DB 3\ncygwin cygwin-3.6.3-1.tar.xz 0\nmingw64-x86_64-gmp mingw64-x86_64-gmp-6.2.1-1.tar.xz 0\nlibffi-devel libffi-devel-3.4.6-1.tar.xz 0\n"
 
+(* FreeBSD's os-version is opam's osreldate, and the base fetched is that
+   release's, not the host's: the platform directory is keyed on the version
+   given, so a base of some other release would be filed under it. *)
+let freebsd_release_follows_the_version () =
+  Freebsd.release "1501000" = Some "15.1-RELEASE"
+  && Freebsd.release "1403000" = Some "14.3-RELEASE"
+  && Freebsd.release "1500000" = Some "15.0-RELEASE"
+  && Freebsd.release "15.1" = None
+
 (* Whether a layer installed system packages is recorded by its build, and
    read from the record alone: a layer from before the field is refused, not
    guessed about, since the migration script should have seen it. *)
@@ -640,6 +649,7 @@ let checks =
     ("source keeps the drive letter", source_keeps_the_drive_letter);
     ("cygwin db merges", cygwin_db_merges);
     ("layer records its depexts", layer_records_its_depexts);
+    ("freebsd release follows the version", freebsd_release_follows_the_version);
     ("family follows the distribution", family_follows_the_distribution);
     ("distribution is what opam polls in the image", distribution_is_what_opam_polls);
     ("version defaults only to the host's own", version_defaults_only_to_the_hosts_own);

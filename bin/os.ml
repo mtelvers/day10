@@ -132,9 +132,9 @@ let sudo ?stdin ?stdout ?stderr ?tee ?append cmd = fst (spawn ?stdin ?stdout ?st
    must not mask whatever is being unwound from. *)
 let quiet prog args = ignore (fst (spawn ~stdout:null ~stderr:null prog args))
 
-let exec ?stdout ?stderr ?tee cmd =
+let exec ?stdout ?stderr ?tee ?append cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
-  fst (spawn ?stdout ?stderr ?tee (List.hd cmd) (List.tl cmd))
+  fst (spawn ?stdout ?stderr ?tee ?append (List.hd cmd) (List.tl cmd))
 
 let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
   let rec loop n =

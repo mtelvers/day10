@@ -4,108 +4,30 @@ type t = {
   gid : int;
 }
 
-let env = [ ("HOME", "/home/opam"); ("OPAMYES", "1"); ("OPAMERRLOGLEN", "0"); ("OPAMPRECISETRACKING", "1") ]
+let env ~(config : Config.t) =
+  [
+    ("HOME", "/home/opam");
+    ("CI", "true");
+    ("OPAMYES", "1");
+    ("OPAMERRLOGLEN", "0");
+    ("OPAMPRECISETRACKING", "1");
+    ("OPAMJOBS", string_of_int (Option.value ~default:Os.default_jobs config.opam_jobs));
+  ]
 
-let install_script =
-  {|#!/bin/sh
-#-
-# Copyright (c) 2011 Nathan Whitehorn
-# Copyright (c) 2013-2015 Devin Teske
-# All rights reserved.
-#
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
-# ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-# ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-# OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-# LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
-#
-# $FreeBSD$
-#
-############################################################ INCLUDES
-
-BSDCFG_SHARE="/usr/share/bsdconfig"
-. $BSDCFG_SHARE/common.subr || exit 1
-
-############################################################ MAIN
-
-f_dprintf "Began Installation at %s" "$( date )"
-f_dprintf "BSDINSTALL_CHROOT %s" "$1"
-export BSDINSTALL_CHROOT=$1
-
-error() {
-	local msg
-	if [ -n "$1" ]; then
-		f_dprintf "error %s" "$1"
-	fi
-	exit
-}
-
-
-rm -rf $BSDINSTALL_TMPETC
-mkdir $BSDINSTALL_TMPETC
-mkdir -p $1 || error "mkdir failed for $1"
-
-test ! -d $BSDINSTALL_DISTDIR && mkdir -p $BSDINSTALL_DISTDIR
-
-if [ ! -f $BSDINSTALL_DISTDIR/MANIFEST -a -z "$BSDINSTALL_DISTSITE" ]; then
-	export BSDINSTALL_DISTSITE="https://download.freebsd.org/ftp/releases/amd64/amd64/14.2-RELEASE"
-	fetch -o $BSDINSTALL_DISTDIR/MANIFEST $BSDINSTALL_DISTSITE/MANIFEST || error "Could not download $BSDINSTALL_DISTSITE/MANIFEST"
-fi
-
-export DISTRIBUTIONS="base.txz"
-
-FETCH_DISTRIBUTIONS=""
-for dist in $DISTRIBUTIONS; do
-	if [ ! -f $BSDINSTALL_DISTDIR/$dist ]; then
-		FETCH_DISTRIBUTIONS="$FETCH_DISTRIBUTIONS $dist"
-	fi
-done
-FETCH_DISTRIBUTIONS=`echo $FETCH_DISTRIBUTIONS`	# Trim white space
-
-if [ -n "$FETCH_DISTRIBUTIONS" -a -z "$BSDINSTALL_DISTSITE" ]; then
-	exec 3>&1
-	BSDINSTALL_DISTSITE=`bsdinstall mirrorselect 2>&1 1>&3`
-	MIRROR_BUTTON=$?
-	exec 3>&-
-	test $MIRROR_BUTTON -eq 0 || error "No mirror selected"
-	export BSDINSTALL_DISTSITE
-fi
-
-if [ ! -z "$FETCH_DISTRIBUTIONS" ]; then
-	bsdinstall distfetch || error "Failed to fetch distribution"
-fi
-
-bsdinstall checksum || error "Distribution checksum failed"
-bsdinstall distextract || error "Distribution extract failed"
-
-bsdinstall config  || error "Failed to save config"
-cp /etc/resolv.conf $1/etc
-
-bsdinstall entropy
-
-f_dprintf "Installation Completed at %s" "$(date)"
-exit $SUCCESS
-
-################################################################################
-# END
-################################################################################|}
+(* The release --os-version names, as opam names it: by osreldate, where
+   1501000 is 15.1.  None for anything else, which init refuses, since a base
+   of some other release would be filed under this one. *)
+let release os_version =
+  match int_of_string_opt os_version with
+  | Some v when v >= 1000000 -> Some (Printf.sprintf "%d.%d-RELEASE" (v / 100000) (v / 1000 mod 100))
+  | _ -> None
 
 let init ~(config : Config.t) =
+  (* Before anything is made in the cache under the version's name. *)
+  let () =
+    if Option.is_none (release config.os_version) then
+      OpamConsole.error_and_exit `Bad_arguments "--os-version %s: FreeBSD's is an osreldate, such as 1501000 for 15.1" config.os_version
+  in
   let uid, gid =
     match (Unix.getuid (), Unix.getgid ()) with
     | 0, _ -> (1000, 1000)
@@ -191,21 +113,56 @@ let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
-  let script = Path.(temp_dir / "install_script") in
-  let () = Os.write_to_file script install_script in
-  let _ = Os.sudo ~stdout:"/dev/null" [ "bsdinstall"; "-D"; build_log; "script"; script; rootfs ] in
-  let _ = Os.sudo [ "chmod"; "777"; build_log ] in
-  let _ = Os.sudo ~stdout:build_log [ "freebsd-update"; "-b"; rootfs; "fetch"; "install" ] in
-  let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "install"; "-y"; "pkg" ] in
-  let _ = Os.sudo ~stdout:build_log [ "pkg"; "--chroot"; rootfs; "upgrade"; "-y"; "-f" ] in
+  (* The release is the one the platform is keyed on, and freebsd-update is told
+     so rather than left to read the running kernel's, so that a jail of an
+     older release than the host is patched as what it is.  The mirror lays
+     releases out by uname -m and then uname -p, which differ on arm64:
+     releases/arm64/aarch64.  Fetched and unpacked directly: bsdinstall
+     script, which used to do this, partitions a disk first and on 15.1 waits
+     forever for one to be named. *)
+  let release = Option.get (release config.os_version) in
+  let distsite =
+    let machine = Os.capture "uname" [ "-m" ] |> String.trim and processor = Os.capture "uname" [ "-p" ] |> String.trim in
+    Printf.sprintf "https://download.freebsd.org/ftp/releases/%s/%s/%s" machine processor release
+  in
+  (* Every step adds to the one log, and shows it as it happens under --log. *)
+  let fetched = Os.exec ~stdout:build_log ~stderr:build_log ~append:true ~tee:config.log in
+  let logged = Os.sudo ~stdout:build_log ~stderr:build_log ~append:true ~tee:config.log in
+  let manifest = Path.(temp_dir / "MANIFEST") and archive = Path.(temp_dir / "base.txz") in
+  (* The mirror carries the supported releases; one that has gone from it is
+     not one to build a base of, since freebsd-update has nothing for it
+     either. *)
+  let fetch file path =
+    match fetched [ "curl"; "--fail"; "-L"; "-o"; path; distsite ^ "/" ^ file ] with
+    | 0 -> ()
+    | _ -> failwith (Printf.sprintf "%s/%s could not be fetched: is %s a supported release?" distsite file release)
+  in
+  let () = fetch "MANIFEST" manifest in
+  let () = fetch "base.txz" archive in
+  (* The manifest's line for the archive: its name, its sha256, and the rest. *)
+  let () =
+    let expected =
+      Os.read_from_file manifest |> String.split_on_char '\n'
+      |> List.find_map (fun line -> match String.split_on_char '\t' line with "base.txz" :: sum :: _ -> Some sum | _ -> None)
+    in
+    let actual = Os.capture "sha256" [ "-q"; archive ] |> String.trim in
+    if expected <> Some actual then failwith (Printf.sprintf "%s does not match the checksum in %s" archive manifest)
+  in
+  let _ = logged [ "tar"; "-xpf"; archive; "-C"; rootfs ] in
+  let () = List.iter Os.rm [ archive; manifest ] in
+  let _ = Os.sudo [ "cp"; "/etc/resolv.conf"; Path.(rootfs / "etc" / "resolv.conf") ] in
+  let _ = logged [ "freebsd-update"; "--not-running-from-cron"; "--currently-running"; release; "-b"; rootfs; "fetch"; "install" ] in
+  let _ = logged [ "pkg"; "--chroot"; rootfs; "install"; "-y"; "pkg" ] in
+  let _ = logged [ "pkg"; "--chroot"; rootfs; "upgrade"; "-y"; "-f" ] in
   let opam = Path.(rootfs / "usr" / "bin" / "opam") in
   let arch = if config.arch = "amd64" then "x86_64" else config.arch in
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/ocaml/opam/releases/download/2.5.1/opam-2.5.1-" ^ arch ^ "-freebsd"; "-o"; opam ] in
-  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; opam ] in
+  (* --fail, or a missing release is downloaded as a page of HTML and fails
+     later, as something else. *)
+  let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/ocaml/opam/releases/download/2.5.1/opam-2.5.1-" ^ arch ^ "-freebsd"; "-o"; opam ] in
+  let _ = Os.sudo [ "chmod"; "+x"; opam ] in
   let day10_install = Path.(rootfs / "usr" / "bin" / "day10-install") in
-  (* Needs a release cut under the new name; nothing runs FreeBSD yet. *)
-  let _ = Os.sudo [ "curl"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.3.0/day10-install-1.3.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
-  let _ = Os.sudo [ "sudo"; "chmod"; "+x"; day10_install ] in
+  let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.4.0/day10-install-1.4.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
+  let _ = Os.sudo [ "chmod"; "+x"; day10_install ] in
   let argv =
     [
       "pw groupadd opam -g " ^ string_of_int t.gid;
@@ -214,14 +171,14 @@ let run ~t ~temp_dir opam_repository build_log =
       {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /usr/local/etc/sudoers.d/opam|};
     ]
   in
-  let result = Os.sudo ~stdout:build_log (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
+  let result = logged (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
   let () = if result = 0 then ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]) in
   let _ = Os.sudo [ "chflags"; "-R"; "0"; rootfs ] in
   let argv =
     [ "touch /home/opam/.hushlogin"; "opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y"; "opam switch create default --empty" ]
   in
   let mounts = [ { Mount.ty = "nullfs"; src = opam_repository; dst = Path.("fs" / "home" / "opam" / "opam-repository"); options = [ "ro" ] } ] in
-  let result = Os.sudo ~stdout:build_log (jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network:true ~username:(Some "opam")) in
+  let result = logged (jail ~temp_dir ~rootfs ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
   let () =
     if result = 0 then (
       ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]);
@@ -272,7 +229,9 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         let () = ignore (Os.sudo [ "mkdir"; "-p"; Path.(upperdir / "home" / "opam" / "src") ]) in
         mounts @ [ { ty = "nullfs"; src; dst = Path.("work" / "home" / "opam" / "src"); options = [ "rw" ] } ]
   in
-  let result = Os.sudo ~stdout:build_log (jail ~temp_dir ~rootfs:workdir ~mounts ~env ~argv ~network:true ~username:(Some "opam")) in
+  (* Shown as it happens for the command the user asked for, as on Linux. *)
+  let tee = Option.is_some config.build_command || config.log in
+  let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee (jail ~temp_dir ~rootfs:workdir ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
   let () =
     ignore (Os.sudo [ "umount"; Path.(workdir / "dev") ]);
     ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ])

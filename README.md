@@ -112,7 +112,7 @@ make -j$(nproc) all
 
 ### FreeBSD
 
-FreeBSD builds use **jails** with nullfs and unionfs mounts for filesystem layering. The base layer is a FreeBSD 14.2-RELEASE system installed via `bsdinstall`.
+FreeBSD builds use **jails** with nullfs and unionfs mounts for filesystem layering. The base layer is the host's own release of FreeBSD, unpacked from its base.txz and brought up to date with `freebsd-update`.
 
 #### Clone the opam repository
 
@@ -131,7 +131,7 @@ dune build @install
   0install.2.18
 ```
 
-The first run downloads the FreeBSD 14.2-RELEASE base system, installs opam and opam-build into the jail, creates an opam user, and caches the result as the base layer.
+The first run downloads the base system of the host's own FreeBSD release, brings it up to date, installs opam and day10-install into the jail, creates an opam user, and caches the result as the base layer.
 
 ### Windows
 
