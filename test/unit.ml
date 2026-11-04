@@ -194,6 +194,9 @@ let family_follows_the_distribution () =
   && derived "win32" "10.0.26100" = "windows"
   && derived "cygwin" "10.0.26100" = "windows"
   && derived "msys2" "10.0.26100" = "windows"
+  (* And every BSD "bsd", which a gmake or pkgconf depext line keys on. *)
+  && derived "freebsd" "1501000" = "bsd"
+  && derived "openbsd" "7.7" = "bsd"
   (* An explicit value still wins, for a platform the table gets wrong. *)
   && Config.family ~given:(Some "rhel") ~distribution:"alpine" ~version:"3.24" = "rhel"
 

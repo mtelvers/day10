@@ -78,6 +78,7 @@ let family ~given ~distribution ~version =
          poll_os_family), and 81 depext and availability filters in the
          repository are written against that. *)
       | ("win32" | "cygwin" | "msys2"), _ -> "windows"
+      | ("freebsd" | "openbsd" | "netbsd" | "dragonfly"), _ -> "bsd"
       | distribution, _ -> distribution)
 
 (* The distribution opam will compute inside the container: the ID field of its
