@@ -42,7 +42,7 @@ let rec wait pid =
    once and isatty is false, so anything that probes takes its non-interactive
    path.  Closing the descriptor instead would be worse: the next file the child
    opened would land on it. *)
-let no_input = "/dev/null"
+let null = if Sys.win32 then "NUL" else "/dev/null"
 
 let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) ?(append = false) prog args =
   let close fd =
@@ -130,7 +130,7 @@ let sudo ?stdin ?stdout ?stderr ?tee ?append cmd = fst (spawn ?stdin ?stdout ?st
 (* Run and forget: no output and no exit status.  For releasing what a build
    holds, where the normal path has usually released it already and a failure
    must not mask whatever is being unwound from. *)
-let quiet prog args = ignore (fst (spawn ~stdout:no_input ~stderr:no_input prog args))
+let quiet prog args = ignore (fst (spawn ~stdout:null ~stderr:null prog args))
 
 let exec ?stdout ?stderr ?tee cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in

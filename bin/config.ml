@@ -74,6 +74,10 @@ let family ~given ~distribution ~version =
       | "opensuse", "tumbleweed" -> "opensuse"
       | "opensuse", _ -> "suse"
       | ("archlinux" | "arch"), _ -> "arch"
+      (* opam says windows for every flavour of it (opamSysPoll.ml,
+         poll_os_family), and 81 depext and availability filters in the
+         repository are written against that. *)
+      | ("win32" | "cygwin" | "msys2"), _ -> "windows"
       | distribution, _ -> distribution)
 
 (* The distribution opam will compute inside the container: the ID field of its
@@ -88,6 +92,10 @@ let distribution ~distribution ~version =
   | ("archlinux" | "arch"), _ -> "arch"
   | "opensuse", "tumbleweed" -> "opensuse-tumbleweed"
   | "opensuse", _ -> "opensuse-leap"
+  (* day10 polls outside any opam root, where there is no Cygwin to find, so
+     it sees win32.  opam in the container installs its own Cygwin and reports
+     cygwin, which 319 depext lines key on. *)
+  | "win32", _ -> "cygwin"
   | distribution, _ -> distribution
 
 (* The version to build when none was given.  The host's version is only an

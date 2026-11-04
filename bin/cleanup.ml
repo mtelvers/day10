@@ -25,8 +25,11 @@ exception Killed of int
    that into head or less closes the pipe as soon as the reader has had enough.
    Its default action is to kill the process, which skips every finaliser and
    can leave an overlay mounted and a container running -- an ordinary thing for
-   an operator to cause by accident. *)
-let signals = [ (Sys.sigint, 2); (Sys.sighup, 1); (Sys.sigterm, 15); (Sys.sigpipe, 13) ]
+   an operator to cause by accident.
+
+   Windows has neither SIGHUP nor SIGPIPE, and the runtime refuses to install a
+   handler for a signal it does not have. *)
+let signals = if Sys.win32 then [ (Sys.sigint, 2); (Sys.sigterm, 15) ] else [ (Sys.sigint, 2); (Sys.sighup, 1); (Sys.sigterm, 15); (Sys.sigpipe, 13) ]
 
 (* Releasing must not itself be interrupted.  It waits for children of its own,
    which is a safe point where a pending signal would raise, and a finaliser

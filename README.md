@@ -210,28 +210,39 @@ opam init -y
 
 #### Download and build mtelvers/hcn-namespace
 
+Installed into the switch, so that it is on the PATH `opam env` sets, next to
+the mingw directory holding the libffi DLL it loads.
+
 ```
 git clone https://github.com/mtelvers/hcn-namespace
 cd hcn-namespace
-opam install . --deps-only
-for /f "tokens=*" %i in ('opam env') do @%i
-dune build
-copy _build\install\default\bin\hcn-namespace.exe %LocalAppData%\opam\.cygwin\root\usr\local\bin
+opam install .
 ```
 
 #### Build this project
 
 ```
-git clone https://github.com/mtelvers/day10 -b tool
+git clone https://github.com/mtelvers/day10
 cd day10
 opam install . --deps-only
+for /f "tokens=*" %i in ('opam env') do @%i
 dune build
 ```
 
 #### Run
 
+Only `health-check` is supported on Windows: `build`, `exec` and `ci` need the
+project's sources mounted into the container, which the Windows backend does
+not do yet.  Run it from a shell where `opam env` has been applied, which is
+what puts `hcn-namespace` on the PATH.
+
 ```
 git clone http://github.com/ocaml/opam-repository c:\opam-repository
-mkdir c:\cache
-make -j 6 SYSTEM=windows-x86_64 OUTPUT_DIR=./output CACHE_DIR=c:\\cache OPAM_REPO=c:\\opam-repository all
+mkdir d:\cache
+for /f "tokens=*" %i in ('opam env') do @%i
+_build\install\default\bin\day10.exe health-check --cache-dir d:\cache --opam-repository c:\opam-repository 0install.2.18
 ```
+
+The first run builds the base: it downloads opam and day10-install into the
+container, runs `opam init` with opam's own Cygwin, and caches the result as
+the `base` of a platform named `win32-<version>-x86_64`.

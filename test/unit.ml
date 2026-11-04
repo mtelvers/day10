@@ -161,6 +161,10 @@ let distribution_is_what_opam_polls () =
   && polled "centos" "9" = "centos"
   && polled "alpine" "3.24" = "alpine"
   && polled "fedora" "44" = "fedora"
+  (* day10 polls win32, with no Cygwin in sight; opam in the container has
+     its own and says cygwin. *)
+  && polled "win32" "10.0.26100" = "cygwin"
+  && polled "cygwin" "10.0.26100" = "cygwin"
 
 (* The CI names Arch without a version, and the default came from the host, so
    the platform was keyed archlinux-26.04 on an Ubuntu 26.04 worker. *)
@@ -186,6 +190,10 @@ let family_follows_the_distribution () =
   (* A distribution with no ID_LIKE is its own family, which is also the right
      answer for one nobody has listed yet. *)
   && derived "gentoo" "2.17" = "gentoo"
+  (* opam calls every Windows "windows", whichever flavour it polled. *)
+  && derived "win32" "10.0.26100" = "windows"
+  && derived "cygwin" "10.0.26100" = "windows"
+  && derived "msys2" "10.0.26100" = "windows"
   (* An explicit value still wins, for a platform the table gets wrong. *)
   && Config.family ~given:(Some "rhel") ~distribution:"alpine" ~version:"3.24" = "rhel"
 
@@ -477,6 +485,28 @@ let any_treeish_resolves () =
   [ rev_parse dir "HEAD"; "fixture-tag"; rev_parse dir "HEAD^{tree}" ]
   |> List.for_all (fun rev -> Repo.opam (Repo.create [ Repo.parse_source (dir ^ ":" ^ rev) ]) pkg <> None)
 
+(* The colon in a Windows drive letter was read as the path:rev separator, so
+   c:\opam-repository asked git for revision \opam-repository of a repository
+   called c. *)
+let source_keeps_the_drive_letter () =
+  let is_dir = function Repo.Dir _ -> true | Repo.Git _ -> false in
+  is_dir (Repo.parse_source ~win32:true {|c:\opam-repository|})
+  && (not (is_dir (Repo.parse_source ~win32:true {|c:\opam-repository:abc123|})))
+  && (not (is_dir (Repo.parse_source ~win32:true {|\opam-repository:abc123|})))
+  && (not (is_dir (Repo.parse_source ~win32:false "c:abc123")))
+  && is_dir (Repo.parse_source ~win32:false "/home/opam-repository")
+
+(* The Cygwin database merges the way the dpkg status does: every package from
+   every layer, the highest version where they disagree, the header once. *)
+let cygwin_db_merges () =
+  let base = "INSTALLED.DB 3\ncygwin cygwin-3.6.1-1.tar.xz 0\nmingw64-x86_64-gmp mingw64-x86_64-gmp-6.2.1-1.tar.xz 0\n" in
+  let layer = "INSTALLED.DB 3\ncygwin cygwin-3.6.3-1.tar.xz 0\nlibffi-devel libffi-devel-3.4.6-1.tar.xz 0\n" in
+  let merged = Cygwin.union [ layer; base ] in
+  String.equal merged
+    "INSTALLED.DB 3\ncygwin cygwin-3.6.3-1.tar.xz 0\nlibffi-devel libffi-devel-3.4.6-1.tar.xz 0\nmingw64-x86_64-gmp mingw64-x86_64-gmp-6.2.1-1.tar.xz 0\n"
+  (* The order of the inputs does not decide the version. *)
+  && String.equal (Cygwin.union [ base; layer ]) "INSTALLED.DB 3\ncygwin cygwin-3.6.3-1.tar.xz 0\nmingw64-x86_64-gmp mingw64-x86_64-gmp-6.2.1-1.tar.xz 0\nlibffi-devel libffi-devel-3.4.6-1.tar.xz 0\n"
+
 (* Whether a layer installed system packages is recorded by its build, and
    read from the record alone: a layer from before the field is refused, not
    guessed about, since the migration script should have seen it. *)
@@ -604,6 +634,8 @@ let checks =
     ("platforms are selected", platforms_are_selected);
     ("centos enables codeready builder", centos_enables_codeready_builder);
     ("platforms name the docker arch", platforms_name_the_docker_arch);
+    ("source keeps the drive letter", source_keeps_the_drive_letter);
+    ("cygwin db merges", cygwin_db_merges);
     ("layer records its depexts", layer_records_its_depexts);
     ("family follows the distribution", family_follows_the_distribution);
     ("distribution is what opam polls in the image", distribution_is_what_opam_polls);

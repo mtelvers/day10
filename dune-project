@@ -25,6 +25,7 @@
   (ocaml (>= 5.3.0))
   dune
   ppx_deriving_yojson
+  (opam-core (>= 2.4))
   opam-0install
   (cmdliner (>= 2.0.0))
   dockerfile

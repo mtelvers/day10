@@ -60,7 +60,7 @@ let default_linux_caps =
    given to exec, and it carries no such hazard.  None rather than a path, so it
    is the descriptor itself and not a fresh open of it -- reopening a regular
    file would start reading from the beginning. *)
-let container_stdin () = if Unix.isatty Unix.stdin then Some Os.no_input else None
+let container_stdin () = if Unix.isatty Unix.stdin then Some Os.null else None
 
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
@@ -176,7 +176,7 @@ let remove = Os.sudo_rm
 let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
 
 (* What a build holds, and how each is let go of when it ends: see Cleanup. *)
-let mount path () = if Os.sudo ~stdout:Os.no_input ~stderr:Os.no_input [ "mountpoint"; "-q"; path ] = 0 then Os.quiet "sudo" [ "umount"; path ]
+let mount path () = if Os.sudo ~stdout:Os.null ~stderr:Os.null [ "mountpoint"; "-q"; path ] = 0 then Os.quiet "sudo" [ "umount"; path ]
 let runc_container name () = Os.quiet "sudo" [ "runc"; "delete"; "-f"; name ]
 
 let run ~t ~temp_dir opam_repository build_log =

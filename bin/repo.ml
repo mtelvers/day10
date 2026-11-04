@@ -15,9 +15,11 @@ type t = {
   parsed : (OpamPackage.t, OpamFile.OPAM.t) Hashtbl.t;
 }
 
-let parse_source s =
+let parse_source ?(win32 = Sys.win32) s =
   match String.rindex_opt s ':' with
   | None -> Dir s
+  (* A drive letter's colon, as in c:\opam-repository, separates no revision. *)
+  | Some 1 when win32 -> Dir s
   | Some i -> Git { path = String.sub s 0 i; rev = String.sub s (i + 1) (String.length s - i - 1) }
 
 let resolve_git_dir path =
