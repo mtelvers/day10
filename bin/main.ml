@@ -810,7 +810,7 @@ let os_distribution_term =
   (* day10 polls outside any opam root, where there is no Cygwin to find, so
      Windows says win32.  opam in the container installs its own Cygwin and
      says cygwin, which 319 depext lines key on, so the platform is named by
-     it. *)
+     it; --os-distribution msys2 is the other Unix layer. *)
   let default =
     match OpamSysPoll.os_distribution OpamVariable.Map.empty with
     | Some "win32" -> "cygwin"

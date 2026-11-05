@@ -1,3 +1,8 @@
+(* opam's own Cygwin, which opam init installs under its root: nothing to
+   install first and nothing to tell init. *)
+let install ~opam_root:_ ~rootfs:_ = []
+let init_options ~opam_root:_ = ""
+
 (* Cygwin's setup keeps one file, /etc/setup/installed.db, with a header line
    and then a line per package: the name, the archive it came from, and a
    flag.  Every Windows layer's copy is the whole file, so merging layers leaves
@@ -5,6 +10,7 @@
    uninstalled.  The union below puts them all back, keeping the highest version
    of each package as Dpkg.union does. *)
 
+let installed_db root = Path.(root / ".cygwin" / "root" / "etc" / "setup" / "installed.db")
 let header = "INSTALLED.DB 3"
 
 (* "name name-1.2.3-1.tar.xz 0": the version is what follows the name in the
@@ -32,3 +38,9 @@ let union contents =
          (Names.empty, [])
   in
   String.concat "\n" (header :: List.rev_map (fun name -> snd (Names.find name best)) order) ^ "\n"
+
+(* The database is kept beside each layer rather than in it, so that a build
+   can merge every layer's copy. *)
+let assemble ~layers ~target = Os.write_to_file (installed_db target) (union (List.map (fun layer -> Os.read_from_file Path.(layer / "installed.db")) layers))
+let keep ~temp_dir root = Os.cp (installed_db root) Path.(temp_dir / "installed.db")
+let discard root = [ installed_db root ]

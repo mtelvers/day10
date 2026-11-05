@@ -246,3 +246,8 @@ _build\install\default\bin\day10.exe health-check --cache-dir d:\cache --opam-re
 The first run builds the base: it downloads opam and day10-install into the
 container, runs `opam init` with opam's own Cygwin, and caches the result as
 the `base` of a platform named `cygwin-<version>-x86_64`.
+
+With `--os-distribution msys2` the base unpacks an MSYS2 release into opam's
+root and points `opam init` at it instead, so depexts come from pacman and
+`os-distribution` is `msys2` to the solver; that platform is named
+`msys2-<version>-x86_64`.

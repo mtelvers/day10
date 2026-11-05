@@ -30,3 +30,25 @@ module type PLATFORM = sig
      a time. *)
   val fork : ?np:int -> ('a -> unit) -> 'a list -> unit
 end
+
+(* The Unix layer under opam on Windows, Cygwin or MSYS2: what the base
+   installs before opam init, what opam init is told, and what becomes of
+   its package database between layers. *)
+module type UNIX_LAYER = sig
+  (* The commands the base runs before opam init, with opam's root at
+     [opam_root] in the container and [rootfs] on the host. *)
+  val install : opam_root:string -> rootfs:string -> string list
+
+  (* Options for opam init, with a leading space or empty. *)
+  val init_options : opam_root:string -> string
+
+  (* Once the [layers] are copied into [target], before a build. *)
+  val assemble : layers:string list -> target:string -> unit
+
+  (* After a container: what of opam's [root] is kept beside the layer in
+     [temp_dir]. *)
+  val keep : temp_dir:string -> string -> unit
+
+  (* What to remove from opam's [root] besides opam's own locks and caches. *)
+  val discard : string -> string list
+end

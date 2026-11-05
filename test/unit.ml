@@ -162,6 +162,7 @@ let distribution_is_what_opam_polls () =
   && polled "alpine" "3.24" = "alpine"
   && polled "fedora" "44" = "fedora"
   && polled "cygwin" "10.0.26100" = "cygwin"
+  && polled "msys2" "10.0.26100" = "msys2"
 
 (* The CI names Arch without a version, and the default came from the host, so
    the platform was keyed archlinux-26.04 on an Ubuntu 26.04 worker. *)
@@ -172,8 +173,8 @@ let version_defaults_only_to_the_hosts_own () =
   && Config.version ~host ~distribution:"debian" None = None
   && Config.version ~host ~distribution:"debian" (Some "13") = Some "13"
   && Config.version ~host ~distribution:"archlinux" (Some "rolling") = Some "rolling"
-  && Config.version ~host:("win32", "10.0.26100") ~distribution:"cygwin" None = Some "10.0.26100"
-  && Config.version ~host ~distribution:"cygwin" None = None
+  && Config.version ~host:("win32", "10.0.26100") ~distribution:"msys2" None = Some "10.0.26100"
+  && Config.version ~host ~distribution:"msys2" None = None
 
 let family_follows_the_distribution () =
   let derived distribution version = Config.family ~given:None ~distribution ~version in

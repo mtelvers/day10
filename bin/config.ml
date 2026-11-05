@@ -98,15 +98,16 @@ let distribution ~distribution ~version =
 (* The version to build when none was given.  The host's version is only an
    answer when the distribution is the host's too; otherwise an Ubuntu worker
    would label every other distribution 26.04.  Arch has no version, so its
-   image is tagged latest.  cygwin is Windows with opam's own Cygwin, so a
-   Windows host's version is its.  None asks the caller to say. *)
+   image is tagged latest.  cygwin and msys2 are Windows with a Unix layer
+   chosen, so a Windows host's version is theirs.  None asks the caller to
+   say. *)
 let version ~host:(host_distribution, host_version) ~distribution = function
   | Some version -> Some version
   | None -> (
       match distribution with
       | "archlinux" | "arch" -> Some "latest"
       | _ when String.equal distribution host_distribution -> Some host_version
-      | "cygwin" when String.equal host_distribution "win32" -> Some host_version
+      | "cygwin" | "msys2" when String.equal host_distribution "win32" -> Some host_version
       | _ -> None)
 
 let std_env ~(config : t) =

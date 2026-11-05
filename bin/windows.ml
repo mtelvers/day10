@@ -47,6 +47,9 @@ let env ~(config : Config.t) =
     ("CI", "true");
     ("OPAMROOT", opam_root);
     ("OPAMYES", "1");
+    (* opam runs pacman only at this level; its own Cygwin it installs into
+       without asking. *)
+    ("OPAMCONFIRMLEVEL", "unsafe-yes");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
     ("OPAMJOBS", string_of_int (Option.value ~default:Os.default_jobs config.opam_jobs));
@@ -136,13 +139,18 @@ let add_user ~t ~temp_dir ~build_log =
     let () = if not committed then Os.quiet "ctr" [ "snapshot"; "rm"; name ] in
     if result <> 0 then failwith (Printf.sprintf "Adding the %s user to the image failed with status %d" username result))
 
-let installed_db root = Path.(root / ".cygwin" / "root" / "etc" / "setup" / "installed.db")
+(* The Unix layer under opam, as the distribution names it: cygwin, which
+   opam sees for win32, or msys2. *)
+let unix_layer ~(config : Config.t) : (module S.UNIX_LAYER) =
+  match config.os_distribution with
+  | "msys2" -> (module Msys2)
+  | _ -> (module Cygwin)
 
 (* What a container leaves in opam's root that is not part of the layer: locks,
-   the environment and repository caches opam rebuilds, and the Cygwin
-   database, which is kept beside the layer instead so that a build can merge
-   every layer's copy. *)
-let tidy root =
+   the environment and repository caches opam rebuilds, and what the Unix
+   layer keeps elsewhere. *)
+let tidy ~config root =
+  let module L = (val unix_layer ~config) in
   List.iter Os.rm
     ([
        Path.(root / "lock");
@@ -151,12 +159,13 @@ let tidy root =
        Path.(root / "default" / ".opam-switch" / "environment");
        Path.(root / "default" / ".opam-switch" / "packages" / "cache");
        Path.(root / "repo" / "conf.lock");
-       installed_db root;
      ]
+    @ L.discard root
     @ Os.ls ~extn:".cache" Path.(root / "repo"))
 
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
+  let module L = (val unix_layer ~config) in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
   let () = grant_users rootfs in
@@ -166,14 +175,15 @@ let run ~t ~temp_dir opam_repository build_log =
      fetch. *)
   let opam_exe = Path.(opam_root / "opam.exe") in
   let commands =
-    [
-      (* --fail, or a missing release is downloaded as a page of HTML and
-         fails later, as something else. *)
-      "curl.exe --fail -L -o " ^ opam_exe ^ " " ^ opam_url ~arch:config.arch;
-      opam_exe ^ " init -k local -a " ^ {|C:\opam-repository|} ^ " --bare -y";
-      opam_exe ^ " switch create default --empty";
-      "curl.exe --fail -L -o " ^ Path.(opam_root / "day10-install.exe") ^ " " ^ day10_install_url ~arch:config.arch;
-    ]
+    (* --fail, or a missing release is downloaded as a page of HTML and
+       fails later, as something else. *)
+    ("curl.exe --fail -L -o " ^ opam_exe ^ " " ^ opam_url ~arch:config.arch)
+    :: L.install ~opam_root ~rootfs
+    @ [
+        opam_exe ^ " init -k local -a " ^ {|C:\opam-repository|} ^ " --bare -y" ^ L.init_options ~opam_root;
+        opam_exe ^ " switch create default --empty";
+        "curl.exe --fail -L -o " ^ Path.(opam_root / "day10-install.exe") ^ " " ^ day10_install_url ~arch:config.arch;
+      ]
   in
   let mounts =
     [
@@ -182,13 +192,14 @@ let run ~t ~temp_dir opam_repository build_log =
     ]
   in
   let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands ~mounts in
-  let () = Os.cp (installed_db rootfs) Path.(temp_dir / "installed.db") in
-  let () = tidy rootfs in
+  let () = L.keep ~temp_dir rootfs in
+  let () = tidy ~config rootfs in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   result
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
+  let module L = (val unix_layer ~config) in
   let () =
     if Option.is_some config.build_command || Option.is_some config.directory then
       failwith "Building a project from its own sources is not supported on Windows yet: only health-check is"
@@ -204,8 +215,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let commands = [ "set PATH=%PATH%;" ^ opam_root ^ "&& " ^ String.concat " && " (Build_command.for_package ~config pkg) ] in
   let sources = ordered_hashes @ [ "base" ] in
   let () = List.iter (fun hash -> Os.copy_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
-  let union = Cygwin.union (List.map (fun hash -> Os.read_from_file Path.(config.dir / os_key / hash / "installed.db")) sources) in
-  let () = Os.write_to_file (installed_db target) union in
+  let () = L.assemble ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash)) sources) ~target in
   let () =
     let packages_dir = Path.(target / "default" / ".opam-switch" / "packages") in
     let state_file = Path.(target / "default" / ".opam-switch" / "switch-state") in
@@ -218,8 +228,8 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     ]
   in
   let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands ~mounts in
-  let () = Os.cp (installed_db target) Path.(temp_dir / "installed.db") in
-  let () = tidy target in
+  let () = L.keep ~temp_dir target in
+  let () = tidy ~config target in
   let () = List.iter (Os.rm ~recursive:true) [ Path.(target / "default" / ".opam-switch" / "sources"); Path.(target / "default" / ".opam-switch" / "build") ] in
   let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
   result
