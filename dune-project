@@ -31,7 +31,8 @@
   dockerfile
   dockerfile-opam
   ocaml-version
-  (tar (>= 3.5.0)))
+  (tar (>= 3.5.0))
+  (ctypes-foreign (= :os "win32")))
  (tags
   ("add topics" "to describe" your project)))
 

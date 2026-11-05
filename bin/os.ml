@@ -344,6 +344,12 @@ let create_directory_exclusively dir_name write_function =
 exception Copy_error of string
 
 let cp ?(buffer_size = 65536) ?(preserve_permissions = true) ?(preserve_times = true) src dst =
+  match Copy_file.copy with
+  | Some copy -> (
+      match copy src dst with
+      | Ok () -> ()
+      | Error msg -> raise (Copy_error (Printf.sprintf "Cannot copy '%s' to '%s': %s" src dst msg)))
+  | None ->
   let safe_close fd =
     try Unix.close fd with
     | _ -> ()

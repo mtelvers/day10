@@ -20,6 +20,7 @@ depends: [
   "dockerfile-opam"
   "ocaml-version"
   "tar" {>= "3.5.0"}
+  "ctypes-foreign" {os = "win32"}
   "odoc" {with-doc}
 ]
 build: [
