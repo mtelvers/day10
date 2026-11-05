@@ -245,4 +245,4 @@ _build\install\default\bin\day10.exe health-check --cache-dir d:\cache --opam-re
 
 The first run builds the base: it downloads opam and day10-install into the
 container, runs `opam init` with opam's own Cygwin, and caches the result as
-the `base` of a platform named `win32-<version>-x86_64`.
+the `base` of a platform named `cygwin-<version>-x86_64`.

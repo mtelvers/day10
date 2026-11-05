@@ -807,7 +807,16 @@ let os_term =
 let os_distribution_term =
   let doc = "OS distribution (default: detected from system)" in
   let env = Cmd.Env.info "DAY10_OS_DISTRIBUTION" in
-  let default = OpamSysPoll.os_distribution OpamVariable.Map.empty |> Option.value ~default:"debian" in
+  (* day10 polls outside any opam root, where there is no Cygwin to find, so
+     Windows says win32.  opam in the container installs its own Cygwin and
+     says cygwin, which 319 depext lines key on, so the platform is named by
+     it. *)
+  let default =
+    match OpamSysPoll.os_distribution OpamVariable.Map.empty with
+    | Some "win32" -> "cygwin"
+    | Some distribution -> distribution
+    | None -> "debian"
+  in
   Arg.(value & opt string default & info [ "os-distribution" ] ~env ~docv:"OS_DISTRIBUTION" ~doc)
 
 let os_family_term =
