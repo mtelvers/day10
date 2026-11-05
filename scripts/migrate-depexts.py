@@ -33,7 +33,7 @@ DATABASES = [
 def migrate(cache):
     done = skipped = 0
     for platform in sorted(os.listdir(cache)):
-        if not os.path.isdir(os.path.join(cache, platform, "base", "fs")):
+        if not os.path.isdir(os.path.join(cache, platform)):
             continue
         for layer in sorted(os.listdir(os.path.join(cache, platform))):
             path = os.path.join(cache, platform, layer, "layer.json")
