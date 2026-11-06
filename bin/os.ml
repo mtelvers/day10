@@ -344,12 +344,6 @@ let create_directory_exclusively dir_name write_function =
 exception Copy_error of string
 
 let cp ?(buffer_size = 65536) ?(preserve_permissions = true) ?(preserve_times = true) src dst =
-  match Copy_file.copy with
-  | Some copy -> (
-      match copy src dst with
-      | Ok () -> ()
-      | Error msg -> raise (Copy_error (Printf.sprintf "Cannot copy '%s' to '%s': %s" src dst msg)))
-  | None ->
   let safe_close fd =
     try Unix.close fd with
     | _ -> ()
@@ -397,101 +391,6 @@ let cp ?(buffer_size = 65536) ?(preserve_permissions = true) ?(preserve_times = 
   if preserve_times then
     try Unix.utimes dst src_stats.st_atime src_stats.st_mtime with
     | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: Could not preserve timestamps: %s\n" (Unix.error_message err)
-
-let hardlink_tree ~source ~target =
-  let rec process_directory current_source current_target =
-    let entries = Sys.readdir current_source in
-    Array.iter
-      (fun entry ->
-        let source = Filename.concat current_source entry in
-        let target = Filename.concat current_target entry in
-        try
-          let stat = Unix.lstat source in
-          match stat.st_kind with
-          | S_LNK -> if not (Sys.file_exists target) then Unix.symlink (Unix.readlink source) target
-          | S_REG -> if not (Sys.file_exists target) then Unix.link source target
-          | S_DIR ->
-              mkdir target;
-              process_directory source target
-          | S_CHR
-          | S_BLK
-          | S_FIFO
-          | S_SOCK ->
-              ()
-        with
-        | Unix.Unix_error (Unix.EMLINK, _, _) -> cp source target
-        | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: %s -> %s = %s\n" source target (Unix.error_message err))
-      entries
-  in
-  process_directory source target
-
-let clense_tree ~source ~target =
-  let rec process_directory current_source current_target =
-    let entries = Sys.readdir current_source in
-    Array.iter
-      (fun entry ->
-        let source = Filename.concat current_source entry in
-        let target = Filename.concat current_target entry in
-        try
-          let src_stat = Unix.lstat source in
-          match src_stat.st_kind with
-          | Unix.S_LNK -> if Sys.file_exists target then if Unix.readlink source = Unix.readlink target then Unix.unlink target
-          | Unix.S_REG ->
-              if Sys.file_exists target then
-                let tgt_stat = Unix.lstat target in
-                if src_stat.st_mtime = tgt_stat.st_mtime then (
-                  try Unix.unlink target with
-                  | Unix.Unix_error (Unix.EACCES, _, _) ->
-                      Unix.chmod target (src_stat.st_perm lor 0o222);
-                      Unix.unlink target)
-          | Unix.S_DIR -> (
-              process_directory source target;
-              try
-                if Sys.file_exists target then
-                  let target_entries = Sys.readdir target in
-                  if Array.length target_entries = 0 then Unix.rmdir target
-              with
-              | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: rmdir %s = %s\n" target (Unix.error_message err))
-          | S_CHR
-          | S_BLK
-          | S_FIFO
-          | S_SOCK ->
-              ()
-        with
-        | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: unlink %s = %s\n" target (Unix.error_message err))
-      entries
-  in
-  process_directory source target
-
-let copy_tree ~source ~target =
-  let () = Printf.printf "copy %s to %s\n%!\n" source target in
-  let rec process_directory current_source current_target =
-    let entries = Sys.readdir current_source in
-    Array.iter
-      (fun entry ->
-        let source = Filename.concat current_source entry in
-        let target = Filename.concat current_target entry in
-        try
-          let stat = Unix.lstat source in
-          match stat.st_kind with
-          | S_LNK -> if not (Sys.file_exists target) then Unix.symlink (Unix.readlink source) target
-          | S_REG -> if not (Sys.file_exists target) then cp source target else Printf.printf "Skipping %s\n" target
-          | S_DIR ->
-              mkdir target;
-              process_directory source target
-          | S_CHR
-          | S_BLK
-          | S_FIFO
-          | S_SOCK ->
-              ()
-        with
-        | Copy_error _ ->
-            Printf.eprintf "Warning: hard linking %s -> %s\n" source target;
-            Unix.link source target
-        | Unix.Unix_error (err, _, _) -> Printf.eprintf "Warning: %s -> %s = %s\n" source target (Unix.error_message err))
-      entries
-  in
-  process_directory source target
 
 let ls ?extn dir =
   try

@@ -182,8 +182,9 @@ let rw src dst = { Mount.ty = "bind"; src; dst; options = [ "rw"; "rbind"; "rpri
 let robocopy src dst flags = String.concat " " ([ "robocopy"; src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP" ]) ^ "\r\nif errorlevel 8 exit /b 1"
 
 (* Skipping what is already there, so that copying the layers top first
-   leaves each path as the topmost layer has it, as Os.copy_tree does.
-   /SL copies a symlink as a link. *)
+   leaves each path as the topmost layer has it.  /SL copies a symlink as a
+   link, and /COPY:DAT keeps the attributes, among them the SYSTEM attribute
+   that marks a Cygwin symlink of the kind an unprivileged user gets. *)
 let copy_in = [ "/E"; "/XC"; "/XN"; "/XO"; "/SL"; "/COPY:DAT"; "/DCOPY:T" ]
 
 let clear_archive =
@@ -266,7 +267,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   (* What the host makes from the layers without assembling them: the Unix
      layer's merged database and the switch state of every package the
      layers installed.  Copied in last, after the archive attribute is
-     cleared, so that the layer keeps them as Os.clense_tree kept them. *)
+     cleared, so that the layer keeps them. *)
   let overlay = Path.(control_dir / "overlay") in
   let () = Os.mkdir overlay in
   let () = L.assemble ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash)) sources) ~target:overlay in
