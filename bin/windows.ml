@@ -200,6 +200,11 @@ let run ~t ~temp_dir opam_repository build_log =
     :: L.install ~opam_root ~script
     @ [
         opam_exe ^ " init -k local -a " ^ {|C:\opam-repository|} ^ " --bare -y" ^ L.init_options ~opam_root;
+        (* Fall back to opam's cache when a package's upstream sources are
+           gone or have changed, as the Linux base does.  Set through opam,
+           which writes its config as it would itself; the backslashes keep
+           the quotes the value needs past the C runtime's argument parsing. *)
+        opam_exe ^ {| option --global archive-mirrors=\"https://opam.ocaml.org/cache\"|};
         opam_exe ^ " switch create default --empty";
         "curl.exe --fail -L -o " ^ Path.(opam_root / "day10-install.exe") ^ " " ^ day10_install_url ~arch:config.arch;
       ]
