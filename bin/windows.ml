@@ -187,8 +187,12 @@ let robocopy src dst flags = String.concat " " ([ "robocopy"; src; dst ] @ flags
    that marks a Cygwin symlink of the kind an unprivileged user gets. *)
 let copy_in = [ "/E"; "/XC"; "/XN"; "/XO"; "/SL"; "/COPY:DAT"; "/DCOPY:T" ]
 
+(* Stopping at the first error with a status cmd sees: otherwise a failure
+   leaves everything marked, and the layer is the whole tree. *)
 let clear_archive =
-  {|param([string]$root)
+  {|param([Parameter(Mandatory)][string]$root)
+$ErrorActionPreference = "Stop"
+trap { Write-Error $_ -ErrorAction Continue; exit 1 }
 function Walk([IO.DirectoryInfo]$d) {
   foreach ($e in $d.EnumerateFileSystemInfos()) {
     if ($e -is [IO.DirectoryInfo]) {
@@ -285,7 +289,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     List.map (fun hash -> robocopy Path.(layers_dst / hash / "fs") opam_root (copy_in @ [ "/XD"; Path.(layers_dst / hash / "fs" / "repo" / "default") ])) sources
     @ [
         robocopy repo_dst repo_default [ "/MIR" ];
-        "powershell -NoProfile -ExecutionPolicy Bypass -File " ^ script "clear-archive.ps1" clear_archive;
+        "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File " ^ script "clear-archive.ps1" clear_archive ^ " " ^ opam_root;
         "if errorlevel 1 exit /b 1";
         robocopy Path.(control_dst / "overlay") opam_root [ "/E"; "/COPY:DAT" ];
       ]
