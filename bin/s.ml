@@ -36,8 +36,9 @@ end
    its package database between layers. *)
 module type UNIX_LAYER = sig
   (* The commands the base runs before opam init, with opam's root at
-     [opam_root] in the container and [rootfs] on the host. *)
-  val install : opam_root:string -> rootfs:string -> string list
+     [opam_root] in the container.  [script name contents] makes a script
+     the container can run and gives its path there. *)
+  val install : opam_root:string -> script:(string -> string -> string) -> string list
 
   (* Options for opam init, with a leading space or empty. *)
   val init_options : opam_root:string -> string

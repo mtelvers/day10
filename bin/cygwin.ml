@@ -1,6 +1,6 @@
 (* opam's own Cygwin, which opam init installs under its root: nothing to
    install first and nothing to tell init. *)
-let install ~opam_root:_ ~rootfs:_ = []
+let install ~opam_root:_ ~script:_ = []
 let init_options ~opam_root:_ = ""
 
 (* Cygwin's setup keeps one file, /etc/setup/installed.db, with a header line
@@ -41,6 +41,9 @@ let union contents =
 
 (* The database is kept beside each layer rather than in it, so that a build
    can merge every layer's copy. *)
-let assemble ~layers ~target = Os.write_to_file (installed_db target) (union (List.map (fun layer -> Os.read_from_file Path.(layer / "installed.db")) layers))
+let assemble ~layers ~target =
+  let db = installed_db target in
+  let () = Os.mkdir ~parents:true (Filename.dirname db) in
+  Os.write_to_file db (union (List.map (fun layer -> Os.read_from_file Path.(layer / "installed.db")) layers))
 let keep ~temp_dir root = Os.cp (installed_db root) Path.(temp_dir / "installed.db")
 let discard root = [ installed_db root ]

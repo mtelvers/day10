@@ -163,6 +163,61 @@ let tidy ~config root =
     @ L.discard root
     @ Os.ls ~extn:".cache" Path.(root / "repo"))
 
+(* A build never runs on a bind mount: a Windows container cannot run a
+   program through a relative symlink on one, nor remove or replace a file in
+   use there, which pacman and gpg both do.  Every mount is a way in or out.
+   The container copies the layers it is given onto its own drive, builds
+   there, and copies out what the build wrote, which the archive attribute
+   marks once it has been cleared from everything copied in.  See
+   windows-symlink-exec.md. *)
+let control_dst = {|C:\day10ctl|}
+let layers_dst = {|C:\day10cache|}
+let repo_dst = {|C:\day10repo|}
+let out_dst = {|C:\day10out|}
+
+let ro src dst = { Mount.ty = "bind"; src; dst; options = [ "rbind"; "rprivate"; "ro" ] }
+let rw src dst = { Mount.ty = "bind"; src; dst; options = [ "rw"; "rbind"; "rprivate" ] }
+
+(* robocopy's status is a bit mask in which 8 and above is a failure. *)
+let robocopy src dst flags = String.concat " " ([ "robocopy"; src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP" ]) ^ "\r\nif errorlevel 8 exit /b 1"
+
+(* Skipping what is already there, so that copying the layers top first
+   leaves each path as the topmost layer has it, as Os.copy_tree does.
+   /SL copies a symlink as a link. *)
+let copy_in = [ "/E"; "/XC"; "/XN"; "/XO"; "/SL"; "/COPY:DAT"; "/DCOPY:T" ]
+
+let clear_archive =
+  {|param([string]$root)
+function Walk([IO.DirectoryInfo]$d) {
+  foreach ($e in $d.EnumerateFileSystemInfos()) {
+    if ($e -is [IO.DirectoryInfo]) {
+      if (-not ($e.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Walk $e }
+    } elseif ($e.Attributes -band [IO.FileAttributes]::Archive) {
+      $e.Attributes = $e.Attributes -band (-bnot [IO.FileAttributes]::Archive)
+    }
+  }
+}
+Walk ([IO.DirectoryInfo]$root)
+|}
+
+(* The control directory: run.cmd, the scripts it calls, and the overlay of
+   files the host makes for the build.  [script] writes one there and gives
+   its path in the container. *)
+let control ~temp_dir =
+  let dir = Path.(temp_dir / "control") in
+  let () = Os.mkdir dir in
+  (dir, fun name contents -> Os.write_to_file Path.(dir / name) contents; Path.(control_dst / name))
+
+(* [before] copies in, [commands] are the build, whose status is the
+   container's, and [after] copies out whatever the build left. *)
+let run_cmd ~script ~before ~commands ~after =
+  script "run.cmd"
+    (String.concat "\r\n"
+       ([ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul" ]
+       @ before
+       @ [ "set PATH=%PATH%;" ^ opam_root; String.concat " && " commands; "set day10_status=%errorlevel%" ]
+       @ after @ [ "exit /b %day10_status%"; "" ]))
+
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   let module L = (val unix_layer ~config) in
@@ -170,28 +225,26 @@ let run ~t ~temp_dir opam_repository build_log =
   let () = Os.mkdir rootfs in
   let () = grant_users rootfs in
   let () = add_user ~t ~temp_dir ~build_log in
-  (* Both into opam's root, which is the one directory the user is sure to
-     own, and where the cache keeps them: a layer build then has nothing to
-     fetch. *)
+  let control_dir, script = control ~temp_dir in
+  (* Both into opam's root, where the cache keeps them: a layer build then
+     has nothing to fetch. *)
   let opam_exe = Path.(opam_root / "opam.exe") in
   let commands =
     (* --fail, or a missing release is downloaded as a page of HTML and
        fails later, as something else. *)
     ("curl.exe --fail -L -o " ^ opam_exe ^ " " ^ opam_url ~arch:config.arch)
-    :: L.install ~opam_root ~rootfs
+    :: L.install ~opam_root ~script
     @ [
         opam_exe ^ " init -k local -a " ^ {|C:\opam-repository|} ^ " --bare -y" ^ L.init_options ~opam_root;
         opam_exe ^ " switch create default --empty";
         "curl.exe --fail -L -o " ^ Path.(opam_root / "day10-install.exe") ^ " " ^ day10_install_url ~arch:config.arch;
       ]
   in
-  let mounts =
-    [
-      { Mount.ty = "bind"; src = rootfs; dst = opam_root; options = [ "rw"; "rbind"; "rprivate" ] };
-      { ty = "bind"; src = opam_repository; dst = {|C:\opam-repository|}; options = [ "rbind"; "rprivate" ] };
-    ]
-  in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands ~mounts in
+  (* All of it, empty directories too, since nothing came before. *)
+  let after = [ robocopy opam_root out_dst [ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T" ] ] in
+  let run = run_cmd ~script ~before:[] ~commands ~after in
+  let mounts = [ ro control_dir control_dst; rw rootfs out_dst; ro opam_repository {|C:\opam-repository|} ] in
+  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands:[ run ] ~mounts in
   let () = L.keep ~temp_dir rootfs in
   let () = tidy ~config rootfs in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
@@ -208,28 +261,45 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   let target = Path.(temp_dir / "fs") in
   let () = Os.mkdir target in
   let () = grant_users target in
-  (* opam's root on the path, for opam.exe and the driver the base left there.
-     No quotes, which the container runtime escapes into something cmd does not
-     read as quotes, and none needed: set takes the rest of the line, up to the
-     && that follows without a space, so no trailing space lands in the path. *)
-  let commands = [ "set PATH=%PATH%;" ^ opam_root ^ "&& " ^ String.concat " && " (Build_command.for_package ~config pkg) ] in
+  let control_dir, script = control ~temp_dir in
   let sources = ordered_hashes @ [ "base" ] in
-  let () = List.iter (fun hash -> Os.copy_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
-  let () = L.assemble ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash)) sources) ~target in
+  (* What the host makes from the layers without assembling them: the Unix
+     layer's merged database and the switch state of every package the
+     layers installed.  Copied in last, after the archive attribute is
+     cleared, so that the layer keeps them as Os.clense_tree kept them. *)
+  let overlay = Path.(control_dir / "overlay") in
+  let () = Os.mkdir overlay in
+  let () = L.assemble ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash)) sources) ~target:overlay in
   let () =
-    let packages_dir = Path.(target / "default" / ".opam-switch" / "packages") in
-    let state_file = Path.(target / "default" / ".opam-switch" / "switch-state") in
-    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
+    let packages hash = Path.(config.dir / os_key / hash / "fs" / "default" / ".opam-switch" / "packages") in
+    match List.concat_map (fun hash -> if Sys.file_exists (packages hash) then Array.to_list (Sys.readdir (packages hash)) else []) sources with
+    | [] -> ()
+    | names ->
+        let dir = Path.(overlay / "default" / ".opam-switch") in
+        let () = Os.mkdir ~parents:true dir in
+        Opamh.dump_state_of (List.sort_uniq String.compare names) Path.(dir / "switch-state")
   in
-  let mounts =
+  let repo_default = Path.(opam_root / "repo" / "default") in
+  let before =
+    List.map (fun hash -> robocopy Path.(layers_dst / hash / "fs") opam_root (copy_in @ [ "/XD"; Path.(layers_dst / hash / "fs" / "repo" / "default") ])) sources
+    @ [
+        robocopy repo_dst repo_default [ "/MIR" ];
+        "powershell -NoProfile -ExecutionPolicy Bypass -File " ^ script "clear-archive.ps1" clear_archive;
+        "if errorlevel 1 exit /b 1";
+        robocopy Path.(control_dst / "overlay") opam_root [ "/E"; "/COPY:DAT" ];
+      ]
+  in
+  (* What the build wrote, leaving out the repository, which is the
+     solution's, and the sources and build trees, which no layer keeps. *)
+  let after =
     [
-      { Mount.ty = "bind"; src = target; dst = opam_root; options = [ "rw"; "rbind"; "rprivate" ] };
-      { ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = Path.(opam_root / "repo" / "default"); options = [ "rbind"; "rprivate" ] };
+      robocopy opam_root out_dst
+        [ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; "/XD"; repo_default; Path.(opam_root / "default" / ".opam-switch" / "sources"); Path.(opam_root / "default" / ".opam-switch" / "build") ];
     ]
   in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands ~mounts in
+  let run = run_cmd ~script ~before ~commands:(Build_command.for_package ~config pkg) ~after in
+  let mounts = [ ro control_dir control_dst; ro Path.(config.dir / os_key) layers_dst; ro Path.(temp_dir / "opam-repository") repo_dst; rw target out_dst ] in
+  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~commands:[ run ] ~mounts in
   let () = L.keep ~temp_dir target in
   let () = tidy ~config target in
-  let () = List.iter (Os.rm ~recursive:true) [ Path.(target / "default" / ".opam-switch" / "sources"); Path.(target / "default" / ".opam-switch" / "build") ] in
-  let () = List.iter (fun hash -> Os.clense_tree ~source:Path.(config.dir / os_key / hash / "fs") ~target) sources in
   result
