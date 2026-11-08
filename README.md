@@ -76,14 +76,17 @@ Linux builds use **runc** to run each package build in an OCI container with an 
 - Docker (for building the base layer)
 - runc
 - sudo access (for overlay mounts and runc invocation)
+- `overlay` kernel module must be loaded
 
-#### Install runc
+#### Install Docker and runc
 
 On Debian/Ubuntu:
 
 ```
-apt install runc
+apt install docker.io runc
 ```
+
+Your user must have permission to access the Docker daemon.
 
 #### Clone the opam repository
 
@@ -92,6 +95,8 @@ git clone https://github.com/ocaml/opam-repository /home/mtelvers/opam-repositor
 ```
 
 #### Build and run
+
+
 
 ```
 opam install . --deps-only
@@ -102,7 +107,7 @@ dune build @install
   0install.2.18
 ```
 
-The first run builds a base Debian container image via Docker, exports it as a root filesystem, and caches it. Subsequent runs reuse the cached base layer.
+The first run builds a base Debian container image via Docker, exports it as a root filesystem, and caches it. Subsequent runs reuse the cached base layer. **NOTE:** The `--cache-dir` path must be an absolute path.
 
 To run batch health-checks:
 
