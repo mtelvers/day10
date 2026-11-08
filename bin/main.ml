@@ -54,8 +54,13 @@ let init t =
     let opam_repository = Util.create_opam_repository temp_dir in
     let () = write_depext_sets ~config Path.(temp_dir / "depexts") in
     let build_log = Path.(temp_dir / "build.log") in
-    let _ = Platform.run ~t ~temp_dir opam_repository build_log in
-    Unix.rename temp_dir target_dir
+    (* A base that failed is not kept, or every build on it would fail in a
+       way that looks like the package's fault; the next run tries again. *)
+    match Platform.run ~t ~temp_dir opam_repository build_log with
+    | 0 -> Unix.rename temp_dir target_dir
+    | status ->
+        OpamConsole.error "Building the base for %s failed with status %d" (Config.os_key ~config) status;
+        raise (OpamStd.Sys.Exit 1)
 
 let () = OpamFormatConfig.init ()
 let () = OpamCoreConfig.init ()
@@ -448,6 +453,8 @@ let build ~repo config packages =
       let () = if config.log then Dot_solution.to_string solution |> print_endline in
       let () = Option.iter (fun filename -> Dot_solution.save filename solution) config.dot in
       let t = Platform.init ~config in
+      (* Released however the build ends, a base that failed included. *)
+      Cleanup.with_resource (fun () -> Platform.deinit ~t) @@ fun () ->
       init t;
       let ordered_installation = topological_sort solution in
       let dependencies = pkg_deps solution ordered_installation in
@@ -470,10 +477,7 @@ let build ~repo config packages =
           check_all true ordered_installation
         else false
       in
-      if config.dry_run && not all_layers_exist then (
-        Platform.deinit ~t;
-        [ Solution solution ]
-      )
+      if config.dry_run && not all_layers_exist then [ Solution solution ]
       else
       let results, _ =
         List.fold_left
@@ -505,7 +509,6 @@ let build ~repo config packages =
             | _ -> (Dependency_failed :: res, OpamPackage.Map.add pkg Dependency_failed m))
           ([], OpamPackage.Map.empty) ordered_installation
       in
-      Platform.deinit ~t;
       results @ [ Solution solution ]
   | Error s ->
       let () = if config.log then print_endline s in
