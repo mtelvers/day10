@@ -136,18 +136,6 @@ let exec ?stdout ?stderr ?tee ?append cmd =
   let () = OpamConsole.note "%s" (String.concat " " cmd) in
   fst (spawn ?stdout ?stderr ?tee ?append (List.hd cmd) (List.tl cmd))
 
-let retry_exec ?stdout ?stderr ?(tries = 10) cmd =
-  let rec loop n =
-    match (exec ?stdout ?stderr cmd, n) with
-    | 0, _ -> 0
-    | r, 0 -> r
-    | _, n ->
-        OpamConsole.note "retry %i: %s" (tries - n + 1) (String.concat " " cmd);
-        Unix.sleepf (Random.float 2.0);
-        loop (n - 1)
-  in
-  loop tries
-
 let retry_rename ?(tries = 10) src dst =
   let rec loop n =
     try Unix.rename src dst with

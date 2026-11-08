@@ -82,9 +82,45 @@ let temp_dir path () = if Sys.file_exists path then try Os.rm ~recursive:true pa
 (* Windows has no fork, so one at a time. *)
 let fork ?np:_ f xs = List.iter f xs
 
+(* containerd serves a fixed number of instances of its pipe, and a ctr that
+   finds them all in use fails with this before it has done anything, so it
+   is always safe to run again.  Several builds at once make it common. *)
+let pipe_busy = "All pipe instances are busy"
+
+let contains ~sub s =
+  let n = String.length s and m = String.length sub in
+  let rec at i = i + m <= n && (String.equal (String.sub s i m) sub || at (i + 1)) in
+  at 0
+
+(* ctr, run again while containerd's pipe is busy.  What the call printed is
+   read back from [stderr] to tell that apart from a real failure, so a
+   temporary file takes it when the caller does not say where; a short
+   output is all a busy pipe leaves.  Still busy after every try, day10
+   stops rather than record a layer as failed for containerd's sake. *)
+let ctr ?(stdout = Os.null) ?stderr ?tee args =
+  let err, temporary = match stderr with Some err -> (err, false) | None -> (Filename.temp_file "ctr" ".err", true) in
+  let busy () =
+    match Os.read_from_file err with
+    | output -> String.length output < 4096 && contains ~sub:pipe_busy output
+    | exception Sys_error _ -> false
+  in
+  let rec go tries =
+    match Os.exec ~stdout ~stderr:err ?tee ("ctr" :: args) with
+    | 0 -> 0
+    | status when not (busy ()) -> status
+    | _ when tries > 1 ->
+        OpamConsole.note "containerd's pipe is busy, running ctr %s again" (List.hd args);
+        Unix.sleepf (0.5 +. Random.float 1.5);
+        go (tries - 1)
+    | _ ->
+        OpamConsole.error "containerd's pipe was still busy after every try: ctr %s" (String.concat " " args);
+        raise (OpamStd.Sys.Exit 1)
+  in
+  Fun.protect ~finally:(fun () -> if temporary then try Sys.remove err with Sys_error _ -> ()) (fun () -> go 60)
+
 (* The snapshot a container is prepared on, let go of when the run ends: see
    Cleanup. *)
-let snapshot name () = Os.quiet "ctr" [ "snapshot"; "rm"; name ]
+let snapshot name () = ignore (ctr ~stdout:Os.null [ "snapshot"; "rm"; name ])
 
 (* One container: a snapshot prepared on the image, the OCI config written
    for it, and ctr run on that; the snapshot is let go of when the run ends. *)
@@ -92,13 +128,19 @@ let container ~t ~temp_dir ~build_log ~tee ~commands ~mounts =
   let name = Filename.basename temp_dir in
   Cleanup.with_resource (snapshot name) @@ fun () ->
   let mounts_json = Path.(temp_dir / "mounts.json") in
-  let _ = Os.retry_exec ~stdout:mounts_json [ "ctr"; "snapshot"; "prepare"; "--mounts"; name; image ] in
+  let () =
+    match ctr ~stdout:mounts_json ~stderr:Path.(temp_dir / "prepare.err") [ "snapshot"; "prepare"; "--mounts"; name; image ] with
+    | 0 -> ()
+    | status ->
+        OpamConsole.error "ctr snapshot prepare %s failed with status %d: %s" name status (String.trim (Os.read_from_file Path.(temp_dir / "prepare.err")));
+        raise (OpamStd.Sys.Exit 1)
+  in
   let layers = Json_layers.read_layers mounts_json in
   let argv = [ "cmd"; "/c"; String.concat " && " commands ] in
   let config = make_config_json ~layers ~cwd:{|C:\|} ~argv ~hostname ~username:t.username ~env:(env ~config:t.config) ~mounts ~network:t.network in
   let config_json = Path.(temp_dir / "config.json") in
   let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
-  Os.exec ~stdout:build_log ~stderr:build_log ~tee [ "ctr"; "run"; "--cni"; "--rm"; "--config"; config_json; name ]
+  ctr ~stdout:build_log ~stderr:build_log ~tee [ "run"; "--cni"; "--rm"; "--config"; config_json; name ]
 
 (* The Unix layer under opam, as the distribution names it: cygwin, which
    opam sees for win32, or msys2. *)
