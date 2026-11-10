@@ -181,8 +181,13 @@ let out_dst = {|C:\day10out|}
 let ro src dst = { Mount.ty = "bind"; src; dst; options = [ "rbind"; "rprivate"; "ro" ] }
 let rw src dst = { Mount.ty = "bind"; src; dst; options = [ "rw"; "rbind"; "rprivate" ] }
 
-(* robocopy's status is a bit mask in which 8 and above is a failure. *)
-let robocopy src dst flags = String.concat " " ([ "robocopy"; src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP" ]) ^ "\r\nif errorlevel 8 exit /b 1"
+(* robocopy's status is a bit mask in which 8 and above is a failure.  Even
+   with every listing turned off it prints an empty line, one per layer in
+   the build log, so what it says is shown only when it fails. *)
+let robocopy src dst flags =
+  let log = {|C:\Windows\Temp\day10-robocopy.log|} in
+  String.concat " " ([ "robocopy"; src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP"; ">" ^ log ])
+  ^ "\r\nif errorlevel 8 (type " ^ log ^ " & exit /b 1)"
 
 (* Skipping what is already there, so that copying the layers top first
    leaves each path as the topmost layer has it.  /SL copies a symlink as a
