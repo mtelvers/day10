@@ -41,7 +41,20 @@ let uninterruptible f =
   let previous = List.map (fun (signal, _) -> (signal, Sys.signal signal Sys.Signal_ignore)) signals in
   Fun.protect ~finally:(fun () -> List.iter (fun (signal, behaviour) -> Sys.set_signal signal behaviour) previous) f
 
-let with_resource (release : t) f = Fun.protect ~finally:(fun () -> uninterruptible release) f
+(* A pending signal can fire at the very start of the finaliser, before
+   uninterruptible has masked anything, and the release is then skipped.  On
+   Windows that is the usual place for it: a blocking call there is not
+   interrupted, so the signal waits for it to return and fires at the next
+   safe point.  Fun.protect reports exactly that case as Finally_raised, so
+   release once more on the way out.  The handler ignores every further
+   signal, so this release cannot be cut short; releases are best effort and
+   quiet, so one that had already run does no harm. *)
+let with_resource (release : t) f =
+  match Fun.protect ~finally:(fun () -> uninterruptible release) f with
+  | v -> v
+  | exception (Fun.Finally_raised _ as e) ->
+      release ();
+      raise e
 
 (* Raising from the handler rather than exiting is what lets the finalisers run.
    The exception surfaces at the next safe point, which is as soon as the signal

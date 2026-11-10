@@ -116,11 +116,22 @@ let spawn ?stdin ?stdout ?stderr ?(capture = false) ?(tee = false) ?(append = fa
               drain ()
           | exception Unix.Unix_error (Unix.EINTR, _, _) -> drain ()
         in
-        Fun.protect
-          ~finally:(fun () ->
-            close read;
-            Option.iter close log_fd)
-          drain;
+        (* A pending signal fires at the first safe point after the read
+           returns, which can be the very start of this finaliser, before
+           either close.  On Windows a ReadFile is not interrupted, so that is
+           where Killed usually lands, and the build log stayed open for good.
+           Fun.protect reports a finaliser cut short as Finally_raised, so
+           release again then: the handler ignores every further signal, so
+           this release cannot itself be cut short. *)
+        let release () =
+          close read;
+          Option.iter close log_fd
+        in
+        (match Fun.protect ~finally:release drain with
+         | () -> ()
+         | exception (Fun.Finally_raised _ as e) ->
+             release ();
+             raise e);
         Buffer.contents collected
   in
   (wait pid, output)
