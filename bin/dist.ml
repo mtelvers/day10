@@ -77,9 +77,14 @@ let yum =
     (* dnf discards downloads unless told to keep them, and refuses to install
        once its metadata is older than the repository's metadata_expire, which
        every stock .repo file sets, so that is overridden in each of them as
-       well as in the defaults. *)
+       well as in the defaults.  dnf5 (Fedora 41 on) ships them in
+       /usr/share/dnf5/repos.d and leaves /etc/yum.repos.d empty. *)
     keep_downloads =
-      [ "printf 'keepcache=True\\nmetadata_expire=never\\n' >> /etc/dnf/dnf.conf"; "sed -i 's/^metadata_expire=.*/metadata_expire=never/' /etc/yum.repos.d/*.repo" ];
+      [
+        "printf 'keepcache=True\\nmetadata_expire=never\\n' >> /etc/dnf/dnf.conf";
+        "for f in /etc/yum.repos.d/*.repo /usr/share/dnf5/repos.d/*.repo; do if [ -f \"$f\" ]; then sed -i \
+         's/^metadata_expire=.*/metadata_expire=never/' \"$f\"; fi; done";
+      ];
     download = (fun packages -> "yum install -y --downloadonly " ^ packages);
     noninteractive = empty;
     add_user = useradd;
