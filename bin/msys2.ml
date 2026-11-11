@@ -16,21 +16,33 @@ let root ~opam_root = Path.(opam_root / "msys64")
    fetched.  unzip is required by opam, rsync by a local repository, make by
    most packages, git as opam's Cygwin gets it, and diffutils as Cygwin's base
    category and every Linux base have it.  The downloaded packages are
-   dropped so that the layer does not carry them. *)
+   dropped so that the layer does not carry them.
+
+   The mirrors answer a burst with 429 Too Many Requests, and a base fetches
+   some 160 files: pacman fetches one at a time rather than five, and a step
+   that fails is tried again after a minute and again after five, rather than
+   failing the base for the next job to try at once. *)
 let install ~opam_root ~script =
   let tarball = Path.(opam_root / "msys2.tar.xz") in
   let bin = Path.(root ~opam_root / "usr" / "bin") in
   let pacman = Path.(bin / "pacman.exe") in
   let bash name contents = Path.(bin / "bash.exe") ^ " -l " ^ script name contents in
+  let sleep seconds = Printf.sprintf "powershell -NoProfile -NonInteractive -Command Start-Sleep %d" seconds in
+  let retry command = Printf.sprintf "(%s || (%s && %s) || (%s && %s))" command (sleep 60) command (sleep 300) command in
   [
     "curl.exe --fail -L -o " ^ tarball ^ " " ^ url;
     "tar.exe -xf " ^ tarball ^ " -C " ^ opam_root;
     "del " ^ tarball;
-    bash "msys2-keyring.sh" "set -e\npacman-key --init\npacman-key --populate msys2\ngpgconf --homedir /etc/pacman.d/gnupg --kill all\n";
-    pacman ^ " -Syuu --noconfirm";
-    pacman ^ " -Syuu --noconfirm";
+    bash "msys2-keyring.sh"
+      "set -e\n\
+       pacman-key --init\n\
+       pacman-key --populate msys2\n\
+       gpgconf --homedir /etc/pacman.d/gnupg --kill all\n\
+       sed -i 's/^ParallelDownloads.*/ParallelDownloads = 1/' /etc/pacman.conf\n";
+    retry (pacman ^ " -Syuu --noconfirm");
+    retry (pacman ^ " -Syuu --noconfirm");
     bash "msys2-certs.sh" "update-ca-trust\n";
-    pacman ^ " -S --noconfirm --needed unzip make git rsync diffutils";
+    retry (pacman ^ " -S --noconfirm --needed unzip make git rsync diffutils");
     pacman ^ " -Scc --noconfirm";
   ]
 
