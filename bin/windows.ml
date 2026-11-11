@@ -18,6 +18,12 @@ let username = "ContainerAdministrator"
    characters: dune-site's deepest temporary file is 262 under the profile. *)
 let opam_root = {|C:\opam|}
 
+(* TEMP and TMP, which the image puts in the user's profile, under AppData,
+   where they cost a test that makes its directories there 48 characters of
+   the 260 Windows allows a path.  Outside opam's root, so no layer keeps
+   what is left there. *)
+let temp = {|C:\tmp|}
+
 (* The top layer of the base image, as ctr snapshot ls lists it: what every
    container is prepared on. *)
 let image = "sha256:5ae66e790cc84572a3bb9646fcbd13b3dbf1af9252e013167791737880626b0b"
@@ -34,6 +40,8 @@ let env ~(config : Config.t) =
   [
     ("CI", "true");
     ("OPAMROOT", opam_root);
+    ("TEMP", temp);
+    ("TMP", temp);
     ("OPAMYES", "1");
     (* opam runs pacman only at this level; its own Cygwin it installs into
        without asking. *)
@@ -229,7 +237,7 @@ let control ~temp_dir =
 let run_cmd ~script ~before ~commands ~after =
   script "run.cmd"
     (String.concat "\r\n"
-       ([ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul" ]
+       ([ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul"; "mkdir " ^ temp ^ " 2>nul" ]
        @ before
        @ [ "set PATH=%PATH%;" ^ opam_root; String.concat " && " commands; "set day10_status=%errorlevel%" ]
        @ after @ [ "exit /b %day10_status%"; "" ]))
