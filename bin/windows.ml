@@ -12,8 +12,11 @@ let username = "ContainerAdministrator"
 
 (* opam's root in the container, which is the directory the cache keeps: the
    switch, the repository, opam's own Cygwin and its package database -- and,
-   so that a layer build has nothing to download, opam.exe and the driver. *)
-let opam_root = Path.(({|C:\Users\|} ^ username) / "AppData" / "Local" / "opam")
+   so that a layer build has nothing to download, opam.exe and the driver.
+   Short, rather than opam's default under the user's profile, because a
+   switch's build directory sits under it and Windows limits a path to 260
+   characters: dune-site's deepest temporary file is 262 under the profile. *)
+let opam_root = {|C:\opam|}
 
 (* The top layer of the base image, as ctr snapshot ls lists it: what every
    container is prepared on. *)
