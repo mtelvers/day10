@@ -14,8 +14,9 @@ let root ~opam_root = Path.(opam_root / "msys64")
    left.  Upgrading ca-certificates leaves the CA bundle empty, a copy of a
    file the hook makes afterwards, so it is remade before anything else is
    fetched.  unzip is required by opam, rsync by a local repository, make by
-   most packages, and git as opam's Cygwin gets it.  The downloaded packages
-   are dropped so that the layer does not carry them. *)
+   most packages, git as opam's Cygwin gets it, and diffutils as Cygwin's base
+   category and every Linux base have it.  The downloaded packages are
+   dropped so that the layer does not carry them. *)
 let install ~opam_root ~script =
   let tarball = Path.(opam_root / "msys2.tar.xz") in
   let bin = Path.(root ~opam_root / "usr" / "bin") in
@@ -29,7 +30,7 @@ let install ~opam_root ~script =
     pacman ^ " -Syuu --noconfirm";
     pacman ^ " -Syuu --noconfirm";
     bash "msys2-certs.sh" "update-ca-trust\n";
-    pacman ^ " -S --noconfirm --needed unzip make git rsync";
+    pacman ^ " -S --noconfirm --needed unzip make git rsync diffutils";
     pacman ^ " -Scc --noconfirm";
   ]
 
