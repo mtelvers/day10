@@ -84,10 +84,18 @@ let vm_exn ~t args =
   | status -> failwith (Printf.sprintf "day10-vm %s exited with status %d" (String.concat " " args) status)
 
 (* A clone's disk, mounted for [f] and let go of however [f] ends: see
-   Cleanup. *)
+   Cleanup.  A copy into or out of the mount is a process of its own, which an
+   interrupt to day10 does not reach, so whatever is still at work there is
+   stopped first: left to run, it went on writing into the directory the disk
+   had been mounted on, after the temp directory around it had been deleted.
+   The bracket keeps pkill from matching its own command line. *)
 let mounted ~t ~dir ~mnt f =
   let () = vm_exn ~t [ "mount"; dir; mnt ] in
-  Cleanup.with_resource (fun () -> Os.quiet "sudo" [ t.vm; "unmount"; dir; mnt ]) f
+  let release () =
+    Os.quiet "sudo" [ "pkill"; "-f"; "[" ^ String.sub mnt 0 1 ^ "]" ^ String.sub mnt 1 (String.length mnt - 1) ];
+    Os.quiet "sudo" [ t.vm; "unmount"; dir; mnt ]
+  in
+  Cleanup.with_resource release f
 
 let sh cmd =
   match Os.sudo [ "sh"; "-c"; cmd ] with
@@ -145,6 +153,12 @@ let boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt c
   let () = Os.write_to_file script (job_script ~config:t.config ~network ~src:(Option.is_some src) command) in
   let () = mounted ~t ~dir:vm_dir ~mnt @@ fun () -> vm_exn ~t [ "job"; mnt; script ] in
   let shares = match src with None -> [] | Some dir -> [ "--share"; "src:" ^ dir ] in
+  (* The VM is stopped however this scope ends, as Linux deletes its runc
+     container.  The client stops it too when it goes, but nothing makes it go
+     when day10 is interrupted: writing to the build log rather than through
+     day10, it outlived day10 and kept the VM running on a disk that day10 had
+     just deleted.  Stopping the VM ends the client's run, so it exits. *)
+  Cleanup.with_resource (fun () -> Os.quiet "sudo" [ t.vm; "stop"; name ]) @@ fun () ->
   Os.sudo ~stdout:build_log ~stderr:build_log ~tee ~append
     ([ t.vm; "run"; "--dir"; vm_dir; "--name"; name; "--hard-stop" ] @ (if network then [] else [ "--no-network" ]) @ shares)
 
