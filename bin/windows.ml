@@ -94,39 +94,44 @@ let temp_dir path () = if Sys.file_exists path then try Os.rm ~recursive:true pa
 (* Windows has no fork, so one at a time. *)
 let fork ?np:_ f xs = List.iter f xs
 
-(* containerd serves a fixed number of instances of its pipe, and a ctr that
-   finds them all in use fails with this before it has done anything, so it
-   is always safe to run again.  Several builds at once make it common. *)
-let pipe_busy = "All pipe instances are busy"
+(* Failures that come before ctr has done anything, so that it is always safe
+   to run it again.  containerd serves a fixed number of instances of its
+   pipe, and a ctr that finds them all in use fails at once; several builds
+   at once make it common.  The NAT network is created by the first container
+   to need it, and two first containers started together both try, the one
+   that loses failing before it starts. *)
+let transient = [ "All pipe instances are busy"; "A network with this name already exists" ]
 
 let contains ~sub s =
   let n = String.length s and m = String.length sub in
   let rec at i = i + m <= n && (String.equal (String.sub s i m) sub || at (i + 1)) in
   at 0
 
-(* ctr, run again while containerd's pipe is busy.  What the call printed is
-   read back from [stderr] to tell that apart from a real failure, so a
-   temporary file takes it when the caller does not say where; a short
-   output is all a busy pipe leaves.  Still busy after every try, day10
-   stops rather than record a layer as failed for containerd's sake. *)
+(* ctr, run again after a transient failure.  What the call printed is read
+   back from [stderr] to tell that apart from a real failure, so a temporary
+   file takes it when the caller does not say where; a short output is all a
+   transient failure leaves.  Still failing after every try, day10 stops
+   rather than record a layer as failed for containerd's sake. *)
 let ctr ?(stdout = Os.null) ?stderr ?tee args =
   let err, temporary = match stderr with Some err -> (err, false) | None -> (Filename.temp_file "ctr" ".err", true) in
-  let busy () =
+  let transient () =
     match Os.read_from_file err with
-    | output -> String.length output < 4096 && contains ~sub:pipe_busy output
-    | exception Sys_error _ -> false
+    | output -> if String.length output < 4096 then List.find_opt (fun sub -> contains ~sub output) transient else None
+    | exception Sys_error _ -> None
   in
   let rec go tries =
     match Os.exec ~stdout ~stderr:err ?tee ("ctr" :: args) with
     | 0 -> 0
-    | status when not (busy ()) -> status
-    | _ when tries > 1 ->
-        OpamConsole.note "containerd's pipe is busy, running ctr %s again" (List.hd args);
-        Unix.sleepf (0.5 +. Random.float 1.5);
-        go (tries - 1)
-    | _ ->
-        OpamConsole.error "containerd's pipe was still busy after every try: ctr %s" (String.concat " " args);
-        raise (OpamStd.Sys.Exit 1)
+    | status -> (
+        match transient () with
+        | None -> status
+        | Some reason when tries > 1 ->
+            OpamConsole.note "ctr %s: %s, running it again" (List.hd args) reason;
+            Unix.sleepf (0.5 +. Random.float 1.5);
+            go (tries - 1)
+        | Some reason ->
+            OpamConsole.error "ctr %s still failed after every try: %s" (String.concat " " args) reason;
+            raise (OpamStd.Sys.Exit 1))
   in
   Fun.protect ~finally:(fun () -> if temporary then try Sys.remove err with Sys_error _ -> ()) (fun () -> go 60)
 
