@@ -153,10 +153,14 @@ let mounted ~parents ~scratch ~dir f =
   | status ->
       OpamConsole.error "wclayer mount %s failed with status %d" scratch status;
       raise (OpamStd.Sys.Exit 1));
+  (* Said rather than raised, as a release must not mask what it may be
+     unwinding from: a snapshot still mounted cannot be removed, and the
+     directory left behind is the mount, not an empty one. *)
   Cleanup.with_resource
     (fun () ->
-      Os.quiet "wclayer" [ "unmount"; scratch; dir ];
-      try Unix.rmdir dir with Unix.Unix_error _ -> ())
+      match Os.exec ~stdout:Os.null [ "wclayer"; "unmount"; scratch; dir ] with
+      | 0 -> ( try Unix.rmdir dir with Unix.Unix_error (e, _, _) -> OpamConsole.warning "%s is still there after wclayer unmount: %s" dir (Unix.error_message e))
+      | status -> OpamConsole.warning "wclayer unmount %s failed with status %d; the snapshot is still mounted at %s" scratch status dir)
     (fun () -> f dir)
 
 (* One container: a snapshot prepared on the image, [fill] given the
