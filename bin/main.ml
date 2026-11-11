@@ -310,13 +310,16 @@ let rec topological_sort pkgs =
          is left to work out which of a hundred packages were waiting on each
          other. *)
       let () =
-        if OpamPackage.Map.is_empty installable then
-          OpamConsole.error_and_exit `Solver_failure "dependency cycle among %s"
+        if OpamPackage.Map.is_empty installable then (
+          OpamConsole.error "dependency cycle among %s"
             (OpamPackage.Map.to_list pkgs
             |> List.map (fun (pkg, deps) ->
                    Printf.sprintf "%s -> %s" (OpamPackage.to_string pkg)
                      (OpamPackage.Set.elements deps |> List.map OpamPackage.to_string |> String.concat " "))
-            |> String.concat ", ")
+            |> String.concat ", ");
+          (* A fault in the packages, not in day10, so not a status that says
+             day10 failed. *)
+          raise (OpamStd.Sys.Exit 0))
       in
       let installable = OpamPackage.Map.to_list installable |> List.map fst in
       (* Remove the dependency on any installable package from the remaining packages *)

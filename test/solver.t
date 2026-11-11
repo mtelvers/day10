@@ -279,4 +279,3 @@ which of a hundred packages were waiting on each other.
   }
   
   [ERROR] dependency cycle among tested.1.0 -> tester-dep.1.0, tester-dep.1.0 -> tested.1.0
-  [60]
