@@ -201,6 +201,23 @@ Create `C:\Program Files\containerd\cni\conf\0-containerd-nat.conf` containing:
 }
 ```
 
+#### Build and install wclayer
+
+day10 fills a container's filesystem on the host before the container starts,
+and reads the result back after it stops, with hcsshim's `wclayer`.  hcsshim
+publishes no binaries, and v0.15.0 needs Go 1.26.8 or later.
+
+```
+curl.exe -L https://go.dev/dl/go1.26.8.windows-amd64.zip -o c:\windows\temp\go.zip
+powershell -command "Expand-Archive c:\windows\temp\go.zip c:\go1.26.8"
+git clone --depth 1 --branch v0.15.0 https://github.com/microsoft/hcsshim c:\hcsshim
+cd c:\hcsshim
+set GOTOOLCHAIN=local
+c:\go1.26.8\go\bin\go.exe build -buildvcs=false -o c:\windows\system32\wclayer.exe ./cmd/wclayer
+```
+
+The `wclayer` role in the Windows worker playbook does the same.
+
 #### Install opam
 
 ```
@@ -246,6 +263,13 @@ _build\install\default\bin\day10.exe health-check --cache-dir d:\cache --opam-re
 The first run builds the base: it downloads opam and day10-install into the
 container, runs `opam init` with opam's own Cygwin, and caches the result as
 the `base` of a platform named `cygwin-<version>-x86_64`.
+
+A build never runs on a bind mount, where Windows cannot run a program through
+a relative symlink, nor remove or replace a file in use.  day10 prepares a
+containerd snapshot, mounts it on the host with `wclayer`, and copies the
+layers in; the container then runs on it with no mounts at all, and day10
+mounts it again afterwards to copy out what the build wrote.  day10 must run
+as an administrator.
 
 With `--os-distribution msys2` the base unpacks an MSYS2 release into opam's
 root and points `opam init` at it instead, so depexts come from pacman and
