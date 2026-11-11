@@ -7,9 +7,9 @@ let url = "https://github.com/msys2/msys2-installer/releases/download/2026-09-27
 let root ~opam_root = Path.(opam_root / "msys64")
 
 (* What needs a shell runs from a script, as the commands may carry no
-   quotes.  The first login populates the keyring, and the script closes the
-   gpg-agent that would otherwise outlive the shell and hold the container's
-   output open.  pacman itself is run from cmd, since a runtime update ends
+   quotes.  The first login populates and signs pacman's keyring on its own,
+   and the script closes the gpg-agent that this leaves running, which would
+   otherwise outlive the shell and hold the container's output open.  pacman itself is run from cmd, since a runtime update ends
    every MSYS2 process, and twice, as the second pass gets what the first
    left.  Upgrading ca-certificates leaves the CA bundle empty, a copy of a
    file the hook makes afterwards, so it is remade before anything else is
@@ -33,10 +33,8 @@ let install ~opam_root ~script =
     "curl.exe --fail -L -o " ^ tarball ^ " " ^ url;
     "tar.exe -xf " ^ tarball ^ " -C " ^ opam_root;
     "del " ^ tarball;
-    bash "msys2-keyring.sh"
+    bash "msys2-setup.sh"
       "set -e\n\
-       pacman-key --init\n\
-       pacman-key --populate msys2\n\
        gpgconf --homedir /etc/pacman.d/gnupg --kill all\n\
        sed -i 's/^ParallelDownloads.*/ParallelDownloads = 1/' /etc/pacman.conf\n";
     retry (pacman ^ " -Syuu --noconfirm");
