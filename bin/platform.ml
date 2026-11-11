@@ -7,5 +7,6 @@ include
        | Some "linux" -> (module Linux : S.PLATFORM)
        | Some "freebsd" -> (module Freebsd : S.PLATFORM)
        | Some "win32" -> (module Windows : S.PLATFORM)
+       | Some "macos" -> (module Macos : S.PLATFORM)
        | _ -> (module Dummy : S.PLATFORM)
       : S.PLATFORM)
