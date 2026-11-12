@@ -6,6 +6,11 @@ type t = {
 
 let hostname = "builder"
 
+(* What the backend runs to prepare and tear down a container -- ctr, wclayer,
+   robocopy, hcn-namespace -- is run without a note: a log is read for the
+   build, and these mean nothing to whoever reads it.  A failure says what
+   failed, with the command's own output. *)
+
 (* The image's own administrator, which may create symlinks, so that a build
    sees the native links a normal Windows install would. *)
 let username = "ContainerAdministrator"
@@ -80,7 +85,7 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~networ
     ]
 
 let init ~(config : Config.t) = { config; network = Os.capture "hcn-namespace" [ "create" ] |> String.trim; username }
-let deinit ~t = ignore (Os.exec [ "hcn-namespace"; "delete"; t.network ])
+let deinit ~t = ignore (Os.spawn ~stdout:Os.null "hcn-namespace" [ "delete"; t.network ])
 let config ~t = t.config
 
 (* opam's uname is Unix only; its arch poll asks Windows itself. *)
@@ -120,7 +125,7 @@ let ctr ?(stdout = Os.null) ?stderr ?tee args =
     | exception Sys_error _ -> None
   in
   let rec go tries =
-    match Os.exec ~stdout ~stderr:err ?tee ("ctr" :: args) with
+    match fst (Os.spawn ~stdout ~stderr:err ?tee "ctr" args) with
     | 0 -> 0
     | status -> (
         match transient () with
@@ -153,7 +158,7 @@ let run_cmd = Path.(scripts_dir / "run.cmd")
 let mounted ~parents ~scratch ~dir f =
   let () = Os.mkdir dir in
   let lflags = List.concat_map (fun p -> [ "-l"; p ]) parents in
-  (match Os.exec ~stdout:Os.null ([ "wclayer"; "mount" ] @ lflags @ [ scratch; dir ]) with
+  (match fst (Os.spawn ~stdout:Os.null "wclayer" ([ "mount" ] @ lflags @ [ scratch; dir ])) with
   | 0 -> ()
   | status ->
       OpamConsole.error "wclayer mount %s failed with status %d" scratch status;
@@ -163,7 +168,7 @@ let mounted ~parents ~scratch ~dir f =
      directory left behind is the mount, not an empty one. *)
   Cleanup.with_resource
     (fun () ->
-      match Os.exec ~stdout:Os.null [ "wclayer"; "unmount"; scratch; dir ] with
+      match fst (Os.spawn ~stdout:Os.null "wclayer" [ "unmount"; scratch; dir ]) with
       | 0 -> ( try Unix.rmdir dir with Unix.Unix_error (e, _, _) -> OpamConsole.warning "%s is still there after wclayer unmount: %s" dir (Unix.error_message e))
       | status -> OpamConsole.warning "wclayer unmount %s failed with status %d; the snapshot is still mounted at %s" scratch status dir)
     (fun () -> f dir)
@@ -231,11 +236,11 @@ let on_host dir path =
   else invalid_arg ("Windows.on_host: " ^ path)
 
 (* robocopy, whose status is a bit mask in which 8 and above is a failure.
-   Even with every listing turned off it prints a line, so what it says goes
-   to [log] and is shown only when it fails; day10 then stops, since a copy
-   that failed says nothing about the package. *)
+   What it says goes to [log] and is shown, with the command, only when it
+   fails; day10 then stops, since a copy that failed says nothing about the
+   package. *)
 let robocopy ~log src dst flags =
-  match Os.exec ~stdout:log ~stderr:log ([ "robocopy"; src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP" ]) with
+  match fst (Os.spawn ~stdout:log ~stderr:log "robocopy" ([ src; dst ] @ flags @ [ "/R:0"; "/W:0"; "/MT:8"; "/NFL"; "/NDL"; "/NJH"; "/NJS"; "/NP" ])) with
   | status when status < 8 -> ()
   | status ->
       OpamConsole.error "robocopy %s %s failed with status %d:\n%s" src dst status (Os.read_from_file log);
@@ -278,7 +283,7 @@ Walk ([IO.DirectoryInfo]$root)
 let clear_archive_bits ~temp_dir root =
   let script = Path.(temp_dir / "clear-archive.ps1") in
   let () = Os.write_to_file script clear_archive in
-  match Os.exec [ "powershell"; "-NoProfile"; "-NonInteractive"; "-ExecutionPolicy"; "Bypass"; "-File"; script; root ] with
+  match fst (Os.spawn "powershell" [ "-NoProfile"; "-NonInteractive"; "-ExecutionPolicy"; "Bypass"; "-File"; script; root ]) with
   | 0 -> ()
   | status ->
       OpamConsole.error "Clearing the archive attribute under %s failed with status %d" root status;
