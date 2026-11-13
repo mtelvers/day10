@@ -145,13 +145,18 @@ let job_script ~config ~network ~src command =
         "";
       ])
 
-(* Write the job onto the mounted clone and boot it, the job's output going
-   to the build log, and to the terminal when [tee].  The run's status is the
-   job's, or 125 when the VM failed rather than the job. *)
-let boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt command =
+(* Write the job onto the clone, which [mnt] must have mounted: done while the
+   clone is mounted to copy its inputs in, it costs no mount of its own. *)
+let write_job ~t ~temp_dir ~mnt ~network ~src command =
   let script = Path.(temp_dir / "job.sh") in
   let () = Os.write_to_file script (job_script ~config:t.config ~network ~src:(Option.is_some src) command) in
-  let () = mounted ~t ~dir:vm_dir ~mnt @@ fun () -> vm_exn ~t [ "job"; mnt; script ] in
+  vm_exn ~t [ "job"; mnt; script ]
+
+(* Boot the clone, whose disk must not be mounted, on the job written there,
+   the job's output going to the build log, and to the terminal when [tee].
+   The run's status is the job's, or 125 when the VM failed rather than the
+   job. *)
+let run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir =
   let shares = match src with None -> [] | Some dir -> [ "--share"; "src:" ^ dir ] in
   (* The VM is stopped however this scope ends, as Linux deletes its runc
      container.  The client stops it too when it goes, but nothing makes it go
@@ -161,6 +166,12 @@ let boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt c
   Cleanup.with_resource (fun () -> Os.quiet "sudo" [ t.vm; "stop"; name ]) @@ fun () ->
   Os.sudo ~stdout:build_log ~stderr:build_log ~tee ~append
     ([ t.vm; "run"; "--dir"; vm_dir; "--name"; name; "--hard-stop" ] @ (if network then [] else [ "--no-network" ]) @ shares)
+
+(* A later boot of a clone that is already set up, which mounts it only to
+   write the job. *)
+let boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt command =
+  let () = mounted ~t ~dir:vm_dir ~mnt @@ fun () -> write_job ~t ~temp_dir ~mnt ~network ~src command in
+  run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
 
 (* What a guest leaves in opam's root that is not part of a layer, as on the
    other platforms: locks, the environment and repository caches opam
@@ -184,18 +195,6 @@ let run ~t ~temp_dir opam_repository build_log =
   let vm_dir = Path.(temp_dir / "vm") and mnt = Path.(temp_dir / "mnt") and fs = Path.(temp_dir / "fs") in
   let () = Os.mkdir fs in
   let () = vm_exn ~t [ "clone"; t.image; vm_dir ] in
-  let () =
-    mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
-    let dst = Path.(mnt / inputs) in
-    let () = sh (Printf.sprintf "mkdir -p %s && ditto %s %s && cp %s %s/depexts" (Filename.quote dst) (Filename.quote opam_repository)
-                   (Filename.quote Path.(dst / "opam-repository")) (Filename.quote Path.(temp_dir / "depexts")) (Filename.quote dst)) in
-    (* A day10-install of the host's, until there is a release for macOS. *)
-    match Sys.getenv_opt "DAY10_INSTALL" with
-    | None -> ()
-    | Some binary ->
-        let bin = Path.(mnt / home / "bin") in
-        sh (Printf.sprintf "mkdir -p %s && cp %s %s/day10-install && chown -R %s %s" (Filename.quote bin) (Filename.quote binary) (Filename.quote bin) owner (Filename.quote bin))
-  in
   let input = "/" ^ inputs in
   let command =
     String.concat "\n"
@@ -213,9 +212,22 @@ let run ~t ~temp_dir opam_repository build_log =
         "opam switch create default --empty";
       ]
   in
-  let result =
-    boot ~t ~temp_dir ~build_log ~tee:config.log ~append:false ~name:(Filename.basename temp_dir) ~network:true ~src:None ~vm_dir ~mnt command
+  let () =
+    mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
+    let dst = Path.(mnt / inputs) in
+    let () = sh (Printf.sprintf "mkdir -p %s && ditto %s %s && cp %s %s/depexts" (Filename.quote dst) (Filename.quote opam_repository)
+                   (Filename.quote Path.(dst / "opam-repository")) (Filename.quote Path.(temp_dir / "depexts")) (Filename.quote dst)) in
+    (* A day10-install of the host's, until there is a release for macOS. *)
+    let () =
+      match Sys.getenv_opt "DAY10_INSTALL" with
+      | None -> ()
+      | Some binary ->
+          let bin = Path.(mnt / home / "bin") in
+          sh (Printf.sprintf "mkdir -p %s && cp %s %s/day10-install && chown -R %s %s" (Filename.quote bin) (Filename.quote binary) (Filename.quote bin) owner (Filename.quote bin))
+    in
+    write_job ~t ~temp_dir ~mnt ~network:true ~src:None command
   in
+  let result = run_vm ~t ~build_log ~tee:config.log ~append:false ~name:(Filename.basename temp_dir) ~network:true ~src:None ~vm_dir in
   let () =
     if result = 0 then
       mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
@@ -296,20 +308,28 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       sh (Printf.sprintf "rm -rf %s && ditto %s %s && chown -R %s %s" (Filename.quote repo) (Filename.quote Path.(temp_dir / "opam-repository"))
             (Filename.quote repo) owner (Filename.quote repo))
     in
+    (* The first phase's job, while the clone is mounted anyway.  Outside the
+       two trees, so the marker does not care when it is written. *)
+    let () =
+      let { network; command; _ } = List.hd phases in
+      write_job ~t ~temp_dir ~mnt ~network ~src:config.directory command
+    in
     sh ("touch " ^ Filename.quote Path.(mnt / marker))
   in
   (* Shown as it happens for the command the user asked for, as on Linux. *)
   let tee = Option.is_some config.build_command || config.log in
   let result =
     phases
-    |> List.mapi (fun index phase -> (index > 0, phase))
-    |> List.find_map (fun (append, { suffix; network; command }) ->
-           match
-             boot ~t ~temp_dir ~build_log ~tee ~append ~name:(Filename.basename temp_dir ^ suffix) ~network ~src:config.directory ~vm_dir ~mnt
-               command
-           with
-           | 0 -> None
-           | code -> Some code)
+    |> List.mapi (fun index phase -> (index, phase))
+    |> List.find_map (fun (index, { suffix; network; command }) ->
+           let name = Filename.basename temp_dir ^ suffix and append = index > 0 and src = config.directory in
+           let status =
+             (* The first phase's job is on the disk already; a later phase
+                mounts the clone to write its own. *)
+             if index = 0 then run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
+             else boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt command
+           in
+           match status with 0 -> None | code -> Some code)
     |> Option.value ~default:0
   in
   (* Everything in the two trees newer than the marker, but for what no layer
