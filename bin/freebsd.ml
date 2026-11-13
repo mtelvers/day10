@@ -8,6 +8,7 @@ let env ~(config : Config.t) =
   [
     ("HOME", "/home/opam");
     ("CI", "true");
+    ("OPAM_REPO_CI", "true");
     ("OPAMYES", "1");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");

@@ -39,6 +39,7 @@ let day10_install_url ~arch = "https://github.com/mtelvers/day10-install/release
 let env ~(config : Config.t) =
   [
     ("CI", "true");
+    ("OPAM_REPO_CI", "true");
     ("OPAMROOT", opam_root);
     ("TEMP", temp);
     ("TMP", temp);
