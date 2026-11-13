@@ -112,6 +112,7 @@ let env ~(config : Config.t) =
     ("PATH", "/Users/opam/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin");
     ("LANG", "en_US.UTF-8");
     ("CI", "true");
+    ("OPAM_REPO_CI", "true");
     ("OPAMYES", "1");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
