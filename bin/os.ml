@@ -247,9 +247,13 @@ let rec rm ?(recursive = false) path =
    is the user when day10 builds a project on their own machine.  [markers]
    keeps each layer's deletion markers in the result, which a lower layer of an
    overlay wants and an image cannot carry. *)
-let merge_layers ~markers ~layers ~target =
+let merge_layers ?(copy = false) ~markers ~layers ~target () =
   if layers <> [] then
-    match sudo ((Sys.executable_name :: "cp" :: (if markers then [] else [ "--no-markers" ])) @ ("--" :: target :: layers)) with
+    match
+      sudo
+        ((Sys.executable_name :: "cp" :: ((if markers then [] else [ "--no-markers" ]) @ if copy then [ "--copy" ] else []))
+        @ ("--" :: target :: layers))
+    with
     | 0 -> ()
     | code -> failwith (Printf.sprintf "merging %i layer(s) into %s exited with status %i" (List.length layers) target code)
 

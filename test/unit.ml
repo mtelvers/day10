@@ -633,10 +633,50 @@ let merge_makes_the_deletions () =
   (* No markers: the deletions are made and nothing is left to say so. *)
   && kind bare "g" = None && kind bare "d/a" = None && contents bare "d/c" = "c"
 
+(* Copied rather than hardlinked, the merge still gives the higher layer the
+   last word on what a path is.  Homebrew links a directory that one keg
+   provides as a single symlink, and makes it a directory of links once a
+   second keg adds to it, so the layer above has a directory where the layer
+   below has a symlink: copied onto a macOS guest's disk, that is what ditto
+   refused to do.  The other way round too, a symlink over a directory. *)
+let merge_copies_and_replaces_kinds () =
+  let root = scratch () in
+  let layer n path = Filename.concat (Filename.concat root (string_of_int n)) path in
+  let file path contents =
+    Os.mkdir ~parents:true (Filename.dirname path);
+    Os.write_to_file path contents
+  in
+  let link target path =
+    Os.mkdir ~parents:true (Filename.dirname path);
+    Unix.symlink target path
+  in
+  (* 1: gettext's keg, linked whole; and a directory p.
+     2: a second keg, and share/its now a directory of links to both; p now a
+        symlink. *)
+  file (layer 1 "Cellar/gettext/its/x") "x";
+  link "../Cellar/gettext/its" (layer 1 "share/its");
+  file (layer 1 "p/q") "q";
+  file (layer 2 "Cellar/glib/its/y") "y";
+  link "../../Cellar/gettext/its/x" (layer 2 "share/its/x");
+  link "../../Cellar/glib/its/y" (layer 2 "share/its/y");
+  link "share" (layer 2 "p");
+  let target = Filename.concat root "merged" in
+  Merge.layers ~copy:true ~markers:false ~target [ Filename.concat root "1"; Filename.concat root "2" ];
+  let kind path = match Unix.lstat (Filename.concat target path) with st -> Some st.st_kind | exception Unix.Unix_error (Unix.ENOENT, _, _) -> None in
+  kind "share/its" = Some S_DIR
+  && kind "share/its/x" = Some S_LNK
+  && Os.read_from_file (Filename.concat target "share/its/x") = "x"
+  && Os.read_from_file (Filename.concat target "share/its/y") = "y"
+  && kind "p" = Some S_LNK
+  && Unix.readlink (Filename.concat target "p") = "share"
+  (* Copied, not hardlinked. *)
+  && (Unix.stat (Filename.concat target "Cellar/glib/its/y")).st_ino <> (Unix.stat (layer 2 "Cellar/glib/its/y")).st_ino
+
 let checks =
   [
     ("lock reports the writer", lock_reports_the_writer);
     ("merge makes the deletions", merge_makes_the_deletions);
+    ("merge copies and replaces kinds", merge_copies_and_replaces_kinds);
     ("lock cleaned up after failure", lock_cleaned_up_after_failure);
     ("tree size allocates by block", tree_size_allocates_by_block);
     ("tree size counts a hardlink once", tree_size_counts_a_hardlink_once);

@@ -264,12 +264,21 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   in
   let () = vm_exn ~t [ "clone"; t.image; vm_dir ] in
   (* The base first, then the layers outwards from it: ordered_hashes runs
-     outwards from the package.  Each copy writes over the one before, so the
-     topmost layer has the last word on a path. *)
+     outwards from the package.  Each is merged over the one before, so the
+     topmost layer has the last word on a path, by Merge's rules, as on Linux:
+     a path that is a symlink beneath and a directory above becomes the
+     directory, which ditto refused to do.  Tree by tree, so that each tree's
+     own directory keeps the owner the guest gave it. *)
   let sources = "base" :: List.rev ordered_hashes in
   let () =
     mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
-    let () = List.iter (fun hash -> sh (Printf.sprintf "ditto %s %s" (Filename.quote Path.(config.dir / os_key / hash / "fs")) (Filename.quote mnt))) sources in
+    let () =
+      List.iter
+        (fun tree ->
+          let layers = List.filter Sys.file_exists (List.map (fun hash -> Path.(config.dir / os_key / hash / "fs" / tree)) sources) in
+          Os.merge_layers ~copy:true ~markers:false ~layers ~target:Path.(mnt / tree) ())
+        [ home; brew ]
+    in
     (* No one layer's switch state lists what the others installed: write one
        that lists them all. *)
     let () =

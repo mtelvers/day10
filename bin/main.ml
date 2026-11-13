@@ -623,7 +623,7 @@ let output (config : Config.t) results =
         let () = OpamConsole.note "Importing layers into Docker with tag: %s" tag in
         let temp_dir = Filename.temp_dir ~temp_dir:config.dir ~perms:0o755 "docker-import-" "" in
         let cp s d = [ "cp"; "--update=none"; "--archive"; "--no-dereference"; "--recursive"; "--link"; "--no-target-directory"; s; d ] in
-        let () = Os.merge_layers ~markers:false ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir in
+        let () = Os.merge_layers ~markers:false ~layers:(List.map (fun hash -> Path.(config.dir / os_key / hash / "fs")) ("base" :: List.rev layers)) ~target:temp_dir () in
         let () =
           match layers with
           | hash :: _ ->
@@ -1065,9 +1065,13 @@ let cp_cmd =
     in
     Arg.(value & flag & info [ "no-markers" ] ~doc)
   in
+  let copy_arg =
+    let doc = "Copy files and make symlinks again rather than hardlinking, for a target on another filesystem." in
+    Arg.(value & flag & info [ "copy" ] ~doc)
+  in
   let target_arg = Arg.(required & pos 0 (some string) None & info [] ~docv:"TARGET" ~doc:"The directory to flatten into, created if absent.") in
   let layers_arg = Arg.(non_empty & pos_right 0 string [] & info [] ~docv:"LAYER" ~doc:"A layer's filesystem, lowest first.") in
-  let cp_term = Term.(const (fun no_markers target layers -> Merge.layers ~markers:(not no_markers) ~target layers) $ no_markers_arg $ target_arg $ layers_arg) in
+  let cp_term = Term.(const (fun no_markers copy target layers -> Merge.layers ~copy ~markers:(not no_markers) ~target layers) $ no_markers_arg $ copy_arg $ target_arg $ layers_arg) in
   let cp_info =
     Cmd.info "cp" ~doc:"Flatten overlay layers into one directory, hardlinking"
       ~man:
