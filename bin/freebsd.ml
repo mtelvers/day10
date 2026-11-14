@@ -173,7 +173,7 @@ let run ~t ~temp_dir opam_repository build_log =
     ]
   in
   let result = logged (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
-  let () = if result = 0 then ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]) in
+  let () = if result = 0 then Os.quiet "sudo" [ "umount"; Path.(rootfs / "dev") ] in
   let _ = Os.sudo [ "chflags"; "-R"; "0"; rootfs ] in
   let argv =
     [ "touch /home/opam/.hushlogin"; "opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y"; "opam switch create default --empty" ]
@@ -182,8 +182,8 @@ let run ~t ~temp_dir opam_repository build_log =
   let result = logged (jail ~temp_dir ~rootfs ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
   let () =
     if result = 0 then (
-      ignore (Os.sudo [ "umount"; Path.(rootfs / "dev") ]);
-      ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]))
+      Os.quiet "sudo" [ "umount"; Path.(rootfs / "dev") ];
+      Os.quiet "sudo" [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ])
   in
   let _ = Os.sudo [ "rm"; "-rf"; Path.(rootfs / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment") ] in
   let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
@@ -283,7 +283,7 @@ let register_manifests ~t ~temp_dir ~root ordered_hashes =
     in
     let log = Path.(temp_dir / "pkg-register.log") in
     let _ = Os.sudo ~stdout:log ~stderr:log (jail ~temp_dir ~rootfs:root ~mounts:[] ~env:[] ~argv:[ script ] ~network:true ~username:None) in
-    ignore (Os.sudo [ "umount"; Path.(root / "dev") ]);
+    Os.quiet "sudo" [ "umount"; Path.(root / "dev") ];
     ignore (Os.sudo [ "rm"; "-rf"; Path.(root / staging) ])
   end
 
@@ -350,9 +350,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   (* Shown as it happens for the command the user asked for, as on Linux. *)
   let tee = Option.is_some config.build_command || config.log in
   let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee (jail ~temp_dir ~rootfs:root ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
+  (* Quietly, here and wherever a jail has run: jail(8) unmounts its devfs and
+     fstab mounts as it removes the jail, so these normally find nothing there
+     and say so in every build's log.  They are for a jail that left one. *)
   let () =
-    ignore (Os.sudo [ "umount"; Path.(root / "dev") ]);
-    ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ])
+    Os.quiet "sudo" [ "umount"; Path.(root / "dev") ];
+    Os.quiet "sudo" [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]
   in
   let prune = String.concat " -o " (List.map (fun path -> "-path " ^ Filename.quote path) excluded) in
   (* Every directory above each path goes too, each on its own, so that it keeps
