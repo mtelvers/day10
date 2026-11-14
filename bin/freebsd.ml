@@ -207,6 +207,10 @@ let excluded =
     Path.("." / "dev");
     Path.("." / "tmp");
     Path.("." / "var" / "tmp");
+    (* pkg's download cache and repository catalogues: what it fetched, not
+       what it installed. *)
+    Path.("." / "var" / "cache" / "pkg");
+    Path.("." / "var" / "db" / "pkg" / "repos");
     Path.("." / "home" / "opam" / ".opam" / "repo" / "default");
     Path.("." / "home" / "opam" / ".opam" / "repo" / "state-*.cache");
     Path.("." / "home" / "opam" / ".opam" / "log");
