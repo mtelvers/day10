@@ -190,67 +190,99 @@ let run ~t ~temp_dir opam_repository build_log =
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   result
 
+(* What a build writes that no layer keeps: scratch space, opam's sources,
+   build trees and caches, and the repository, which is the solution's.
+   Relative to the root, as find prints them there. *)
+let excluded =
+  let switch = Path.("." / "home" / "opam" / ".opam" / "default" / ".opam-switch") in
+  [
+    Path.("." / "dev");
+    Path.("." / "tmp");
+    Path.("." / "var" / "tmp");
+    Path.("." / "home" / "opam" / ".opam" / "repo" / "default");
+    Path.("." / "home" / "opam" / ".opam" / "repo" / "state-*.cache");
+    Path.("." / "home" / "opam" / ".opam" / "log");
+    Path.("." / "home" / "opam" / ".opam" / "download-cache");
+    Path.("." / "home" / "opam" / "src");
+    Path.(switch / "sources");
+    Path.(switch / "build");
+    Path.(switch / "packages" / "cache");
+    Path.(switch / "environment");
+  ]
+
+(* A build runs on a real directory, not a union: FreeBSD's unionfs will not
+   rename a directory over an empty one in its upper layer (EINVAL), which pkg
+   does when two packages in one transaction share a directory, and a union
+   mount often stays busy once the jail is gone.  As on macOS, the layers are
+   copied into one tree, a marker is touched, and the layer is what changed
+   after it.  Copied and not hard linked: pkg updates its SQLite database in
+   place, and through a link that is the cached layer's, and a link's change
+   time moves whenever any other build links or unlinks the same inode. *)
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
-  let lowerdir = Path.(temp_dir / "lower") in
-  let upperdir = Path.(temp_dir / "fs") in
-  let workdir = Path.(temp_dir / "work") in
-  let () = List.iter Os.mkdir [ lowerdir; upperdir; workdir ] in
+  let root = Path.(temp_dir / "root") in
+  let layer = Path.(temp_dir / "fs") in
+  let marker = Path.(temp_dir / "marker") in
+  let () = List.iter Os.mkdir [ root; layer ] in
   let argv =
     match config.build_command with
     | Some { run; _ } -> [ "cd src"; run ]
     | None -> Build_command.for_package ~config pkg
   in
+  (* Topmost first: tar -k leaves a path as the first layer to give it has it.
+     tar rather than cp, which would copy each of a file's hard links on its
+     own: /rescue alone would be some 3GB. *)
   let () =
     List.iter
       (fun hash ->
-        (* no directory target option on FreeBSD cp *)
         let dir = Path.(config.dir / os_key / hash / "fs") in
-        let dirs = Sys.readdir dir |> Array.to_list |> List.map (fun d -> Path.(dir / d)) in
-        ignore (Os.sudo ([ "cp"; "-n"; "-a"; "-R"; "-l" ] @ dirs @ [ lowerdir ])))
+        ignore (Os.sudo [ "sh"; "-c"; Printf.sprintf "tar -C %s -cf - . | tar -xpkf - -C %s" (Filename.quote dir) (Filename.quote root) ]))
       (ordered_hashes @ [ "base" ])
   in
+  (* No one layer's switch state lists what the others installed.  Given to
+     opam, since day10 writes it as itself. *)
   let () =
-    let packages_dir = Path.(lowerdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
-    let state_file = Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
-    if Sys.file_exists packages_dir then Opamh.dump_state packages_dir state_file
+    let packages_dir = Path.(root / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages") in
+    let state_file = Path.(root / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "switch-state") in
+    if Sys.file_exists packages_dir then begin
+      (* Not in temp_dir, which becomes the layer. *)
+      let scratch = Filename.temp_file "switch-state" "" in
+      Opamh.dump_state packages_dir scratch;
+      ignore (Os.sudo [ "install"; "-o"; string_of_int t.uid; "-g"; string_of_int t.gid; "-m"; "644"; scratch; state_file ]);
+      Sys.remove scratch
+    end
   in
-  let mounts =
-    [
-      { Mount.ty = "nullfs"; src = lowerdir; dst = "work"; options = [ "ro" ] };
-      { Mount.ty = "unionfs"; src = upperdir; dst = "work"; options = [ "rw" ] };
-      { ty = "nullfs"; src = Path.(temp_dir / "opam-repository"); dst = Path.("work" / "home" / "opam" / ".opam" / "repo" / "default"); options = [ "ro" ] };
-    ]
-  in
+  let mounts = [ { Mount.ty = "nullfs"; src = Path.(temp_dir / "opam-repository"); dst = Path.("root" / "home" / "opam" / ".opam" / "repo" / "default"); options = [ "ro" ] } ] in
   let mounts =
     match config.directory with
     | None -> mounts
-    | Some src ->
-        let () = ignore (Os.sudo [ "mkdir"; "-p"; Path.(upperdir / "home" / "opam" / "src") ]) in
-        mounts @ [ { ty = "nullfs"; src; dst = Path.("work" / "home" / "opam" / "src"); options = [ "rw" ] } ]
+    | Some src -> mounts @ [ { ty = "nullfs"; src; dst = Path.("root" / "home" / "opam" / "src"); options = [ "rw" ] } ]
   in
+  (* After the tree is made, so that everything in it is older: tar sets a
+     file's modification time from the archive, but its change time is when it
+     landed.  A second apart, since a change in the same second as the marker
+     would otherwise be lost to a coarse clock. *)
+  let () = Unix.sleep 1 in
+  let () = Os.write_to_file marker "" in
+  let () = Unix.sleep 1 in
   (* Shown as it happens for the command the user asked for, as on Linux. *)
   let tee = Option.is_some config.build_command || config.log in
-  let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee (jail ~temp_dir ~rootfs:workdir ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
+  let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee (jail ~temp_dir ~rootfs:root ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
   let () =
-    ignore (Os.sudo [ "umount"; Path.(workdir / "dev") ]);
+    ignore (Os.sudo [ "umount"; Path.(root / "dev") ]);
     ignore (Os.sudo [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ])
   in
-  let _ =
-    Os.sudo
-      [
-        "rm";
-        "-rf";
-        lowerdir;
-        workdir;
-        Path.(upperdir / "tmp");
-        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "sources");
-        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "build");
-        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
-        Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "environment");
-      ]
+  let prune = String.concat " -o " (List.map (fun path -> "-path " ^ Filename.quote path) excluded) in
+  (* Every directory above each path goes too, each on its own, so that it keeps
+     the owner and mode the build gave it; tar would make a missing one
+     root's.  In C order a directory comes before what is in it. *)
+  let parents = {|awk '{ n = split($0, part, "/"); path = part[1]; for (i = 2; i <= n; i++) { path = path "/" part[i]; print path } }'|} in
+  let collect =
+    Printf.sprintf "cd %s && find . \\( %s \\) -prune -o -newercm %s -print | %s | LC_ALL=C sort -u | tar --no-recursion -T - -cf - | tar -xpf - -C %s" (Filename.quote root) prune
+      (Filename.quote marker) parents (Filename.quote layer)
   in
-  let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(upperdir / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
+  let _ = Os.sudo [ "sh"; "-c"; collect ] in
+  let _ = Os.sudo [ "rm"; "-rf"; root; marker ] in
   result
 
