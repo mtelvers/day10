@@ -210,6 +210,83 @@ let excluded =
     Path.(switch / "environment");
   ]
 
+(* pkg keeps one database, /var/db/pkg/local.sqlite, and every layer that
+   installed system packages carries the whole of it, so putting layers
+   together leaves one layer's database standing and every package the others
+   installed unknown to pkg, which then installs them again.  As Cygwin's
+   installed.db is on Windows, the database is put back together on the host's
+   side: each layer keeps, beside its fs, a manifest of every package its build
+   added, and a build registers the manifests of its layers that the database
+   it was given does not list.  pkg register records a package whose files are
+   in place without touching them, and runs its scripts, which put back the
+   users and groups the other layers' packages made.  It runs in a jail on the
+   tree: with -r, pkg reads files and runs scripts on the host. *)
+let pkg_dir = "pkg"
+
+(* Name, version and whether pkg installed it as a dependency, as the tree's
+   database lists them. *)
+let pkg_installed root =
+  Os.capture ~check:false "sudo" [ "pkg"; "-o"; "PKG_DBDIR=" ^ Path.(root / "var" / "db" / "pkg"); "query"; "%n %v %a" ]
+  |> String.split_on_char '\n'
+  |> List.filter_map (fun line -> match String.split_on_char ' ' line with [ name; version; automatic ] -> Some (name, (version, automatic = "1")) | _ -> None)
+
+(* Every package the build added or changed: what the layer has to give a
+   database that does not list it. *)
+let save_manifests ~root ~before dir =
+  let db = "PKG_DBDIR=" ^ Path.(root / "var" / "db" / "pkg") in
+  let added = List.filter (fun (name, (version, _)) -> match List.assoc_opt name before with Some (v, _) -> v <> version | None -> true) (pkg_installed root) in
+  if added <> [] then begin
+    Os.mkdir dir;
+    List.iter
+      (fun (name, (_, automatic)) ->
+        (* An array of one, as pkg info writes it, which register does not read. *)
+        let manifest = match Yojson.Safe.from_string (Os.capture "sudo" [ "pkg"; "-o"; db; "info"; "-R"; "--raw-format"; "json"; name ]) with `List [ m ] -> m | m -> m in
+        Os.write_to_file Path.(dir / (name ^ ".json")) (Yojson.Safe.to_string manifest);
+        if automatic then Os.write_to_file Path.(dir / (name ^ ".automatic")) "")
+      added
+  end
+
+(* The manifests of the build's layers that the tree's database does not list,
+   topmost first so that, as for a file, the first layer to give a package has
+   it; registered in a jail as root, with what pkg says in the layer's
+   pkg-register.log. *)
+let register_manifests ~t ~temp_dir ~root ordered_hashes =
+  let config = t.config in
+  let os_key = Config.os_key ~config in
+  let known = pkg_installed root in
+  let manifests =
+    List.fold_left
+      (fun acc hash ->
+        let dir = Path.(config.dir / os_key / hash / pkg_dir) in
+        if not (Sys.file_exists dir) then acc
+        else
+          Sys.readdir dir |> Array.to_list |> List.sort String.compare
+          |> List.fold_left
+               (fun acc file ->
+                 if not (Filename.check_suffix file ".json") then acc
+                 else
+                   let name = Filename.chop_suffix file ".json" in
+                   if List.mem_assoc name acc || List.mem_assoc name known then acc else (name, (dir, Sys.file_exists Path.(dir / (name ^ ".automatic")))) :: acc)
+               acc)
+      [] ordered_hashes
+    |> List.rev
+  in
+  if manifests <> [] then begin
+    let staging = Path.("tmp" / "day10-pkg") in
+    let () = ignore (Os.sudo [ "mkdir"; "-p"; Path.(root / staging) ]) in
+    let () = List.iter (fun (name, (dir, _)) -> ignore (Os.sudo [ "cp"; Path.(dir / (name ^ ".json")); Path.(root / staging) ])) manifests in
+    let script =
+      List.map
+        (fun (name, (_, automatic)) -> Printf.sprintf "pkg register %s-M /%s/%s.json || echo 'day10: pkg register %s failed'" (if automatic then "-d " else "") staging name name)
+        manifests
+      |> String.concat "; "
+    in
+    let log = Path.(temp_dir / "pkg-register.log") in
+    let _ = Os.sudo ~stdout:log ~stderr:log (jail ~temp_dir ~rootfs:root ~mounts:[] ~env:[] ~argv:[ script ] ~network:true ~username:None) in
+    ignore (Os.sudo [ "umount"; Path.(root / "dev") ]);
+    ignore (Os.sudo [ "rm"; "-rf"; Path.(root / staging) ])
+  end
+
 (* A build runs on a real directory, not a union: FreeBSD's unionfs will not
    rename a directory over an empty one in its upper layer (EINVAL), which pkg
    does when two packages in one transaction share a directory, and a union
@@ -253,6 +330,10 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       Sys.remove scratch
     end
   in
+  (* Before the marker: what registering writes -- the database, the password
+     files -- is the layers' and not this build's. *)
+  let () = register_manifests ~t ~temp_dir ~root ordered_hashes in
+  let before = pkg_installed root in
   let mounts = [ { Mount.ty = "nullfs"; src = Path.(temp_dir / "opam-repository"); dst = Path.("root" / "home" / "opam" / ".opam" / "repo" / "default"); options = [ "ro" ] } ] in
   let mounts =
     match config.directory with
@@ -283,6 +364,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
       (Filename.quote marker) parents (Filename.quote layer)
   in
   let _ = Os.sudo [ "sh"; "-c"; collect ] in
+  let () = save_manifests ~root ~before Path.(temp_dir / pkg_dir) in
   let _ = Os.sudo [ "rm"; "-rf"; root; marker ] in
   result
 
