@@ -306,6 +306,9 @@ let write_run_cmd ~script commands =
        (String.concat "\r\n"
           [ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul"; "mkdir " ^ temp ^ " 2>nul"; "set PATH=%PATH%;" ^ opam_root; String.concat " && " commands; "exit /b %errorlevel%"; "" ]))
 
+(* The packages Cygwin's setup and pacman download. *)
+let download_caches root = [ Path.(root / ".cygwin" / "cache"); Path.(root / "msys64" / "var" / "cache" / "pacman") ]
+
 let run ~t ~temp_dir opam_repository build_log =
   let config = t.config in
   let module L = (val unix_layer ~config) in
@@ -336,7 +339,10 @@ let run ~t ~temp_dir opam_repository build_log =
         ])
   in
   (* All of it, empty directories too, since nothing came before. *)
-  let collect dir = robocopy ~log (on_host dir opam_root) rootfs [ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup ] in
+  let collect dir =
+    let root = on_host dir opam_root in
+    robocopy ~log root rootfs ([ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD" ] @ download_caches root)
+  in
   let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect in
   let () = L.keep ~temp_dir rootfs in
   let () = tidy ~config rootfs in
@@ -381,11 +387,13 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     write_run_cmd ~script:(scripts dir) (Build_command.for_package ~config pkg)
   in
   (* What the build wrote, leaving out the repository, which is the
-     solution's, and the sources and build trees, which no layer keeps. *)
+     solution's, and the sources, build trees and download caches, which no
+     layer keeps. *)
   let collect dir =
     let root = on_host dir opam_root in
     robocopy ~log root target
-      [ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
+      ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
+      @ download_caches root)
   in
   let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect in
   let () = L.keep ~temp_dir target in
