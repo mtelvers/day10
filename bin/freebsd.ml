@@ -175,6 +175,14 @@ let run ~t ~temp_dir opam_repository build_log =
   let result = logged (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
   let () = if result = 0 then Os.quiet "sudo" [ "umount"; Path.(rootfs / "dev") ] in
   let _ = Os.sudo [ "chflags"; "-R"; "0"; rootfs ] in
+  (* Every build logs in as opam with su -l, and the skeleton's .profile and
+     .login run fortune, which put a random tip in every build's log.  Commented
+     out as freebsd-infra's base image does; .hushlogin, below, keeps the motd
+     out too. *)
+  let _ =
+    Os.sudo
+      [ "sed"; "-i"; ""; "-e"; "s/^[^#]*fortune/# &/"; Path.(rootfs / "home" / "opam" / ".profile"); Path.(rootfs / "home" / "opam" / ".login") ]
+  in
   let argv =
     [ "touch /home/opam/.hushlogin"; "opam init -k local -a /home/opam/opam-repository --bare --disable-sandboxing -y"; "opam switch create default --empty" ]
   in
