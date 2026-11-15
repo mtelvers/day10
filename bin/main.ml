@@ -1108,6 +1108,20 @@ let cache_info_cmd =
   in
   Cmd.v cache_info_info cache_info_term
 
+(* Reclaim every [temp-*] directory a killed build left behind in the cache
+   root, running the host platform's teardown on each (an unmount, a snapshot
+   removal, then the delete). Only call it when nothing is building. *)
+let reclaim_temps ~dir =
+  if Sys.file_exists dir then
+    Sys.readdir dir
+    |> Array.to_list
+    |> List.filter (fun name -> String.length name >= 5 && String.equal (String.sub name 0 5) "temp-")
+    |> List.iter (fun name ->
+           let path = Filename.concat dir name in
+           if (try Sys.is_directory path with Sys_error _ -> false) then (
+             OpamConsole.note "Reclaiming orphaned temp directory %s" path;
+             Platform.reclaim_temp path))
+
 let prune_cmd =
   let days_arg =
     let doc = "Delete cache entries unused for more than $(docv) days." in
@@ -1145,27 +1159,38 @@ let prune_cmd =
     in
     Arg.(value & flag & info [ "base" ] ~doc)
   in
+  let temp_arg =
+    let doc =
+      "Reclaim the temp-* directories a killed build left in the cache, running the platform's teardown on each (an unmount, a snapshot \
+       removal) before deleting it.  Goes with any other prune mode or on its own, and runs after it.  Like --base, nothing may be building \
+       meanwhile, since it cannot tell a live temp directory from an abandoned one."
+    in
+    Arg.(value & flag & info [ "temp" ] ~doc)
+  in
   let prune_term =
     Term.(
-      const (fun dir distribution version arch np days percent max_size failed depexts base ->
+      const (fun dir distribution version arch np days percent max_size failed depexts base temp ->
+          (* [None]: no prune mode was asked for, which is an error only if --temp
+             was not either. *)
           let mode =
             match days, percent, max_size, failed, depexts, base with
-            | Some d, None, None, false, false, false when d >= 0 -> Cache.Keep_days d
-            | Some d, None, None, false, false, true when d >= 0 -> Cache.Rebase d
-            | None, Some p, None, false, false, false when p >= 0 && p <= 100 -> Cache.Keep_percent p
+            | Some d, None, None, false, false, false when d >= 0 -> Some (Cache.Keep_days d)
+            | Some d, None, None, false, false, true when d >= 0 -> Some (Cache.Rebase d)
+            | None, Some p, None, false, false, false when p >= 0 && p <= 100 -> Some (Cache.Keep_percent p)
             | None, None, Some size, false, false, false -> (
                 match Cache.size_of_string size with
-                | Some bytes when bytes >= 0 -> Cache.Max_size bytes
+                | Some bytes when bytes >= 0 -> Some (Cache.Max_size bytes)
                 | _ ->
                     OpamConsole.error "--max-size wants a size with a unit, such as 40G or 500M, not %S" size;
                     exit 1)
-            | None, None, None, true, false, false -> Cache.Failed
-            | None, None, None, false, true, false -> Cache.Depexts
+            | None, None, None, true, false, false -> Some Cache.Failed
+            | None, None, None, false, true, false -> Some Cache.Depexts
             | None, None, None, false, false, true ->
                 OpamConsole.error "--base wants --days N, the age beyond which a base image is replaced; 0 replaces every base in scope";
                 exit 1
+            | None, None, None, false, false, false when temp -> None
             | None, None, None, false, false, false ->
-                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts or --base --days N";
+                OpamConsole.error "Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts, --base --days N or --temp";
                 exit 1
             | Some _, None, None, false, false, _ ->
                 OpamConsole.error "--days must be >= 0";
@@ -1177,9 +1202,10 @@ let prune_cmd =
                 OpamConsole.error "--days, --percent, --max-size, --failed and --depexts are mutually exclusive; --base goes only with --days";
                 exit 1
           in
-          Cache.prune ~dir ~distribution ~version ~arch ?np mode)
+          (match mode with Some mode -> Cache.prune ~dir ~distribution ~version ~arch ?np mode | None -> ());
+          if temp then reclaim_temps ~dir)
       $ cache_dir_term $ distribution_arg $ version_arg $ arch_arg $ fork_term $ days_arg $ percent_arg $ max_size_arg $ failed_arg $ depexts_arg
-      $ base_arg)
+      $ base_arg $ temp_arg)
   in
   let prune_info =
     Cmd.info "prune"

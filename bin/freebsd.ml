@@ -50,6 +50,15 @@ let arch () = OpamSysPoll.arch OpamVariable.Map.empty |> Option.value ~default:(
 let remove = Os.sudo_rm
 let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
 
+(* A killed jail leaves the nullfs mounts it took from its fstab and the devfs
+   under its rootfs ([temp/fs]); unmount both before removing the tree, or rm
+   walks into a still-mounted filesystem. *)
+let reclaim_temp path =
+  let fstab = Path.(path / "fstab") in
+  if Sys.file_exists fstab then Os.quiet "sudo" [ "umount"; "-a"; "-f"; "-F"; fstab ];
+  Os.quiet "sudo" [ "umount"; "-f"; Path.(path / "fs" / "dev") ];
+  temp_dir path ()
+
 let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   let jailname = Filename.basename temp_dir in
   let fstab = Path.(temp_dir / "fstab") in

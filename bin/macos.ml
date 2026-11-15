@@ -76,6 +76,17 @@ let fork ?np f xs = Os.fork ~np:(min 2 (Option.value ~default:2 np)) f xs
 let remove = Os.sudo_rm
 let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
 
+(* A killed build may leave the clone's disk mounted at [temp/mnt]; stop anything
+   still writing there and detach it before the delete, or rm walks into the
+   guest's disk (see [mounted]). Best effort: [mounted] normally unmounts through
+   the VM helper, which reclaim does not have here, so if a disk is still
+   attached this falls back to diskutil. *)
+let reclaim_temp path =
+  let mnt = Path.(path / "mnt") in
+  Os.quiet "sudo" [ "pkill"; "-f"; "[" ^ String.sub mnt 0 1 ^ "]" ^ String.sub mnt 1 (String.length mnt - 1) ];
+  Os.quiet "sudo" [ "diskutil"; "unmount"; "force"; mnt ];
+  temp_dir path ()
+
 let vm ~t args = Os.sudo (t.vm :: args)
 
 let vm_exn ~t args =

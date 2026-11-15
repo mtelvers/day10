@@ -144,6 +144,13 @@ let ctr ?(stdout = Os.null) ?stderr ?tee args =
    Cleanup. *)
 let snapshot name () = ignore (ctr ~stdout:Os.null [ "snapshot"; "rm"; name ])
 
+(* A killed build leaves the snapshot it prepared, which ctr names after the temp
+   directory, so remove it before the directory. The NAT/hcn namespace a run
+   creates is not named after the temp dir, so it is not reclaimed here. *)
+let reclaim_temp path =
+  snapshot (Filename.basename path) ();
+  temp_dir path ()
+
 (* Where run.cmd, which carries the build, and the scripts it calls are put in
    the snapshot before the container starts: outside opam's root, so that no
    layer keeps them. *)

@@ -176,6 +176,30 @@ let fork = Os.fork
 let remove = Os.sudo_rm
 let temp_dir path () = if Sys.file_exists path then Os.quiet "sudo" [ "rm"; "-rf"; path ]
 
+(* The overlay a build mounts at [temp/rootfs], and any merge mount under it, are
+   still mounted if the build was killed, so [rm] would hit "Device or resource
+   busy". Unmount every mountpoint at or under [path], deepest first (a parent
+   will not unmount while a child is still on it), then delete the tree. The list
+   comes from /proc/self/mountinfo, whose fifth field is the mountpoint. *)
+let mounts_under path =
+  match Os.read_from_file "/proc/self/mountinfo" with
+  | exception _ -> []
+  | contents ->
+    String.split_on_char '\n' contents
+    |> List.filter_map (fun line ->
+           match String.split_on_char ' ' line with
+           | _ :: _ :: _ :: _ :: mp :: _ -> Some mp
+           | _ -> None)
+    |> List.filter (fun mp ->
+           String.equal mp path
+           || (String.length mp > String.length path
+               && String.equal (String.sub mp 0 (String.length path + 1)) (path ^ "/")))
+    |> List.sort (fun a b -> compare (String.length b) (String.length a))
+
+let reclaim_temp path =
+  List.iter (fun mp -> Os.quiet "sudo" [ "umount"; mp ]) (mounts_under path);
+  temp_dir path ()
+
 (* What a build holds, and how each is let go of when it ends: see Cleanup. *)
 let mount path () = if Os.sudo ~stdout:Os.null ~stderr:Os.null [ "mountpoint"; "-q"; path ] = 0 then Os.quiet "sudo" [ "umount"; path ]
 let runc_container name () = Os.quiet "sudo" [ "runc"; "delete"; "-f"; name ]

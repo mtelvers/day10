@@ -26,6 +26,13 @@ module type PLATFORM = sig
      Cleanup. *)
   val temp_dir : string -> Cleanup.t
 
+  (* Reclaim an orphaned [temp-*] directory a killed build left in the cache:
+     release whatever it still holds that a plain delete cannot -- a mounted
+     overlay, a container snapshot, a jail's mounts -- then remove it. Only safe
+     when nothing is building (the caller ensures it, as [prune --base] does),
+     since it does not know which temp dirs are live. *)
+  val reclaim_temp : string -> unit
+
   (* Run [f] over the list, in parallel where the platform can, up to [np] at
      a time. *)
   val fork : ?np:int -> ('a -> unit) -> 'a list -> unit
