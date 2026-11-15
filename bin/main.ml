@@ -447,7 +447,14 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
          knows which platform was asked for, so it does the matching and emits
          the marker on its own line; the failure above says which package. *)
       let accepted = Util.accept_failures (resolve_opam ctx pkg) in
-      if List.exists (fun p -> String.equal p (Config.platform ~config) || String.equal p config.os_distribution) accepted then OpamConsole.note "accept_failures";
+      let keys =
+        if String.equal config.os_family "windows" then
+          (* cygwin-mingw / msys2-mingw: bare cygwin is pure Cygwin, which day10
+             does not build. *)
+          [ config.os_distribution ^ "-mingw" ]
+        else [ Config.platform ~config; config.os_distribution ]
+      in
+      if List.exists (fun p -> List.mem p keys) accepted then OpamConsole.note "accept_failures";
       Failure hash
 
 let build ~repo config packages =
