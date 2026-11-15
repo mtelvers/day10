@@ -136,9 +136,12 @@ let zypper =
     add_user = useradd;
   }
 
+(* Arch has no partial upgrades: a package installed against a refreshed index
+   can want a library newer than the one the rest of the image has, so the
+   refresh upgrades the image with it. *)
 let pacman =
   {
-    update = "pacman -Sy --noconfirm";
+    update = "pacman -Syu --noconfirm";
     upgrade = "pacman -Su --noconfirm";
     install = (fun packages -> "pacman -S --noconfirm --needed " ^ packages);
     enable_repos = None;

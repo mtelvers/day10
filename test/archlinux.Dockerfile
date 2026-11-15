@@ -1,12 +1,12 @@
 FROM --platform=linux/amd64 archlinux:latest AS opam-builder
-RUN pacman -Sy --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl sudo diffutils libcap
+RUN pacman -Syu --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl sudo diffutils libcap
 RUN git clone --depth 1 --branch 2.4.1 https://github.com/ocaml/opam.git /tmp/opam
 WORKDIR /tmp/opam
 RUN make cold
 RUN make install
 
 FROM --platform=linux/amd64 archlinux:latest AS day10-install-builder
-RUN pacman -Sy --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl diffutils bubblewrap
+RUN pacman -Syu --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar git curl diffutils bubblewrap
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 RUN opam init --disable-sandboxing -a --bare -y
 ADD [ "https://api.github.com/repos/mtelvers/day10-install/git/refs/heads/master", "/tmp/day10-install.ref" ]
@@ -18,7 +18,7 @@ RUN install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install
 
 FROM --platform=linux/amd64 archlinux:latest
 COPY [ "depexts", "/tmp/depexts" ]
-RUN pacman -Sy --noconfirm && pacman -Su --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap && while read -r s; do [ -n "$s" ] || continue; pacman -Sw --noconfirm $s || for p in $s; do pacman -Sw --noconfirm $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
+RUN pacman -Syu --noconfirm && pacman -Su --noconfirm && pacman -S --noconfirm --needed gcc make patch unzip bzip2 tar xz git curl sudo rsync diffutils which bubblewrap && while read -r s; do [ -n "$s" ] || continue; pacman -Sw --noconfirm $s || for p in $s; do pacman -Sw --noconfirm $p || true; done; done < /tmp/depexts && rm -rf /tmp/depexts /tmp/prefetch
 COPY --from=opam-builder [ "/usr/local/bin/opam", "/usr/local/bin/opam" ]
 COPY --from=day10-install-builder [ "/usr/local/bin/day10-install", "/usr/local/bin/day10-install" ]
 RUN if getent passwd 1000; then userdel -r $(id -nu 1000); fi
