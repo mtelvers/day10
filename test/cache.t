@@ -120,7 +120,7 @@ The modes are mutually exclusive, and one is required.
   [ERROR] --days, --percent, --max-size, --failed and --depexts are mutually exclusive; --base goes only with --days
   [1]
   $ day10 prune --cache-dir prune-size
-  [ERROR] Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts or --base --days N
+  [ERROR] Specify one of --days N, --percent N, --max-size SIZE, --failed, --depexts, --base --days N or --temp
   [1]
 
 A failed layer is kept so its verdict can be replayed without rebuilding, which
