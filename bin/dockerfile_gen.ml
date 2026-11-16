@@ -37,7 +37,7 @@ let day10_install ~(dist : Dist.t) ~arch base_image =
   @@ add ~src:[ "https://api.github.com/repos/mtelvers/day10-install/git/refs/heads/master" ] ~dst:"/tmp/day10-install.ref" ()
   @@ run "git clone --depth 1 --branch master https://github.com/mtelvers/day10-install.git /tmp/day10-install"
   @@ workdir "/tmp/day10-install"
-  @@ run "opam switch create . 5.3.0 --deps-only -y"
+  @@ run "opam switch create . 4.14.4 --deps-only -y"
   @@ run "opam exec -- dune build --release"
   @@ run "install -m 755 _build/default/bin/main.exe /usr/local/bin/day10-install"
 
