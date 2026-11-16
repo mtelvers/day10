@@ -672,8 +672,33 @@ let merge_copies_and_replaces_kinds () =
   (* Copied, not hardlinked. *)
   && (Unix.stat (Filename.concat target "Cellar/glib/its/y")).st_ino <> (Unix.stat (layer 2 "Cellar/glib/its/y")).st_ino
 
+(* An interrupt that arrives while a resource is being released on the normal
+   path has to reach day10 once the release is done.  It used to be discarded,
+   and a cancelled build ran on until it was killed outright, leaving its VM's
+   disk mounted and its temp directory in the cache.  Windows cannot send
+   itself SIGINT with Unix.kill, so there the check passes without running. *)
+let a_signal_during_a_release_is_held () =
+  Sys.win32
+  ||
+  let () = Cleanup.install () in
+  let released = ref false in
+  let outcome =
+    match
+      Cleanup.with_resource
+        (fun () ->
+          Unix.kill (Unix.getpid ()) Sys.sigint;
+          released := true)
+        Fun.id
+    with
+    | () -> None
+    | exception e -> Some (Cleanup.reason e)
+  in
+  List.iter (fun (signal, _) -> Sys.set_signal signal Sys.Signal_default) Cleanup.signals;
+  !released && outcome = Some (Cleanup.Killed 2)
+
 let checks =
   [
+    ("a signal during a release is held", a_signal_during_a_release_is_held);
     ("lock reports the writer", lock_reports_the_writer);
     ("merge makes the deletions", merge_makes_the_deletions);
     ("merge copies and replaces kinds", merge_copies_and_replaces_kinds);

@@ -34,12 +34,22 @@ let signals = if Sys.win32 then [ (Sys.sigint, 2); (Sys.sigterm, 15) ] else [ (S
 (* Releasing must not itself be interrupted.  It waits for children of its own,
    which is a safe point where a pending signal would raise, and a finaliser
    that raises becomes Fun.Finally_raised, losing the original reason and
-   skipping whatever cleanup was still to come.  A second signal is therefore
-   ignored until we are done; SIGKILL remains available to anyone who means
-   it. *)
+   skipping whatever cleanup was still to come.  A signal that arrives meanwhile
+   is therefore held, and delivered to whichever handler it would have reached
+   once the release has finished.  Discarding it instead lost the interrupt
+   whenever it landed during a release on the normal path, and day10 carried on
+   building until it was killed outright, with nothing released.  During the
+   unwinding the handler has already set every signal to be ignored, and a held
+   signal is dropped as it would have been.  SIGKILL remains available to anyone
+   who means it. *)
 let uninterruptible f =
-  let previous = List.map (fun (signal, _) -> (signal, Sys.signal signal Sys.Signal_ignore)) signals in
-  Fun.protect ~finally:(fun () -> List.iter (fun (signal, behaviour) -> Sys.set_signal signal behaviour) previous) f
+  let held = ref None in
+  let hold signal = if Option.is_none !held then held := Some signal in
+  let previous = List.map (fun (signal, _) -> (signal, Sys.signal signal (Sys.Signal_handle hold))) signals in
+  let v = Fun.protect ~finally:(fun () -> List.iter (fun (signal, behaviour) -> Sys.set_signal signal behaviour) previous) f in
+  match Option.map (fun signal -> (signal, List.assoc signal previous)) !held with
+  | Some (signal, Sys.Signal_handle handler) -> handler signal; v
+  | Some (_, (Sys.Signal_default | Sys.Signal_ignore)) | None -> v
 
 (* A pending signal can fire at the very start of the finaliser, before
    uninterruptible has masked anything, and the release is then skipped.  On
