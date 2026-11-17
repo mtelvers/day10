@@ -255,6 +255,11 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
            or have changed, as the other bases do. *)
         {|opam option --global 'archive-mirrors="https://opam.ocaml.org/cache"'|};
         "opam switch create default --empty";
+        (* Homebrew's download cache filled with every depext the repository
+           names for this platform, as the Linux bases fill their package
+           manager's: a set that fails as a whole is fetched a formula at a
+           time, so that the rest are still fetched. *)
+        Printf.sprintf {|while read -r s; do [ -n "$s" ] || continue; brew fetch --deps $s || for p in $s; do brew fetch --deps $p || true; done; done < %s/depexts|} input;
       ]
   in
   let () =
@@ -273,13 +278,18 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
     write_job ~t ~temp_dir ~mnt ~network:true ~src:None command
   in
   let result = run_vm ~t ~build_log ~tee:config.log ~append:false ~name:(Filename.basename temp_dir) ~network:true ~src:None ~vm_dir in
+  (* The base is the disk the job ran on, as a Linux base is the container's
+     whole filesystem: every build boots a clone of it, so what the base
+     installed and fetched is in place without being copied.  Its two trees are
+     kept in fs as well, as a layer's are. *)
   let () =
     if result = 0 then
       mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
-      sh (Printf.sprintf "cd %s && tar -cf - %s %s | tar -xpf - -C %s" (Filename.quote mnt) home brew (Filename.quote fs))
+      let () = sh (Printf.sprintf "cd %s && tar -cf - %s %s | tar -xpf - -C %s" (Filename.quote mnt) home brew (Filename.quote fs)) in
+      let () = tidy mnt in
+      sh ("rm -rf " ^ Filename.quote Path.(mnt / inputs))
   in
-  let () = if result = 0 then tidy fs in
-  let () = sh ("rm -rf " ^ Filename.quote vm_dir) in
+  let () = if result = 0 then tidy fs else sh ("rm -rf " ^ Filename.quote vm_dir) in
   result
 
 (* One boot, except when tests were asked for: then the package installs in one
@@ -319,14 +329,19 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
           ]
         else [ { suffix = ""; network = true; command = command ~with_test:false () } ]
   in
-  let () = vm_exn ~t [ "clone"; t.image; vm_dir ] in
-  (* The base first, then the layers outwards from it: ordered_hashes runs
-     outwards from the package.  Each is merged over the one before, so the
-     topmost layer has the last word on a path, by Merge's rules, as on Linux:
-     a path that is a symlink beneath and a directory above becomes the
-     directory, which ditto refused to do.  Tree by tree, so that each tree's
-     own directory keeps the owner the guest gave it. *)
-  let sources = "base" :: List.rev ordered_hashes in
+  (* A clone of the base's disk, which has the base in it already.  A base
+     built before bases kept their disk has only its trees, which go in first
+     over a clone of the image, as a layer's do. *)
+  let base_vm = Path.(config.dir / os_key / "base" / "vm") in
+  let from_base = Sys.file_exists Path.(base_vm / "config.json") in
+  let () = vm_exn ~t [ "clone"; (if from_base then base_vm else t.image); vm_dir ] in
+  (* The layers outwards from the base: ordered_hashes runs outwards from the
+     package.  Each is merged over the one before, so the topmost layer has the
+     last word on a path, by Merge's rules, as on Linux: a path that is a
+     symlink beneath and a directory above becomes the directory, which ditto
+     refused to do.  Tree by tree, so that each tree's own directory keeps the
+     owner the guest gave it. *)
+  let sources = (if from_base then [] else [ "base" ]) @ List.rev ordered_hashes in
   let () =
     mounted ~t ~dir:vm_dir ~mnt @@ fun () ->
     let () =
