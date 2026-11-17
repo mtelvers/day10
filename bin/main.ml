@@ -837,18 +837,21 @@ let os_family_term =
   Arg.(value & opt (some string) None & info [ "os-family" ] ~env ~docv:"OS_FAMILY" ~doc)
 
 let os_version_term =
-  let doc = "OS version (default: the host's when the distribution is the host's; latest for Arch)" in
+  let doc = "OS version (default: for Homebrew, the newest macOS image in the cache's images directory; otherwise the host's when the distribution is the host's; latest for Arch)" in
   let env = Cmd.Env.info "DAY10_OS_VERSION" in
   Arg.(value & opt (some string) None & info [ "os-version" ] ~env ~docv:"OS_VERSION" ~doc)
 
-let os_version_for ~os_distribution given =
+(* For Homebrew the version is the guest's, which is the newest image in the
+   cache unless one is asked for: see Macos.images. *)
+let os_version_for ?dir ~os_distribution given =
   let host =
     ( OpamSysPoll.os_distribution OpamVariable.Map.empty |> Option.value ~default:"debian",
       OpamSysPoll.os_version OpamVariable.Map.empty |> Option.value ~default:"13" )
   in
-  match Config.version ~host ~distribution:os_distribution given with
-  | Some version -> version
-  | None ->
+  let image = match (given, dir) with None, Some dir when String.equal os_distribution "homebrew" -> Macos.newest_image_version ~dir | _ -> None in
+  match (image, Config.version ~host ~distribution:os_distribution given) with
+  | Some version, _ | None, Some version -> version
+  | None, None ->
       OpamConsole.error "--os-version is needed for %s: the host's version belongs to %s" os_distribution (fst host);
       exit 1
 
@@ -900,7 +903,7 @@ let opam_jobs_term =
 let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
     ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
-  let os_version = os_version_for ~os_distribution os_version in
+  let os_version = os_version_for ~dir ~os_distribution os_version in
   let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
   let directory = Unix.realpath directory in
   let found = find_local_packages directory |> List.map fst in
@@ -997,7 +1000,7 @@ let ci_cmd =
   let ci_term =
     Term.(
       const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs prefetch_base ->
-          let os_version = os_version_for ~os_distribution os_version in
+          let os_version = os_version_for ~dir ~os_distribution os_version in
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
           let package_names = find_local_packages directory |> List.map fst in
@@ -1044,7 +1047,7 @@ let health_check_cmd =
   let health_check_term =
     Term.(
       const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs prefetch_base ->
-          let os_version = os_version_for ~os_distribution os_version in
+          let os_version = os_version_for ~dir ~os_distribution os_version in
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_health_check_multi

@@ -48,9 +48,33 @@ let find_in_path name =
   Option.bind (Sys.getenv_opt "PATH") @@ fun path ->
   String.split_on_char ':' path |> List.find_map (fun dir -> let file = Path.(dir / name) in if Sys.file_exists file then Some file else None)
 
+(* The images builds boot, one per macOS version, as day10-vm install makes
+   them: images/macos-15.6.1 and so on, in the cache directory.  The guest's
+   version, not the host's, is what a build sees and what keys its layers, so
+   updating the host leaves the cache where it was. *)
+let images ~dir = Path.(dir / "images")
+let image_dir ~dir version = Path.(images ~dir / ("macos-" ^ version))
+
+let image_versions ~dir =
+  match Sys.readdir (images ~dir) with
+  | entries ->
+      Array.to_list entries
+      |> List.filter_map (fun entry ->
+             match String.split_on_char '-' entry with
+             | [ "macos"; version ] when Sys.file_exists Path.(images ~dir / entry / "config.json") -> Some version
+             | _ -> None)
+  | exception Sys_error _ -> []
+
+let newest_image_version ~dir = List.fold_left (fun newest version -> match newest with Some v when OpamVersionCompare.compare v version >= 0 -> newest | _ -> Some version) None (image_versions ~dir)
+
 let init ~(config : Config.t) =
   let os_key = Config.os_key ~config in
-  let image = Path.(config.dir / os_key / "image") in
+  (* An image kept in the platform's own directory is where one was kept
+     before images had a directory of their own. *)
+  let image =
+    let shared = image_dir ~dir:config.dir config.os_version in
+    if Sys.file_exists Path.(shared / "config.json") then shared else Path.(config.dir / os_key / "image")
+  in
   let vm =
     match Option.fold ~none:(find_in_path "day10-vm") ~some:Option.some (Sys.getenv_opt "DAY10_VM") with
     | Some vm -> vm
@@ -58,7 +82,8 @@ let init ~(config : Config.t) =
   in
   if not (Sys.file_exists Path.(image / "config.json")) then
     OpamConsole.error_and_exit `Configuration_error
-      "There is no macOS image for %s at %s: make one with day10-vm install and image/setup.sh, and put it there" os_key image;
+      "There is no macOS image for %s at %s: make one with day10-vm install and image/setup.sh, and put it there" os_key
+      (image_dir ~dir:config.dir config.os_version);
   { config; vm; image }
 
 let deinit ~t:_ = ()

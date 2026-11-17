@@ -697,8 +697,26 @@ let a_signal_during_a_release_is_held () =
   List.iter (fun (signal, _) -> Sys.set_signal signal Sys.Signal_default) Cleanup.signals;
   !released && outcome = Some (Cleanup.Killed 2)
 
+(* The cache keys a macOS build on its guest, the newest image in images/,
+   which a version compared as text would get wrong: 9.0 sorts after 15.6.1.
+   A directory without the image's config.json is not an image. *)
+let newest_image_is_the_guest () =
+  let dir = scratch () in
+  let image version config =
+    let d = Filename.concat (Filename.concat dir "images") ("macos-" ^ version) in
+    Os.mkdir ~parents:true d;
+    if config then Os.write_to_file (Filename.concat d "config.json") "{}"
+  in
+  let before = Macos.newest_image_version ~dir in
+  image "9.0" true;
+  image "15.6.1" true;
+  image "27.2.1" true;
+  image "30.0" false;
+  before = None && Macos.newest_image_version ~dir = Some "27.2.1"
+
 let checks =
   [
+    ("newest image is the guest", newest_image_is_the_guest);
     ("a signal during a release is held", a_signal_during_a_release_is_held);
     ("lock reports the writer", lock_reports_the_writer);
     ("merge makes the deletions", merge_makes_the_deletions);
