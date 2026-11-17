@@ -20,22 +20,47 @@
    upstream is found here as it would be by opam. *)
 let mirror = "https://opam.ocaml.org/cache"
 
-let entry ~cache hash = String.concat "/" (cache :: OpamHash.to_path hash)
+(* A source's place in a cache laid out as opam's, under [root]: a directory
+   here or a URL such as [mirror]. *)
+let path root hash = String.concat "/" (root :: OpamHash.to_path hash)
 
 let is_vcs url = match (OpamFile.URL.url url).OpamUrl.backend with #OpamUrl.version_control -> true | `http | `rsync -> false
 
-let curl ~log ~output url =
-  fst (Os.spawn ~stdout:log ~stderr:log ~append:true "curl" [ "--fail"; "--silent"; "--show-error"; "--location"; "--max-time"; "900"; "--output"; output; url ]) = 0
+(* Downloads go through opam's own downloader, so day10 fetches the way opam
+   would on the same machine: curl where there is one, otherwise fetch on
+   FreeBSD, ftp on OpenBSD and wget elsewhere.  OPAMFETCH overrides it as it
+   does opam -- a command with %{url}% and %{out}% in it, fetcher download for
+   one -- read here because day10 does not load opam's environment table. *)
+let configure =
+  lazy
+    (match Sys.getenv_opt "OPAMFETCH" with
+    | None | Some "" -> ()
+    | Some s ->
+        let args = List.map (fun a -> (OpamTypes.CString a, None)) (OpamStd.String.split s ' ') in
+        OpamRepositoryConfig.update ~download_tool:(lazy (args, `Default)) ())
+
+let download ~log url dst =
+  Lazy.force configure;
+  try
+    OpamDownload.download_as ~quiet:true ~overwrite:true url (OpamFilename.of_string dst) |> OpamProcess.Job.run;
+    true
+  with
+  | OpamDownload.Download_fail (s, l) ->
+      Os.append_to_file log (Printf.sprintf "day10: %s: %s\n" (OpamUrl.to_string url) (Option.value ~default:l s));
+      false
+  | Failure m | Sys_error m ->
+      Os.append_to_file log (Printf.sprintf "day10: %s: %s\n" (OpamUrl.to_string url) m);
+      false
 
 (* Store [file] under every checksum.  opam asks a mirror for the first one
    only, but which comes first is the opam file's business. *)
 let store ~cache file hashes =
   List.iteri
     (fun i h ->
-      let e = entry ~cache h in
+      let e = path cache h in
       if not (Sys.file_exists e) then begin
         Os.mkdir ~parents:true (Filename.dirname e);
-        if i = 0 then Unix.rename file e else Unix.link (entry ~cache (List.hd hashes)) e
+        if i = 0 then Unix.rename file e else Unix.link (path cache (List.hd hashes)) e
       end)
     hashes
 
@@ -45,12 +70,13 @@ let store ~cache file hashes =
 let stage_url ~cache ~log url =
   if is_vcs url then None
   else
-    let urls = List.map OpamUrl.to_string (OpamFile.URL.url url :: OpamFile.URL.mirrors url) in
     let hashes = OpamFile.URL.checksum url in
+    let urls =
+      (OpamFile.URL.url url :: OpamFile.URL.mirrors url) @ List.filter_map (fun h -> OpamUrl.parse_opt (path mirror h)) hashes
+    in
     let tmp = Filename.temp_file ~temp_dir:cache ".fetch-" "" in
-    let mirrors = List.map (fun h -> String.concat "/" (mirror :: OpamHash.to_path h)) hashes in
-    let attempt u = curl ~log ~output:tmp u && List.for_all (OpamHash.check_file tmp) hashes in
-    if List.exists attempt (urls @ mirrors) then begin
+    let attempt u = download ~log u tmp && List.for_all (OpamHash.check_file tmp) hashes in
+    if List.exists attempt urls then begin
       Unix.chmod tmp 0o644;
       let hashes = if hashes = [] then [ OpamHash.compute ~kind:`SHA256 tmp ] else hashes in
       store ~cache tmp hashes;
