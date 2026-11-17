@@ -212,12 +212,16 @@ let run ~t ~temp_dir opam_repository build_log =
       failwith
         (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
 
-(* One container, except when tests were asked for: then the package installs in
-   one and its tests run in a second that has no network, so that suites on a
-   busy machine cannot meet each other's ports.  The second needs none -- the
-   first left the depexts installed and the sources in the download cache, and
-   both write into the same upper directory. *)
+(* A package is built with no network: its sources are fetched on the host
+   and staged in the build's copy of the repository (Source_stage), and its
+   depexts come from the base, whose package manager cache holds every one the
+   repository names.  One container, except when tests were asked for: then
+   the tests run in a second, starting from the installed package, and both
+   write into the same upper directory. *)
 type phase = { suffix : string; network : bool; command : string }
+
+(* Where the build's copy of the repository is mounted, below. *)
+let repo_in_container = "/home/opam/.opam/repo/default"
 
 let build ~t ~temp_dir build_log pkg ordered_hashes =
   let config = t.config in
@@ -234,10 +238,14 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
         let command ?reinstall ~with_test () = String.concat " && " (Build_command.for_package ~config ?reinstall ~with_test pkg) in
         if Build_command.tests_requested ~config pkg then
           [
-            { suffix = ""; network = true; command = command ~with_test:false () };
+            { suffix = ""; network = false; command = command ~with_test:false () };
             { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () };
           ]
-        else [ { suffix = ""; network = true; command = command ~with_test:false () } ]
+        else [ { suffix = ""; network = false; command = command ~with_test:false () } ]
+  in
+  let () =
+    if Option.is_none config.build_command then
+      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_container ^ "/cache") ~log:build_log pkg
   in
   (* Reversed: ordered_hashes runs outwards from the package, and a layer has
      to go on after the ones it was built on top of. *)
@@ -280,7 +288,7 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
   Cleanup.with_resource (mount rootfsdir) @@ fun () ->
   let mounts =
     [
-      { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = "/home/opam/.opam/repo/default"; options = [ "rbind"; "rprivate" ] };
+      { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = repo_in_container; options = [ "rbind"; "rprivate" ] };
       { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
     ]
   in
@@ -308,11 +316,12 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     Os.sudo ?stdin:(container_stdin ()) ~stdout:build_log ~stderr:build_log ~tee ~append [ "runc"; "run"; "-b"; temp_dir; container ]
   in
   (* Stop at the first failure and report it: testing after a failed install
-     would only bury it.  Phases after the first append, so the log is the whole
-     build rather than its last part. *)
+     would only bury it.  Every phase appends once the log exists -- staging
+     the sources may have started it -- so the log is the whole build rather
+     than its last part. *)
   let result =
     phases
-    |> List.mapi (fun index phase -> (index > 0, phase))
+    |> List.mapi (fun index phase -> (index > 0 || Sys.file_exists build_log, phase))
     |> List.find_map (fun (append, phase) -> match run_phase ~append phase with 0 -> None | code -> Some code)
     |> Option.value ~default:0
   in
