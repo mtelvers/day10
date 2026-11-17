@@ -192,7 +192,16 @@ let stage_vcs ~cache ~log ~name url =
         (* The commit, not an annotated tag's own object. *)
         let revision = git ~work [ "rev-parse"; "FETCH_HEAD^{commit}" ] in
         let tree = tree_with_submodules ~work ~remote revision in
-        let _ = git ~work [ "archive"; "--format=tar.gz"; "--prefix=" ^ name ^ "/"; "--output=" ^ tmp; tree ] in
+        (* Every entry dated the commit's own time: always in the past, even
+           to a container whose clock is behind the host's, and the same tar
+           every time.  An archive of the commit gets that by itself; one of a
+           tree with submodules grafted in would be dated now without
+           --mtime. *)
+        let source =
+          if tree = git ~work [ "rev-parse"; revision ^ "^{tree}" ] then [ revision ]
+          else [ "--mtime=@" ^ git ~work [ "show"; "--no-patch"; "--format=%ct"; revision ]; tree ]
+        in
+        let _ = git ~work ([ "archive"; "--format=tar.gz"; "--prefix=" ^ name ^ "/"; "--output=" ^ tmp ] @ source) in
         let kept = keep ~cache tmp [] in
         let placeholder = OpamUrl.parse ("https://day10.invalid/" ^ name ^ ".tar.gz") in
         Some
