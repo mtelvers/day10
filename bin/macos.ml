@@ -193,7 +193,7 @@ let write_job ~t ~temp_dir ~mnt ~network ~src command =
    the job's output going to the build log, and to the terminal when [tee].
    The run's status is the job's, or 125 when the VM failed rather than the
    job. *)
-let run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir =
+let run_vm ~hard_stop ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir =
   let shares = match src with None -> [] | Some dir -> [ "--share"; "src:" ^ dir ] in
   (* The VM is stopped however this scope ends, as Linux deletes its runc
      container.  The client stops it too when it goes, but nothing makes it go
@@ -202,13 +202,13 @@ let run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir =
      just deleted.  Stopping the VM ends the client's run, so it exits. *)
   Cleanup.with_resource (fun () -> Os.quiet "sudo" [ t.vm; "stop"; name ]) @@ fun () ->
   Os.sudo ~stdout:build_log ~stderr:build_log ~tee ~append
-    ([ t.vm; "run"; "--dir"; vm_dir; "--name"; name; "--hard-stop" ] @ (if network then [] else [ "--no-network" ]) @ shares)
+    ([ t.vm; "run"; "--dir"; vm_dir; "--name"; name ] @ (if hard_stop then [ "--hard-stop" ] else []) @ (if network then [] else [ "--no-network" ]) @ shares)
 
 (* A later boot of a clone that is already set up, which mounts it only to
    write the job. *)
 let boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt command =
   let () = mounted ~t ~dir:vm_dir ~mnt @@ fun () -> write_job ~t ~temp_dir ~mnt ~network ~src command in
-  run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
+  run_vm ~hard_stop:true ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
 
 (* What a guest leaves in opam's root that is not part of a layer, as on the
    other platforms: locks, the environment and repository caches opam
@@ -277,7 +277,10 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
     in
     write_job ~t ~temp_dir ~mnt ~network:true ~src:None command
   in
-  let result = run_vm ~t ~build_log ~tee:config.log ~append:false ~name:(Filename.basename temp_dir) ~network:true ~src:None ~vm_dir in
+  (* Shut down by the guest, not stopped once the job reports as a build is: a
+     build's disk is thrown away, but this one is kept and every build boots a
+     clone of it, so its volumes are left as macOS leaves them. *)
+  let result = run_vm ~hard_stop:false ~t ~build_log ~tee:config.log ~append:false ~name:(Filename.basename temp_dir) ~network:true ~src:None ~vm_dir in
   (* The base is the disk the job ran on, as a Linux base is the container's
      whole filesystem: every build boots a clone of it, so what the base
      installed and fetched is in place without being copied.  Its two trees are
@@ -386,7 +389,7 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
            let status =
              (* The first phase's job is on the disk already; a later phase
                 mounts the clone to write its own. *)
-             if index = 0 then run_vm ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
+             if index = 0 then run_vm ~hard_stop:true ~t ~build_log ~tee ~append ~name ~network ~src ~vm_dir
              else boot ~t ~temp_dir ~build_log ~tee ~append ~name ~network ~src ~vm_dir ~mnt command
            in
            match status with 0 -> None | code -> Some code)
