@@ -88,8 +88,79 @@ let stage_archive ~cache ~log url =
     None
   end
 
+(* Git, run in [work], a bare repository.  Failure when it fails. *)
+let git ~work ?stdin args = String.trim (Os.capture ?stdin "git" ([ "-C"; work ] @ args))
+
+let split0 s = List.filter (fun x -> x <> "") (String.split_on_char '\000' s)
+
+(* A submodule's URL from the .gitmodules of [commit], made absolute: a
+   relative one is relative to the [remote] it was fetched from, as git takes
+   it. *)
+let submodule_url ~work ~remote commit path =
+  let blob = commit ^ ":.gitmodules" in
+  let name =
+    split0 (git ~work [ "config"; "--blob"; blob; "--null"; "--get-regexp"; {|^submodule\..*\.path$|} ])
+    |> List.find_map (fun kv ->
+           match String.index_opt kv '\n' with
+           | Some i when String.sub kv (i + 1) (String.length kv - i - 1) = path ->
+               let key = String.sub kv 0 i in
+               Some (String.sub key 10 (String.length key - 10 - 5))
+           | _ -> None)
+  in
+  match name with
+  | None -> failwith (Printf.sprintf "no .gitmodules entry for %s" path)
+  | Some name ->
+      let url = git ~work [ "config"; "--blob"; blob; "--get"; "submodule." ^ name ^ ".url" ] in
+      let rec up base rel =
+        if String.starts_with ~prefix:"../" rel then up (Filename.dirname base) (String.sub rel 3 (String.length rel - 3))
+        else if String.starts_with ~prefix:"./" rel then up base (String.sub rel 2 (String.length rel - 2))
+        else base ^ "/" ^ rel
+      in
+      if String.starts_with ~prefix:"../" url || String.starts_with ~prefix:"./" url then up remote url else url
+
+(* [tree] with the entry at [path] -- a submodule's gitlink -- replaced by
+   [subtree], rebuilding each tree above it.  Built from objects with mktree:
+   the index would want a work tree, which a bare repository has not. *)
+let rec graft ~work tree path subtree =
+  let name, rest = match String.index_opt path '/' with None -> (path, None) | Some i -> (String.sub path 0 i, Some (String.sub path (i + 1) (String.length path - i - 1))) in
+  let entries =
+    split0 (git ~work [ "ls-tree"; "-z"; tree ])
+    |> List.map (fun line ->
+           match String.index_opt line '\t' with
+           | Some i when String.sub line (i + 1) (String.length line - i - 1) = name -> (
+               match rest with
+               | None -> "040000 tree " ^ subtree ^ "\t" ^ name
+               | Some rest ->
+                   let child = List.nth (String.split_on_char ' ' (String.sub line 0 i)) 2 in
+                   "040000 tree " ^ graft ~work child rest subtree ^ "\t" ^ name)
+           | _ -> line)
+  in
+  let input = Filename.temp_file "day10-mktree-" "" in
+  Fun.protect ~finally:(fun () -> try Sys.remove input with Sys_error _ -> ()) @@ fun () ->
+  Os.write_to_file input (String.concat "" (List.map (fun e -> e ^ "\000") entries));
+  git ~work ~stdin:input [ "mktree"; "-z" ]
+
+(* The tree of [commit] with every submodule in it, at the commit its gitlink
+   pins, fetched one deep from the URL its .gitmodules gives, and so on down. *)
+let rec tree_with_submodules ~work ~remote commit =
+  let gitlinks =
+    split0 (git ~work [ "ls-tree"; "-r"; "-z"; commit ])
+    |> List.filter_map (fun line ->
+           match (String.split_on_char ' ' line, String.index_opt line '\t') with
+           | "160000" :: _ :: sha :: _, Some i -> Some (String.sub sha 0 (String.index sha '\t'), String.sub line (i + 1) (String.length line - i - 1))
+           | _ -> None)
+  in
+  List.fold_left
+    (fun tree (sha, path) ->
+      let url = submodule_url ~work ~remote commit path in
+      let _ = git ~work [ "fetch"; "--quiet"; "--depth"; "1"; url; sha ] in
+      graft ~work tree path (tree_with_submodules ~work ~remote:url sha))
+    (git ~work [ "rev-parse"; commit ^ "^{tree}" ])
+    gitlinks
+
 (* A git source is fetched, one commit deep, into a bare repository -- a
-   branch, a tag or a commit, or HEAD when the URL names none -- and git
+   branch, a tag or a commit, or HEAD when the URL names none -- with its
+   submodules grafted in where opam would have checked them out, and git
    archive writes it as a tar.gz straight from the objects, so nothing is
    checked out and .git is never in it.  gzip, not plain tar: the cache entry
    has no extension, and opam tells an archive's type from its first bytes,
@@ -108,36 +179,28 @@ let stage_vcs ~cache ~log ~name url =
   | `hg | `darcs -> fail "only git sources can be staged"
   | `http | `rsync -> fail "not a VCS source"
   | `git -> (
-      (* A bare repository: git archive writes the tar from the objects, so
-         nothing is checked out. *)
       let work = Filename.temp_dir "day10-git-" "" in
       Fun.protect ~finally:(fun () -> OpamFilename.rmdir (OpamFilename.Dir.of_string work)) @@ fun () ->
-      let git args = fst (Os.spawn ~stdout:log ~stderr:log ~append:true "git" ([ "-C"; work ] @ args)) = 0 in
-      (* Ignore the tree's export-ignore and export-subst attributes, which
-         would make the tar differ from the checkout opam would have used. *)
-      let refspec = Option.value ~default:"HEAD" u.OpamUrl.hash in
-      if not (git [ "init"; "--bare"; "--quiet" ]) then fail "git init failed"
-      else
-        let () = Os.write_to_file Path.(work / "info" / "attributes") "* -export-ignore -export-subst\n" in
-        if not (git [ "fetch"; "--quiet"; "--depth"; "1"; OpamUrl.base_url u; refspec ]) then fail ("git fetch of " ^ refspec ^ " failed")
-        else
-          (* The commit, not an annotated tag's own object. *)
-          let revision = String.trim (Os.capture "git" [ "-C"; work; "rev-parse"; "FETCH_HEAD^{commit}" ]) in
-          (* git archive leaves submodules out, where opam would have checked
-             them out: refuse rather than build from part of the source. *)
-          if fst (Os.spawn ~stdout:Os.null ~stderr:Os.null "git" [ "-C"; work; "cat-file"; "-e"; revision ^ ":.gitmodules" ]) = 0 then fail (revision ^ " has submodules, which git archive leaves out")
-          else
-            let tmp = Filename.temp_file ~temp_dir:cache ".fetch-" ".tar.gz" in
-            if not (git [ "archive"; "--format=tar.gz"; "--prefix=" ^ name ^ "/"; "--output=" ^ tmp; revision ]) then begin
-              (try Sys.remove tmp with Sys_error _ -> ());
-              fail "git archive failed"
-            end
-            else
-              let kept = keep ~cache tmp [] in
-              let placeholder = OpamUrl.parse ("https://day10.invalid/" ^ name ^ ".tar.gz") in
-              Some
-                ( url |> OpamFile.URL.with_url placeholder |> OpamFile.URL.with_checksum kept,
-                  Printf.sprintf "as git archive of %s (%s)" revision (OpamHash.to_string (List.hd kept)) ))
+      let remote = OpamUrl.base_url u and refspec = Option.value ~default:"HEAD" u.OpamUrl.hash in
+      let tmp = Filename.temp_file ~temp_dir:cache ".fetch-" ".tar.gz" in
+      try
+        let _ = git ~work [ "init"; "--bare"; "--quiet" ] in
+        (* Ignore the tree's export-ignore and export-subst attributes, which
+           would make the tar differ from the checkout opam would have used. *)
+        Os.write_to_file Path.(work / "info" / "attributes") "* -export-ignore -export-subst\n";
+        let _ = git ~work [ "fetch"; "--quiet"; "--depth"; "1"; remote; refspec ] in
+        (* The commit, not an annotated tag's own object. *)
+        let revision = git ~work [ "rev-parse"; "FETCH_HEAD^{commit}" ] in
+        let tree = tree_with_submodules ~work ~remote revision in
+        let _ = git ~work [ "archive"; "--format=tar.gz"; "--prefix=" ^ name ^ "/"; "--output=" ^ tmp; tree ] in
+        let kept = keep ~cache tmp [] in
+        let placeholder = OpamUrl.parse ("https://day10.invalid/" ^ name ^ ".tar.gz") in
+        Some
+          ( url |> OpamFile.URL.with_url placeholder |> OpamFile.URL.with_checksum kept,
+            Printf.sprintf "as git archive of %s (%s)" revision (OpamHash.to_string (List.hd kept)) )
+      with Failure m | Sys_error m ->
+        (try Sys.remove tmp with Sys_error _ -> ());
+        fail m)
 
 (* Stage one source, returning the URL the build's opam file should give for
    it -- unchanged, given a checksum, or a placeholder for a packed checkout --

@@ -165,8 +165,8 @@ let retry_rename ?(tries = 10) src dst =
    complaint. *)
 (* [check:false] is for a command whose failure is an answer rather than a
    fault, such as asking git whether a revision exists. *)
-let capture ?(check = true) prog args =
-  match spawn ~capture:true prog args with
+let capture ?(check = true) ?stdin prog args =
+  match spawn ?stdin ~capture:true prog args with
   | 0, output -> output
   | _, output when not check -> output
   | code, _ -> failwith (Printf.sprintf "%s exited with status %i" prog code)
