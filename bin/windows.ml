@@ -316,7 +316,7 @@ let write_run_cmd ~script commands =
 (* The packages Cygwin's setup and pacman download. *)
 let download_caches root = [ Path.(root / ".cygwin" / "cache"); Path.(root / "msys64" / "var" / "cache" / "pacman") ]
 
-let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
+let run ~t ~temp_dir ~depexts opam_repository build_log =
   let config = t.config in
   let module L = (val unix_layer ~config) in
   let rootfs = Path.(temp_dir / "fs") in
@@ -343,13 +343,15 @@ let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
           opam_exe ^ {| option --global archive-mirrors=\"https://opam.ocaml.org/cache\"|};
           opam_exe ^ " switch create default --empty";
           "curl.exe --fail -L -o " ^ Path.(opam_root / "day10-install.exe") ^ " " ^ day10_install_url ~arch:config.arch;
+          (* A script of its own, ending in success, so that a depext that
+             cannot be fetched is left without failing the base. *)
+          "call " ^ script "prefetch.cmd" (String.concat "\r\n" ([ "@echo off" ] @ L.prefetch ~opam_root depexts @ [ "exit /b 0"; "" ]));
         ])
   in
-  (* All of it, empty directories too, since nothing came before. *)
-  let collect dir =
-    let root = on_host dir opam_root in
-    robocopy ~log root rootfs ([ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD" ] @ download_caches root)
-  in
+  (* All of it, empty directories too, since nothing came before, and the
+     download caches with it, which hold the depexts the base fetched.  A
+     layer leaves them out. *)
+  let collect dir = robocopy ~log (on_host dir opam_root) rootfs [ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup ] in
   let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect in
   let () = L.keep ~temp_dir rootfs in
   let () = tidy ~config rootfs in

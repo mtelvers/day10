@@ -50,3 +50,14 @@ let init_options ~opam_root = " --cygwin-location " ^ root ~opam_root
 let assemble ~layers:_ ~target:_ = ()
 let keep ~temp_dir:_ _ = ()
 let discard _ = []
+
+(* pacman -Sw into its own cache, which opam's pacman -Su then installs from
+   without refreshing: a set at a time, and a package at a time when the set
+   fails. *)
+let prefetch ~opam_root sets =
+  let fetch names = Path.(root ~opam_root / "usr" / "bin" / "pacman.exe") ^ " -Sw --noconfirm " ^ String.concat " " names in
+  List.map
+    (fun set ->
+      let names = List.map OpamSysPkg.to_string (OpamSysPkg.Set.elements set) in
+      match names with [ _ ] -> fetch names | _ -> fetch names ^ " || (" ^ String.concat " & " (List.map (fun n -> fetch [ n ]) names) ^ ")")
+    sets

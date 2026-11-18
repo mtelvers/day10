@@ -47,3 +47,35 @@ let assemble ~layers ~target =
   Os.write_to_file db (union (List.map (fun layer -> Os.read_from_file Path.(layer / "installed.db")) layers))
 let keep ~temp_dir root = Os.cp (installed_db root) Path.(temp_dir / "installed.db")
 let discard root = [ installed_db root ]
+
+(* setup --download into opam's own Cygwin cache, from opam's mirror -- the
+   cache keeps a directory per site, so it has to be the one opam installs
+   from -- a set at a time, and a package at a time when the set fails.
+
+   Whether a build can then install from it with no network is not yet known:
+   opam runs setup with --site and without --local-install, which may want
+   the mirror's setup.ini.  opam fetching setup-x86_64.exe again first is no
+   bar: when that fails it warns and keeps the one it has. *)
+let mirror = "https://cygwin.mirror.constant.com/"
+
+let prefetch ~opam_root sets =
+  let cygwin = Path.(opam_root / ".cygwin") in
+  let fetch names =
+    String.concat " "
+      [
+        Path.(cygwin / "setup-x86_64.exe");
+        "--root";
+        Path.(cygwin / "root");
+        "--arch x86_64 --only-site --site";
+        mirror;
+        "--local-package-dir";
+        Path.(cygwin / "cache");
+        "--download --quiet-mode noinput --no-admin --no-desktop --no-shortcuts --no-startmenu --no-write-registry --no-version-check --packages";
+        String.concat "," names;
+      ]
+  in
+  List.map
+    (fun set ->
+      let names = List.map OpamSysPkg.to_string (OpamSysPkg.Set.elements set) in
+      match names with [ _ ] -> fetch names | _ -> fetch names ^ " || (" ^ String.concat " & " (List.map (fun n -> fetch [ n ]) names) ^ ")")
+    sets

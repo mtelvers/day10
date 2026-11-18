@@ -63,4 +63,10 @@ module type UNIX_LAYER = sig
 
   (* What to remove from opam's [root] besides opam's own locks and caches. *)
   val discard : string -> string list
+
+  (* cmd lines the base runs after opam init to fetch each set of depexts
+     into the package manager's cache, without installing them.  The base
+     runs them as a script of their own, so a line that fails does not stop
+     the rest. *)
+  val prefetch : opam_root:string -> OpamSysPkg.Set.t list -> string list
 end

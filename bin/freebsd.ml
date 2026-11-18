@@ -119,7 +119,7 @@ let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   let () = Os.write_to_file conf_file conf in
   [ "jail"; "-f"; conf_file; "-c"; jailname ]
 
-let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
+let run ~t ~temp_dir ~depexts opam_repository build_log =
   let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in
@@ -173,12 +173,35 @@ let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
   let day10_install = Path.(rootfs / "usr" / "bin" / "day10-install") in
   let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.4.0/day10-install-1.4.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
   let _ = Os.sudo [ "chmod"; "+x"; day10_install ] in
+  (* Every depext into pkg's cache, so a build installs from it with no
+     network: a set at a time, as an install asks for it, and a package at a
+     time when the set fails.  A script in the jail, rather than in the jail's
+     command, where jail.conf would take a $ for one of its own variables.
+     pkg is then told not to refresh its catalogue, which the base keeps, so
+     opam's pkg install finds what was fetched against it. *)
+  let prefetch = "/tmp/day10-prefetch.sh" in
+  let () =
+    let fetch names = "pkg fetch -y -d " ^ String.concat " " names in
+    let lines =
+      List.map
+        (fun set ->
+          let names = List.map OpamSysPkg.to_string (OpamSysPkg.Set.elements set) in
+          match names with [ _ ] -> fetch names | _ -> fetch names ^ " || { " ^ String.concat "; " (List.map (fun n -> fetch [ n ]) names) ^ "; }")
+        depexts
+    in
+    let script = Path.(temp_dir / "prefetch.sh") in
+    Os.write_to_file script (String.concat "\n" (lines @ [ "exit 0"; "" ]));
+    ignore (Os.sudo [ "cp"; script; rootfs ^ prefetch ])
+  in
   let argv =
     [
       "pw groupadd opam -g " ^ string_of_int t.gid;
       "pw useradd -m -n opam -g opam -u " ^ string_of_int t.uid ^ " -h - -c opam";
       "pkg install -y sudo gmake git patch rsync bash zstd pkgconf";
       {|echo "opam ALL=(ALL:ALL) NOPASSWD:ALL" > /usr/local/etc/sudoers.d/opam|};
+      "sh " ^ prefetch;
+      "rm " ^ prefetch;
+      "echo 'REPO_AUTOUPDATE = false;' >> /usr/local/etc/pkg.conf";
     ]
   in
   let result = logged (jail ~temp_dir ~rootfs ~mounts:[] ~env:[] ~argv ~network:true ~username:None) in
