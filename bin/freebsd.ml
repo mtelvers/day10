@@ -119,7 +119,7 @@ let jail ~temp_dir ~rootfs ~mounts ~env ~argv ~network ~username =
   let () = Os.write_to_file conf_file conf in
   [ "jail"; "-f"; conf_file; "-c"; jailname ]
 
-let run ~t ~temp_dir opam_repository build_log =
+let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
   let config = t.config in
   let rootfs = Path.(temp_dir / "fs") in
   let () = Os.mkdir rootfs in

@@ -204,10 +204,10 @@ let reclaim_temp path =
 let mount path () = if Os.sudo ~stdout:Os.null ~stderr:Os.null [ "mountpoint"; "-q"; path ] = 0 then Os.quiet "sudo" [ "umount"; path ]
 let runc_container name () = Os.quiet "sudo" [ "runc"; "delete"; "-f"; name ]
 
-let run ~t ~temp_dir opam_repository build_log =
+let run ~t ~temp_dir ~depexts opam_repository build_log =
   let config = t.config in
   match Dist.of_config ~os_family:config.os_family ~distribution:config.os_distribution ~version:config.os_version with
-  | Some dist -> Docker.build ~config ~dist ~temp_dir opam_repository build_log t.uid t.gid
+  | Some dist -> Docker.build ~config ~dist ~temp_dir ~depexts opam_repository build_log t.uid t.gid
   | None ->
       failwith
         (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)

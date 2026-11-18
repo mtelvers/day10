@@ -12,7 +12,7 @@ let remove = List.iter (Os.rm ~recursive:true)
 let temp_dir path () = if Sys.file_exists path then try Os.rm ~recursive:true path with Unix.Unix_error _ | Sys_error _ -> ()
 let reclaim_temp path = temp_dir path ()
 
-let run ~t:_ ~temp_dir:_ _opam_repository _build_log = 0
+let run ~t:_ ~temp_dir:_ ~depexts:_ _opam_repository _build_log = 0
 
 let build ~t ~temp_dir _build_log _pkg ordered_hashes =
   let config = t.config in

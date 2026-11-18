@@ -2,11 +2,13 @@
    see Cleanup. *)
 let container name () = Os.quiet "sudo" [ "docker"; "rm"; "-f"; name ]
 
-let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir _opam_repository build_log uid gid =
+let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir ~depexts _opam_repository build_log uid gid =
   let base_image = Dist.base_image ~arch:config.arch ~distribution:config.os_distribution ~version:config.os_version in
   let dockerfile = Dockerfile_gen.dockerfile ~dist ~arch:config.arch ~base_image ~uid ~gid in
   let dockerfile_path = Path.(temp_dir / "Dockerfile") in
   let () = Os.write_to_file dockerfile_path (Dockerfile.string_of_t dockerfile) in
+  (* In the build context, for the Dockerfile's prefetch to COPY. *)
+  let () = Util.write_depexts Path.(temp_dir / "depexts") depexts in
   let tag = Printf.sprintf "day10-%s:%s" config.os_distribution config.os_version in
   (* --pull because the default is to prefer whatever the builder has already
      cached for the tag, so a base image can otherwise be rebuilt from a

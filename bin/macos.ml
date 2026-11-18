@@ -202,10 +202,11 @@ let untidy =
 let tidy fs =
   sh (String.concat " " ([ "rm -rf" ] @ List.map (fun path -> Filename.quote Path.(fs / path)) untidy @ [ Filename.quote Path.(fs / opam_root / "repo") ^ "/*.cache" ]))
 
-let run ~t ~temp_dir opam_repository build_log =
+let run ~t ~temp_dir ~depexts opam_repository build_log =
   let config = t.config in
   let vm_dir = Path.(temp_dir / "vm") and mnt = Path.(temp_dir / "mnt") and fs = Path.(temp_dir / "fs") in
   let () = Os.mkdir fs in
+  let () = Util.write_depexts Path.(temp_dir / "depexts") depexts in
   let () = vm_exn ~t [ "clone"; t.image; vm_dir ] in
   let input = "/" ^ inputs in
   let command =
@@ -217,6 +218,13 @@ let run ~t ~temp_dir opam_repository build_log =
         Printf.sprintf "[ -x ~/bin/day10-install ] || { curl --fail -sSL -o ~/bin/day10-install %s && chmod +x ~/bin/day10-install; }" day10_install_url;
         {|NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"|};
         "brew --version";
+        (* Every depext into Homebrew's cache, which the base keeps, so a build
+           installs from it with no network.  A set at a time, as an install
+           asks for it, and a formula at a time when the set fails, one of its
+           names being unknown, so that the rest are still fetched. *)
+        Printf.sprintf
+          {|while read -r s; do [ -n "$s" ] || continue; brew fetch --deps $s || for p in $s; do brew fetch --deps $p || true; done; done < %s/depexts|}
+          input;
         Printf.sprintf "opam init -k local -a %s/opam-repository --bare --disable-sandboxing -y" input;
         (* Fall back to opam's cache when a package's upstream sources are gone
            or have changed, as the other bases do. *)

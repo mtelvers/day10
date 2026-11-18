@@ -9,8 +9,12 @@ module type PLATFORM = sig
   val deinit : t:t -> unit
   val config : t:t -> Config.t
 
-  (* Build the base image into temp_dir/fs. *)
-  val run : t:t -> temp_dir:string -> string -> string -> int
+  (* Build the base image into temp_dir/fs, from the opam repository, logging
+     to the build log.  [depexts] are the sets of system packages the
+     repository names for this platform: the base fetches them into the
+     package manager's cache, so that a build installs any of them with no
+     network. *)
+  val run : t:t -> temp_dir:string -> depexts:OpamSysPkg.Set.t list -> string -> string -> int
 
   (* Build one package's layer into temp_dir/fs, on the layers named. *)
   val build : t:t -> temp_dir:string -> string -> OpamPackage.t -> string list -> int

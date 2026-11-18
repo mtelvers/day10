@@ -182,6 +182,12 @@ let depexts_for ~vars opam =
   |> List.filter (fun (_, filter) -> OpamFilter.eval_to_bool ~default:false vars filter)
   |> List.fold_left (fun acc (names, _) -> OpamSysPkg.Set.union acc names) OpamSysPkg.Set.empty
 
+(* Sets of depexts as a file for a base build's shell to read: a set to a line,
+   its names separated by spaces. *)
+let write_depexts path sets =
+  let line set = String.concat " " (List.map OpamSysPkg.to_string (OpamSysPkg.Set.elements set)) in
+  Os.write_to_file path (String.concat "\n" (List.sort_uniq String.compare (List.map line sets)) ^ "\n")
+
 (* What day10 takes a layer to be.  Not opam's effective_part, which answers
    whether two opam files yield the same package in a switch and so discards
    depexts -- day10 installs those as part of the layer.  Built from empty so

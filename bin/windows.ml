@@ -316,7 +316,7 @@ let write_run_cmd ~script commands =
 (* The packages Cygwin's setup and pacman download. *)
 let download_caches root = [ Path.(root / ".cygwin" / "cache"); Path.(root / "msys64" / "var" / "cache" / "pacman") ]
 
-let run ~t ~temp_dir opam_repository build_log =
+let run ~t ~temp_dir ~depexts:_ opam_repository build_log =
   let config = t.config in
   let module L = (val unix_layer ~config) in
   let rootfs = Path.(temp_dir / "fs") in
