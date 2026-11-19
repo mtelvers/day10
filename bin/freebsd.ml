@@ -339,17 +339,33 @@ let register_manifests ~t ~temp_dir ~root ordered_hashes =
    after it.  Copied and not hard linked: pkg updates its SQLite database in
    place, and through a link that is the cached layer's, and a link's change
    time moves whenever any other build links or unlinks the same inode. *)
-let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
+(* As on Linux, a package is built with no network: its sources are fetched on
+   the host and staged in the build's copy of the repository (Source_stage).
+   A package with depexts first has them installed in a jail of its own with
+   the network, by opam and pkg alone, before anything of the package's own
+   has run; one with none never has the network.  Both jails run on the same
+   tree, after the marker, so the layer has what each wrote.  The tests run in
+   the build's jail: it has no network either. *)
+let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
   let root = Path.(temp_dir / "root") in
   let layer = Path.(temp_dir / "fs") in
   let marker = Path.(temp_dir / "marker") in
   let () = List.iter Os.mkdir [ root; layer ] in
-  let argv =
+  (* Each a jail: whether it has the network, and its commands. *)
+  let phases =
     match config.build_command with
-    | Some { run; _ } -> [ "cd src"; run ]
-    | None -> Build_command.for_package ~config pkg
+    | Some { run; network } -> [ (network, [ "cd src"; run ]) ]
+    | None ->
+        let depexts =
+          if OpamSysPkg.Set.is_empty depexts then [] else [ (true, Build_command.for_package ~config ~depexts_only:true ~with_test:false pkg) ]
+        in
+        depexts @ [ (false, Build_command.for_package ~config pkg) ]
+  in
+  let () =
+    if Option.is_none config.build_command then
+      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:"file:///home/opam/.opam/repo/default/cache" ~log:build_log pkg
   in
   (* Topmost first: tar -k leaves a path as the first layer to give it has it.
      tar rather than cp, which would copy each of a file's hard links on its
@@ -393,14 +409,18 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
   let () = Unix.sleep 1 in
   (* Shown as it happens for the command the user asked for, as on Linux. *)
   let tee = Option.is_some config.build_command || config.log in
-  let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee (jail ~temp_dir ~rootfs:root ~mounts ~env:(env ~config) ~argv ~network:true ~username:(Some "opam")) in
-  (* Quietly, here and wherever a jail has run: jail(8) unmounts its devfs and
-     fstab mounts as it removes the jail, so these normally find nothing there
-     and say so in every build's log.  They are for a jail that left one. *)
-  let () =
+  (* Appended, since staging may have started the log; stopping at the first
+     jail that fails. *)
+  let run_phase (network, argv) =
+    let result = Os.sudo ~stdout:build_log ~stderr:build_log ~tee ~append:true (jail ~temp_dir ~rootfs:root ~mounts ~env:(env ~config) ~argv ~network ~username:(Some "opam")) in
+    (* Quietly, here and wherever a jail has run: jail(8) unmounts its devfs and
+       fstab mounts as it removes the jail, so these normally find nothing there
+       and say so in every build's log.  They are for a jail that left one. *)
     Os.quiet "sudo" [ "umount"; Path.(root / "dev") ];
-    Os.quiet "sudo" [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ]
+    Os.quiet "sudo" [ "umount"; "-a"; "-f"; "-F"; Path.(temp_dir / "fstab") ];
+    result
   in
+  let result = List.fold_left (fun result phase -> if result = 0 then run_phase phase else result) 0 phases in
   let prune = String.concat " -o " (List.map (fun path -> "-path " ^ Filename.quote path) excluded) in
   (* Every directory above each path goes too, each on its own, so that it keeps
      the owner and mode the build gave it; tar would make a missing one
