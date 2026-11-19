@@ -213,17 +213,20 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
         (Printf.sprintf "Unsupported OS family '%s' for Linux container. Currently supported: debian, fedora, alpine, suse, arch" config.os_family)
 
 (* A package is built with no network: its sources are fetched on the host
-   and staged in the build's copy of the repository (Source_stage), and its
-   depexts come from the base, whose package manager cache holds every one the
-   repository names.  One container, except when tests were asked for: then
-   the tests run in a second, starting from the installed package, and both
-   write into the same upper directory. *)
+   and staged in the build's copy of the repository (Source_stage).  A package
+   with depexts first has them installed in a container of their own with the
+   network, by opam and the package manager alone, before anything of the
+   package's own has run; one with none never has the network.  The tests,
+   when asked for, run in a container after the build, starting from the
+   installed package.  All of them write into the same upper directory.  opam
+   installs no depext for tests -- it takes with-test to be false in depext
+   filters -- so the tests need no start of their own for depexts. *)
 type phase = { suffix : string; network : bool; command : string }
 
 (* Where the build's copy of the repository is mounted, below. *)
 let repo_in_container = "/home/opam/.opam/repo/default"
 
-let build ~t ~temp_dir build_log pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
   let lowerdir = Path.(temp_dir / "lower") in
@@ -235,13 +238,18 @@ let build ~t ~temp_dir build_log pkg ordered_hashes =
     match config.build_command with
     | Some { run; network } -> [ { suffix = ""; network; command = "cd src && " ^ run } ]
     | None ->
-        let command ?reinstall ~with_test () = String.concat " && " (Build_command.for_package ~config ?reinstall ~with_test pkg) in
-        if Build_command.tests_requested ~config pkg then
-          [
-            { suffix = ""; network = false; command = command ~with_test:false () };
-            { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () };
-          ]
-        else [ { suffix = ""; network = false; command = command ~with_test:false () } ]
+        let command ?reinstall ?depexts_only ~with_test () =
+          String.concat " && " (Build_command.for_package ~config ?reinstall ?depexts_only ~with_test pkg)
+        in
+        let depexts =
+          if OpamSysPkg.Set.is_empty depexts then []
+          else [ { suffix = "-depexts"; network = true; command = command ~depexts_only:true ~with_test:false () } ]
+        and tests =
+          if Build_command.tests_requested ~config pkg then
+            [ { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () } ]
+          else []
+        in
+        depexts @ [ { suffix = ""; network = false; command = command ~with_test:false () } ] @ tests
   in
   let () =
     if Option.is_none config.build_command then

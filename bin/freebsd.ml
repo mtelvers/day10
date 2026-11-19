@@ -339,7 +339,7 @@ let register_manifests ~t ~temp_dir ~root ordered_hashes =
    after it.  Copied and not hard linked: pkg updates its SQLite database in
    place, and through a link that is the cached layer's, and a link's change
    time moves whenever any other build links or unlinks the same inode. *)
-let build ~t ~temp_dir build_log pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
   let root = Path.(temp_dir / "root") in

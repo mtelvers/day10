@@ -358,7 +358,7 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   result
 
-let build ~t ~temp_dir build_log pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
   let config = t.config in
   let module L = (val unix_layer ~config) in
   let () =

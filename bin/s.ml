@@ -16,8 +16,11 @@ module type PLATFORM = sig
      network. *)
   val run : t:t -> temp_dir:string -> depexts:OpamSysPkg.Set.t list -> string -> string -> int
 
-  (* Build one package's layer into temp_dir/fs, on the layers named. *)
-  val build : t:t -> temp_dir:string -> string -> OpamPackage.t -> string list -> int
+  (* Build one package's layer into temp_dir/fs, on the layers named.
+     [depexts] are the system packages opam will install for it on this
+     platform, empty for none: the only part of a build that may need the
+     network. *)
+  val build : t:t -> temp_dir:string -> depexts:OpamSysPkg.Set.t -> string -> OpamPackage.t -> string list -> int
 
   (* The host's architecture, as --arch defaults to it. *)
   val arch : unit -> string

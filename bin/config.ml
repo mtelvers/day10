@@ -42,6 +42,10 @@ type t = {
      honoured, as opam's --update-invariant does for a switch.  Needed to test a
      compiler package, which determines the ocaml version itself. *)
   update_invariant : bool;
+  (* Fetch every depext the repository names for the platform into a base's
+     package cache as the base is built, rather than leave a build's depexts
+     to its own start with the network.  Opt-in: some gigabytes per base. *)
+  prefetch_base : bool;
 }
 
 let is_local_package ~(config : t) pkg =

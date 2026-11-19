@@ -48,9 +48,10 @@ let init ~repo t =
     Cleanup.with_resource (Platform.temp_dir temp_dir) @@ fun () ->
     let opam_repository = Util.create_opam_repository temp_dir in
     let build_log = Path.(temp_dir / "build.log") in
+    let depexts = if config.prefetch_base then depext_sets ~repo ~config else [] in
     (* A base that failed is not kept, or every build on it would fail in a
        way that looks like the package's fault; the next run tries again. *)
-    match Platform.run ~t ~temp_dir ~depexts:(depext_sets ~repo ~config) opam_repository build_log with
+    match Platform.run ~t ~temp_dir ~depexts opam_repository build_log with
     | 0 -> Unix.rename temp_dir target_dir
     | status ->
         OpamConsole.error "Building the base for %s failed with status %d" (Config.os_key ~config) status;
@@ -395,13 +396,17 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
     let opam_repo = Util.create_opam_repository temp_dir in
     let () = Repo.materialise (Repo_context.repo ctx) (pkg :: ordered_deps) ~dest:opam_repo in
     let build_log = Path.(temp_dir / "build.log") in
-    let status = Platform.build ~t ~temp_dir build_log pkg ordered_hashes in
+    (* The system packages opam will install for the package on this
+       platform.  From the solution, which has a pinned package's opam file
+       too, where the repository the build is given does not. *)
+    let depexts = Util.depexts_for ~vars:(Config.platform_vars ~config) (resolve_opam ctx pkg) in
+    let status = Platform.build ~t ~temp_dir ~depexts build_log pkg ordered_hashes in
     (* Whether the layer installed system packages is what the solution says
        the package needs on this platform: the build is trusted, not
        inspected.  Record the layer before publishing it: the rename is
        atomic, so what makes the directory a layer has to be in place before
        it happens. *)
-    let depexts = not (OpamSysPkg.Set.is_empty (Util.depexts_for ~vars:(Config.platform_vars ~config) (resolve_opam ctx pkg))) in
+    let depexts = not (OpamSysPkg.Set.is_empty depexts) in
     let () = Util.save_layer_info Path.(temp_dir / "layer.json") pkg ordered_deps ordered_hashes ~depexts status in
     Unix.rename temp_dir target_dir
   in
@@ -687,7 +692,7 @@ let run_build (config : Config.t) =
           let _opam_repo = Util.create_opam_repository temp_dir in
           let build_log = Path.(temp_dir / "build.log") in
           let dummy_pkg = List.hd local_pkgs in
-          let r = Platform.build ~t ~temp_dir build_log dummy_pkg all_hashes in
+          let r = Platform.build ~t ~temp_dir ~depexts:OpamSysPkg.Set.empty build_log dummy_pkg all_hashes in
           (* The output arrived as it was produced, so there is nothing left to
              print but the verdict. *)
           if r <> 0 then OpamConsole.error "build failed with exit code %i" r;
@@ -861,6 +866,16 @@ let prefer_oldest_term =
   let env = Cmd.Env.info "DAY10_PREFER_OLDEST" in
   Arg.(value & flag & info [ "prefer-oldest" ] ~env ~doc)
 
+let prefetch_base_term =
+  let doc =
+    "When building a base image, fetch every depext the repository names for the platform into its package cache, so \
+     that a build installs them without the network.  Some gigabytes per base; without it, a package's depexts are \
+     installed in a start of its own with the network.  Decided when the base is built: an existing base is not \
+     changed."
+  in
+  let env = Cmd.Env.info "DAY10_PREFETCH_BASE" in
+  Arg.(value & flag & info [ "prefetch-base" ] ~env ~doc)
+
 let update_invariant_term =
   let doc = "Let the solver pick the OCaml version when --ocaml-version cannot be honoured, as needed to test a compiler package" in
   let env = Cmd.Env.info "DAY10_UPDATE_INVARIANT" in
@@ -883,7 +898,7 @@ let opam_jobs_term =
   Arg.(value & opt (some int) None & info [ "opam-jobs" ] ~env ~docv:"N" ~doc)
 
 let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
-    ~prefer_oldest ~update_invariant ~opam_jobs ~build_command =
+    ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
   let os_version = os_version_for ~os_distribution os_version in
   let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
@@ -929,6 +944,7 @@ let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_tes
     prefer_oldest;
     update_invariant;
     opam_jobs;
+    prefetch_base;
   }
 
 let exec_cmd =
@@ -942,12 +958,12 @@ let exec_cmd =
   in
   let exec_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs ->
+      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~build_command:(Some { Config.run = String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd); network = true })))
+               ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command:(Some { Config.run = String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd); network = true })))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
-      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term)
+      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let exec_info = Cmd.info "exec" ~doc:"Run a command in a container with the project's dependencies" in
   Cmd.v exec_info exec_term
@@ -963,12 +979,12 @@ let build_cmd =
   in
   let build_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs ->
+      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
           run_build
             (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
-               ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~build_command:(Some { Config.run = Build_command.dune ~only_packages dune_extra; network = false })))
+               ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command:(Some { Config.run = Build_command.dune ~only_packages dune_extra; network = false })))
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
-      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term)
+      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let build_info = Cmd.info "build" ~doc:"Build a project using cached dependencies (alias for: exec . -- dune build)" in
   Cmd.v build_info build_term
@@ -980,7 +996,7 @@ let ci_cmd =
   in
   let ci_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs ->
+      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs prefetch_base ->
           let os_version = os_version_for ~os_distribution os_version in
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
@@ -1012,9 +1028,10 @@ let ci_cmd =
               prefer_oldest;
               update_invariant;
               opam_jobs;
+              prefetch_base;
             })
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term
-      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term)
+      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
   Cmd.v ci_info ci_term
@@ -1026,15 +1043,15 @@ let health_check_cmd =
   in
   let health_check_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs ->
+      const (fun dir ocaml_version opam_repositories package_arg md json dot with_test log dry_run tag oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs prefetch_base ->
           let os_version = os_version_for ~os_distribution os_version in
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_health_check_multi
-            { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = []; prefer_oldest; update_invariant; opam_jobs }
+            { dir; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md; json; dot; with_test; with_doc = false; tag;oci; log; dry_run; fork; build_command = None; local_packages = []; prefer_oldest; update_invariant; opam_jobs; prefetch_base }
             package_arg)
       $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ package_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ tag_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term
-      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term)
+      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let health_check_info = Cmd.info "health-check" ~doc:"Run health check on a package or list of packages" in
   Cmd.v health_check_info health_check_term
@@ -1313,7 +1330,7 @@ let revdeps_cmd =
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_revdeps
-            { dir = ""; ocaml_version; opam_repositories; package; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log; dry_run = true; fork; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false; opam_jobs = None })
+            { dir = ""; ocaml_version; opam_repositories; package; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json = None; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log; dry_run = true; fork; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false; opam_jobs = None; prefetch_base = false })
       $ ocaml_version_term $ opam_repository_term $ package_arg $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term $ log_term)
   in
   let revdeps_info = Cmd.info "revdeps" ~doc:"List the packages to test when a package changes" in
@@ -1327,7 +1344,7 @@ let list_cmd =
           let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
           let ocaml_version = OpamPackage.of_string ocaml_version in
           run_list
-            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false; opam_jobs = None }
+            { dir = ""; ocaml_version; opam_repositories; package = ""; arch; os; os_distribution; os_family; os_version; directory = None; md = None; json; dot = None; with_test = false; with_doc = false; tag = None; oci = None; log = false; dry_run = false; fork = None; build_command = None; local_packages = []; prefer_oldest = false; update_invariant = false; opam_jobs = None; prefetch_base = false }
             all_versions)
       $ ocaml_version_term $ opam_repository_term $ all_versions_term $ json_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term)
   in

@@ -14,7 +14,7 @@ let reclaim_temp path = temp_dir path ()
 
 let run ~t:_ ~temp_dir:_ ~depexts:_ _opam_repository _build_log = 0
 
-let build ~t ~temp_dir _build_log _pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts:_ _build_log _pkg ordered_hashes =
   let config = t.config in
   let () =
     List.iter

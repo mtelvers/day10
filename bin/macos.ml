@@ -277,7 +277,7 @@ let excluded =
     Path.(home / "src");
   ]
 
-let build ~t ~temp_dir build_log pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
   let vm_dir = Path.(temp_dir / "vm") and mnt = Path.(temp_dir / "mnt") and fs = Path.(temp_dir / "fs") in
