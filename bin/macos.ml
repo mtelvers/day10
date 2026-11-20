@@ -240,7 +240,9 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
         "set -ex";
         "mkdir -p ~/bin";
         Printf.sprintf "curl --fail -sSL -o ~/bin/opam %s && chmod +x ~/bin/opam" opam_url;
-        Printf.sprintf "[ -x ~/bin/day10-install ] || { curl --fail -sSL -o ~/bin/day10-install %s && chmod +x ~/bin/day10-install; }" day10_install_url;
+        (* From the release, as the FreeBSD and Windows bases have it, over any
+           the guest image carries. *)
+        Printf.sprintf "curl --fail -sSL -o ~/bin/day10-install %s && chmod +x ~/bin/day10-install" day10_install_url;
         {|NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"|};
         "brew --version";
         (* Every depext into Homebrew's cache, which the base keeps, so a build
@@ -262,14 +264,6 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
     let dst = Path.(mnt / inputs) in
     let () = sh (Printf.sprintf "mkdir -p %s && ditto %s %s && cp %s %s/depexts" (Filename.quote dst) (Filename.quote opam_repository)
                    (Filename.quote Path.(dst / "opam-repository")) (Filename.quote Path.(temp_dir / "depexts")) (Filename.quote dst)) in
-    (* A day10-install of the host's, until there is a release for macOS. *)
-    let () =
-      match Sys.getenv_opt "DAY10_INSTALL" with
-      | None -> ()
-      | Some binary ->
-          let bin = Path.(mnt / home / "bin") in
-          sh (Printf.sprintf "mkdir -p %s && cp %s %s/day10-install && chown -R %s %s" (Filename.quote bin) (Filename.quote binary) (Filename.quote bin) owner (Filename.quote bin))
-    in
     write_job ~t ~temp_dir ~mnt ~network:true ~src:None command
   in
   (* Shut down by the guest, not stopped once the job reports as a build is: a
