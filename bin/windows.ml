@@ -59,6 +59,8 @@ let env ~(config : Config.t) =
 
 let strings xs = `List (List.map (fun x -> `String x) xs)
 
+(* [network] is the hcn namespace to join, None for a container with no
+   network at all: no endpoint, so no DNS and no route anywhere. *)
 let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~network : Yojson.Safe.t =
   `Assoc
     [
@@ -77,11 +79,11 @@ let make_config_json ~layers ~cwd ~argv ~hostname ~username ~env ~mounts ~networ
       ("mounts", `List (Mount.user_mounts mounts));
       ( "windows",
         `Assoc
-          [
-            ("layerFolders", strings layers);
-            ("ignoreFlushesDuringBoot", `Bool true);
-            ("network", `Assoc [ ("allowUnqualifiedDNSQuery", `Bool true); ("networkNamespace", `String network) ]);
-          ] );
+          ([ ("layerFolders", strings layers); ("ignoreFlushesDuringBoot", `Bool true) ]
+          @
+          match network with
+          | Some namespace -> [ ("network", `Assoc [ ("allowUnqualifiedDNSQuery", `Bool true); ("networkNamespace", `String namespace) ]) ]
+          | None -> []) );
     ]
 
 let init ~(config : Config.t) = { config; network = Os.capture "hcn-namespace" [ "create" ] |> String.trim; username }
@@ -180,14 +182,29 @@ let mounted ~parents ~scratch ~dir f =
       | status -> OpamConsole.warning "wclayer unmount %s failed with status %d; the snapshot is still mounted at %s" scratch status dir)
     (fun () -> f dir)
 
-(* One container: a snapshot prepared on the image, [fill] given the
-   snapshot's C: on the host before the container starts, the container run
-   on it with no mounts at all, and [collect] given the same view once it has
-   stopped.  The build itself never touches a bind mount: a Windows container
-   cannot run a program through a relative symlink on one, nor remove or
-   replace a file in use there, which pacman and gpg both do.  See
-   windows-symlink-exec.md.  The snapshot is let go of when this ends. *)
-let container ~t ~temp_dir ~build_log ~tee ~fill ~collect =
+(* A file's contents added to the end of another, byte for byte. *)
+let append_file ~src ~dst =
+  let contents = In_channel.with_open_bin src In_channel.input_all in
+  Out_channel.with_open_gen [ Open_binary; Open_append; Open_creat; Open_wronly ] 0o644 dst @@ fun oc -> Out_channel.output_string oc contents
+
+(* A container started on the prepared snapshot: the script it runs, in the
+   container, and whether it has the network. *)
+type start = { script : string; network : bool }
+
+(* One snapshot: prepared on the image, [fill] given the snapshot's C: on the
+   host before anything starts, then a container started on it for each of
+   [starts] in turn, with no mounts at all, until one fails, and [collect]
+   given the same view once the last has stopped.  Each start finds what the
+   one before it left, as they share the snapshot's scratch layer.  The build
+   itself never touches a bind mount: a Windows container cannot run a
+   program through a relative symlink on one, nor remove or replace a file in
+   use there, which pacman and gpg both do.  See windows-symlink-exec.md.  The
+   snapshot is let go of when this ends.
+
+   Each start writes a log of its own, added to [build_log] once it ends, so
+   that ctr's check for a transient failure reads only that start's output,
+   which is short when the failure was ctr's. *)
+let container ~t ~temp_dir ~build_log ~tee ~fill ~collect ~starts =
   let name = Filename.basename temp_dir in
   Cleanup.with_resource (snapshot name) @@ fun () ->
   let mounts_json = Path.(temp_dir / "mounts.json") in
@@ -204,11 +221,21 @@ let container ~t ~temp_dir ~build_log ~tee ~fill ~collect =
   let parents = List.filteri (fun i _ -> i < List.length layers - 1) layers and scratch = List.nth layers (List.length layers - 1) in
   let dir = Path.(temp_dir / "mnt") in
   let () = mounted ~parents ~scratch ~dir fill in
-  let argv = [ "cmd"; "/c"; run_cmd ] in
-  let config = make_config_json ~layers ~cwd:{|C:\|} ~argv ~hostname ~username:t.username ~env:(env ~config:t.config) ~mounts:[] ~network:t.network in
-  let config_json = Path.(temp_dir / "config.json") in
-  let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
-  let result = ctr ~stdout:build_log ~stderr:build_log ~tee [ "run"; "--cni"; "--rm"; "--config"; config_json; name ] in
+  let run { script; network } =
+    let argv = [ "cmd"; "/c"; script ] in
+    let config =
+      make_config_json ~layers ~cwd:{|C:\|} ~argv ~hostname ~username:t.username ~env:(env ~config:t.config) ~mounts:[]
+        ~network:(if network then Some t.network else None)
+    in
+    let config_json = Path.(temp_dir / "config.json") in
+    let () = Os.write_to_file config_json (Yojson.Safe.pretty_to_string config) in
+    let log = Path.(temp_dir / (Filename.remove_extension (Filename.basename script) ^ ".log")) in
+    let cni = if network then [ "--cni" ] else [] in
+    let result = ctr ~stdout:log ~stderr:log ~tee ([ "run" ] @ cni @ [ "--rm"; "--config"; config_json; name ]) in
+    let () = append_file ~src:log ~dst:build_log in
+    result
+  in
+  let result = List.fold_left (fun result start -> if result <> 0 then result else run start) 0 starts in
   let () = mounted ~parents ~scratch ~dir collect in
   result
 
@@ -306,12 +333,15 @@ let scripts dir =
     Os.write_to_file (on_host dir path) contents;
     path
 
-(* The build's status is the container's. *)
-let write_run_cmd ~script commands =
-  ignore
-    (script (Filename.basename run_cmd)
-       (String.concat "\r\n"
-          [ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul"; "mkdir " ^ temp ^ " 2>nul"; "set PATH=%PATH%;" ^ opam_root; String.concat " && " commands; "exit /b %errorlevel%"; "" ]))
+(* A script a container starts with, [name] in [scripts_dir], running
+   [commands] in turn until one fails: the start's status is the script's.
+   Gives its path in the container. *)
+let write_cmd ~script ~name commands =
+  script name
+    (String.concat "\r\n"
+       [ "@echo off"; "mkdir " ^ opam_root ^ " 2>nul"; "mkdir " ^ temp ^ " 2>nul"; "set PATH=%PATH%;" ^ opam_root; String.concat " && " commands; "exit /b %errorlevel%"; "" ])
+
+let write_run_cmd ~script commands = ignore (write_cmd ~script ~name:(Filename.basename run_cmd) commands)
 
 (* The packages Cygwin's setup and pacman download. *)
 let download_caches root = [ Path.(root / ".cygwin" / "cache"); Path.(root / "msys64" / "var" / "cache" / "pacman") ]
@@ -352,13 +382,25 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
      download caches with it, which hold the depexts the base fetched.  A
      layer leaves them out. *)
   let collect dir = robocopy ~log (on_host dir opam_root) rootfs [ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup ] in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect in
+  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts:[ { script = run_cmd; network = true } ] in
   let () = L.keep ~temp_dir rootfs in
   let () = tidy ~config rootfs in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
   result
 
-let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
+(* Where the build's copy of the repository is in the container: it is
+   copied there in [build]'s fill. *)
+let repo_in_container = Path.(opam_root / "repo" / "default")
+
+(* As on Linux: a package is built with no network, its sources fetched on
+   the host and staged in the build's copy of the repository (Source_stage).
+   A package with depexts first has them installed with the network, by opam
+   and Cygwin's setup or pacman alone, in a start of its own on the same
+   snapshot, before anything of the package's own has run; one with none
+   never has the network.  opam installs no depext for tests, which it takes
+   to be false in depext filters, so the tests, which run in the build's
+   start, need none of their own. *)
+let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   let config = t.config in
   let module L = (val unix_layer ~config) in
   let () =
@@ -393,7 +435,19 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
     let () = robocopy ~log Path.(temp_dir / "opam-repository") Path.(root / "repo" / "default") [ "/MIR" ] in
     let () = clear_archive_bits ~temp_dir root in
     let () = robocopy ~log overlay root [ "/E"; "/COPY:DAT" ] in
-    write_run_cmd ~script:(scripts dir) (Build_command.for_package ~config pkg)
+    let script = scripts dir in
+    let () = if not (OpamSysPkg.Set.is_empty depexts) then ignore (write_cmd ~script ~name:"depexts.cmd" (Build_command.for_package ~config ~depexts_only:true ~with_test:false pkg)) in
+    write_run_cmd ~script (Build_command.for_package ~config pkg)
+  in
+  let starts =
+    (if OpamSysPkg.Set.is_empty depexts then [] else [ { script = Path.(scripts_dir / "depexts.cmd"); network = true } ])
+    @ [ { script = run_cmd; network = false } ]
+  in
+  (* opam on Windows takes a file URL with the drive after the slashes. *)
+  let () =
+    Source_stage.stage ~repo:Path.(temp_dir / "opam-repository")
+      ~in_container:("file://" ^ String.map (function '\\' -> '/' | c -> c) Path.(repo_in_container / "cache"))
+      ~log:build_log pkg
   in
   (* What the build wrote, leaving out the repository, which is the
      solution's, and the sources, build trees and download caches, which no
@@ -404,7 +458,7 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
       ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
       @ download_caches root)
   in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect in
+  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts in
   let () = L.keep ~temp_dir target in
   let () = tidy ~config target in
   result
