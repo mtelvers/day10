@@ -411,6 +411,36 @@ let config ?(with_test = false) ?(package = "a.1.0") ?(local_packages = []) () =
     prefetch_base = false;
   }
 
+(* x-ci-accept-failures names platforms as opam-repo-ci does, which its
+   OBuilder jobs grep for.  day10 keeps opam's values, so on FreeBSD
+   (os-version 1501000) and macOS (distribution homebrew) an entry such as
+   "freebsd-15.1" or "macos-homebrew" never matched, and the failure gated a
+   job that OBuilder skipped (ocaml/opam-repository#31270, #31282). *)
+let accept_failure_keys_use_the_ci_names () =
+  let keys ?(os_family = "debian") os_distribution os_version =
+    Config.accept_failure_keys ~config:{ (config ()) with os_distribution; os_family; os_version }
+  in
+  let accepts k ks = List.mem k ks in
+  let freebsd = keys ~os_family:"bsd" "freebsd" "1501000" in
+  let macos = keys ~os_family:"homebrew" "homebrew" "15.5" in
+  accepts "freebsd-15.1" freebsd
+  && accepts "freebsd" freebsd
+  && accepts "freebsd-14.3" (keys ~os_family:"bsd" "freebsd" "1403000")
+  && accepts "macos-homebrew" macos
+  && accepts "homebrew" macos
+  && keys "debian" "13" = [ "debian-13"; "debian" ]
+  (* Every Linux form opam-repository uses: opam-repo-ci splits its tag at the
+     last '-' and day10 joins it again; Arch has no version and is named bare. *)
+  && accepts "opensuse-tumbleweed" (keys ~os_family:"opensuse" "opensuse" "tumbleweed")
+  && accepts "opensuse-15.6" (keys ~os_family:"suse" "opensuse" "15.6")
+  && accepts "debian-unstable" (keys "debian" "unstable")
+  && accepts "oraclelinux-9" (keys ~os_family:"rhel" "oraclelinux" "9")
+  && accepts "alpine-3.22" (keys ~os_family:"alpine" "alpine" "3.22")
+  && accepts "archlinux" (keys ~os_family:"arch" "archlinux" "latest")
+  && keys ~os_family:"windows" "msys2" "10.0.26100" = [ "msys2-mingw" ]
+  && keys ~os_family:"windows" "cygwin" "10.0.26100" = [ "cygwin-mingw" ]
+  && not (accepts "freebsd-15.1" (keys "debian" "13"))
+
 let commands config pkg = Build_command.for_package ~config (OpamPackage.of_string pkg)
 
 (* Asking for tests applies to the package under test and to nothing else.  This
@@ -735,6 +765,7 @@ let checks =
     ("layer records its depexts", layer_records_its_depexts);
     ("freebsd release follows the version", freebsd_release_follows_the_version);
     ("family follows the distribution", family_follows_the_distribution);
+    ("accept-failure keys use the CI names", accept_failure_keys_use_the_ci_names);
     ("distribution is what opam polls in the image", distribution_is_what_opam_polls);
     ("version defaults only to the host's own", version_defaults_only_to_the_hosts_own);
     ("hash ignores metadata", hash_ignores_metadata);

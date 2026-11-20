@@ -128,6 +128,26 @@ let platform_vars ~(config : t) =
    without the architecture that os_key carries. *)
 let platform ~(config : t) = config.os_distribution ^ "-" ^ config.os_version
 
+(* The names an x-ci-accept-failures entry may give this platform.  The
+   entries are written against opam-repo-ci's platform names, which are what
+   its OBuilder jobs grep for, and those differ from day10's own where day10
+   keeps opam's values:
+   - Windows: cygwin-mingw / msys2-mingw; bare cygwin is pure Cygwin, which
+     day10 does not build.
+   - FreeBSD: freebsd-15.1, where opam's os-version is the osreldate 1501000.
+   - macOS: macos-homebrew, where day10's distribution is homebrew.
+   The bare distribution matches as well. *)
+let accept_failure_keys ~(config : t) =
+  if String.equal config.os_family "windows" then [ config.os_distribution ^ "-mingw" ]
+  else
+    let ci =
+      match (config.os_distribution, int_of_string_opt config.os_version) with
+      | "freebsd", Some v when v >= 1000000 -> [ Printf.sprintf "freebsd-%d.%d" (v / 100000) (v / 1000 mod 100) ]
+      | "homebrew", _ -> [ "macos-homebrew" ]
+      | _ -> []
+    in
+    ci @ [ platform ~config; config.os_distribution ]
+
 (* The platform directory in the cache, named as the CI names the platform
    rather than as opam reports it, so that the openSUSE directories keep their
    names. *)
