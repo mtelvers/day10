@@ -255,11 +255,6 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
            or have changed, as the other bases do. *)
         {|opam option --global 'archive-mirrors="https://opam.ocaml.org/cache"'|};
         "opam switch create default --empty";
-        (* Homebrew's download cache filled with every depext the repository
-           names for this platform, as the Linux bases fill their package
-           manager's: a set that fails as a whole is fetched a formula at a
-           time, so that the rest are still fetched. *)
-        Printf.sprintf {|while read -r s; do [ -n "$s" ] || continue; brew fetch --deps $s || for p in $s; do brew fetch --deps $p || true; done; done < %s/depexts|} input;
       ]
   in
   let () =
@@ -295,10 +290,15 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
   let () = if result = 0 then tidy fs else sh ("rm -rf " ^ Filename.quote vm_dir) in
   result
 
-(* One boot, except when tests were asked for: then the package installs in one
-   and its tests run in a second with no network, as on Linux.  Both boot the
-   same clone, so the second finds what the first installed. *)
+(* A package is built with no network, as on Linux: its sources are staged on
+   the host in the build's copy of the repository (Source_stage).  A package
+   with depexts first boots with the network to have opam install them and
+   nothing else; the tests, when asked for, boot again after the build.  Each
+   boot is of the same clone, so it finds what the one before installed. *)
 type phase = { suffix : string; network : bool; command : string }
+
+(* Where a build's copy of the repository is put on the guest, below. *)
+let repo_in_guest = "/" ^ Path.(opam_root / "repo" / "default")
 
 (* What a build writes that no layer keeps: sources and build trees, caches and
    logs, and the repository, which is the solution's. *)
@@ -315,7 +315,7 @@ let excluded =
     Path.(home / "src");
   ]
 
-let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
+let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   let config = t.config in
   let os_key = Config.os_key ~config in
   let vm_dir = Path.(temp_dir / "vm") and mnt = Path.(temp_dir / "mnt") and fs = Path.(temp_dir / "fs") in
@@ -324,13 +324,22 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
     match config.build_command with
     | Some { run; network } -> [ { suffix = ""; network; command = "cd src && " ^ run } ]
     | None ->
-        let command ?reinstall ~with_test () = String.concat " && " (Build_command.for_package ~config ?reinstall ~with_test pkg) in
-        if Build_command.tests_requested ~config pkg then
-          [
-            { suffix = ""; network = true; command = command ~with_test:false () };
-            { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () };
-          ]
-        else [ { suffix = ""; network = true; command = command ~with_test:false () } ]
+        let command ?reinstall ?depexts_only ~with_test () =
+          String.concat " && " (Build_command.for_package ~config ?reinstall ?depexts_only ~with_test pkg)
+        in
+        let depexts =
+          if OpamSysPkg.Set.is_empty depexts then []
+          else [ { suffix = "-depexts"; network = true; command = command ~depexts_only:true ~with_test:false () } ]
+        and tests =
+          if Build_command.tests_requested ~config pkg then
+            [ { suffix = "-test"; network = false; command = command ~reinstall:true ~with_test:true () } ]
+          else []
+        in
+        depexts @ [ { suffix = ""; network = false; command = command ~with_test:false () } ] @ tests
+  in
+  let () =
+    if Option.is_none config.build_command then
+      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_guest ^ "/cache") ~log:build_log pkg
   in
   (* A clone of the base's disk, which has the base in it already.  A base
      built before bases kept their disk has only its trees, which go in first
@@ -385,7 +394,7 @@ let build ~t ~temp_dir ~depexts:_ build_log pkg ordered_hashes =
     phases
     |> List.mapi (fun index phase -> (index, phase))
     |> List.find_map (fun (index, { suffix; network; command }) ->
-           let name = Filename.basename temp_dir ^ suffix and append = index > 0 and src = config.directory in
+           let name = Filename.basename temp_dir ^ suffix and append = index > 0 || Sys.file_exists build_log and src = config.directory in
            let status =
              (* The first phase's job is on the disk already; a later phase
                 mounts the clone to write its own. *)
