@@ -39,7 +39,7 @@ let switch = Path.(opam_root / "default" / ".opam-switch")
 (* opam 2.6 bumped the root format, which the opam libraries in day10-install
    do not read yet, as on Windows. *)
 let opam_url = "https://github.com/ocaml/opam/releases/download/2.5.2/opam-2.5.2-arm64-macos"
-let day10_install_url = "https://github.com/mtelvers/day10-install/releases/download/1.4.0/day10-install-1.4.0-arm64-macos"
+let day10_install_url = "https://github.com/mtelvers/day10-install/releases/download/1.5.0/day10-install-1.5.0-arm64-macos"
 
 (* The guest's uid and gid for opam, as the image's setup job made it. *)
 let owner = "501:20"

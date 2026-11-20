@@ -37,7 +37,7 @@ let image = "sha256:5ae66e790cc84572a3bb9646fcbd13b3dbf1af9252e01316779173788062
    2.6 bumped the root format, 2.3 to 2.5 write the one 2.2 introduced. *)
 let opam_url ~arch = "https://github.com/ocaml/opam/releases/download/2.5.2/opam-2.5.2-" ^ arch ^ "-windows.exe"
 
-let day10_install_url ~arch = "https://github.com/mtelvers/day10-install/releases/download/1.4.0/day10-install-1.4.0-" ^ arch ^ "-windows.exe"
+let day10_install_url ~arch = "https://github.com/mtelvers/day10-install/releases/download/1.5.0/day10-install-1.5.0-" ^ arch ^ "-windows.exe"
 
 (* Added to the container's own environment rather than replacing it, so the
    system variables Windows needs stay. *)

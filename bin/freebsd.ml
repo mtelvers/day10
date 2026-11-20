@@ -171,7 +171,7 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
   let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/ocaml/opam/releases/download/2.5.1/opam-2.5.1-" ^ arch ^ "-freebsd"; "-o"; opam ] in
   let _ = Os.sudo [ "chmod"; "+x"; opam ] in
   let day10_install = Path.(rootfs / "usr" / "bin" / "day10-install") in
-  let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.4.0/day10-install-1.4.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
+  let _ = logged [ "curl"; "--fail"; "-L"; "https://github.com/mtelvers/day10-install/releases/download/1.5.0/day10-install-1.5.0-" ^ arch ^ "-freebsd"; "-o"; day10_install ] in
   let _ = Os.sudo [ "chmod"; "+x"; day10_install ] in
   (* Every depext into pkg's cache, so a build installs from it with no
      network: a set at a time, as an install asks for it, and a package at a
