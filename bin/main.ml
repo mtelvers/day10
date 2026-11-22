@@ -83,7 +83,11 @@ let opam_env ~(config : Config.t) pkg v =
    to build rather than a fixture. *)
 let rec find_local_packages dir =
   try
-    Sys.readdir dir |> Array.to_list
+    (* Sorted, so that every filesystem gives the same order: readdir's is
+       ext4's hash order on Linux and something else again on APFS, and the
+       order decides which package ci takes as the one under test and in what
+       order pin-depends are reported. *)
+    Sys.readdir dir |> Array.to_list |> List.sort String.compare
     |> List.concat_map (fun name ->
          let path = Filename.concat dir name in
          (* Nothing whose name starts with a dot belongs to the project, file or
@@ -131,13 +135,25 @@ let solve ~repo (config : Config.t) root_packages =
     @ List.map (fun pkg -> (OpamPackage.name pkg, (`Eq, OpamPackage.version pkg))) root_packages
     |> OpamPackage.Name.Map.of_list
   in
+  (* The project's own packages, pinned at dev, and whatever their pin-depends
+     pin.  Those go in the repository as well, so that the build's copy of it
+     has them to install from: the project's own are built from its sources. *)
   let pins =
     Option.fold ~none:OpamPackage.Name.Map.empty
       ~some:(fun directory ->
-        find_local_packages directory
-        |> List.fold_left
-             (fun acc (name, opam) -> OpamPackage.Name.Map.add (OpamPackage.Name.of_string name) (OpamPackage.Version.of_string "dev", opam) acc)
-             OpamPackage.Name.Map.empty)
+        let local = find_local_packages directory in
+        let pinned =
+          match Pin_depends.resolve ~local with
+          | Ok pinned -> pinned
+          | Error m ->
+              OpamConsole.error "%s" m;
+              exit 1
+        in
+        let () = List.iter (fun (pkg, opam) -> Repo.add repo pkg (OpamFile.OPAM.write_to_string opam)) pinned in
+        List.fold_left
+          (fun acc (name, opam) -> OpamPackage.Name.Map.add (OpamPackage.Name.of_string name) (OpamPackage.Version.of_string "dev", opam) acc)
+          OpamPackage.Name.Map.empty local
+        |> fun acc -> List.fold_left (fun acc (pkg, opam) -> OpamPackage.Name.Map.add (OpamPackage.name pkg) (OpamPackage.version pkg, opam) acc) acc pinned)
       config.directory
   in
   let test =

@@ -39,7 +39,7 @@ Only the real one is pinned into the solution, and none of the others is
 reported as a package that would not parse.
 
   $ day10 build --dry-run --log --cache-dir cache --opam-repository repo \
-  >   --os-distribution debian --os-version 13 --arch x86_64 --ocaml-version ocaml.5.4.1 project
+  >   --os linux --os-distribution debian --os-version 13 --arch x86_64 --ocaml-version ocaml.5.4.1 project
   digraph opam {
     "real.dev" -> "b.1.0";
   }

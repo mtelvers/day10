@@ -457,7 +457,7 @@ let with_test_reaches_only_the_target () =
    a target even though the version is not the one named on the command line. *)
 let a_local_package_is_pinned () =
   let mine = config ~with_test:true ~package:"mine" ~local_packages:[ "mine" ] () in
-  commands mine "mine.dev" = [ "opam pin -yn mine.dev $HOME/src/"; "cd src"; "day10-install -v --with-test mine.dev" ]
+  commands mine "mine.dev" = [ "opam pin -yn --ignore-pin-depends mine.dev $HOME/src/"; "cd src"; "day10-install -v --with-test mine.dev" ]
   && commands mine "b.2.0" = [ "day10-install -v b.2.0" ]
 
 (* Naming the packages has to reach dune, not just the solver: dune builds every

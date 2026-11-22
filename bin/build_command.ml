@@ -22,8 +22,10 @@ let tests_requested ~(config : Config.t) pkg = config.with_test && Config.is_tar
 let for_package ~(config : Config.t) ?with_test ?(reinstall = false) ?(depexts_only = false) pkg =
   let name = OpamPackage.to_string pkg in
   (* A package built from the project's own sources has to be pinned to them
-     first, and the build run from there. *)
-  let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn " ^ name ^ " $HOME/src/"; "cd src" ] else [] in
+     first, and the build run from there.  Its pin-depends are already in the
+     build's repository, resolved by day10 on the host, and the container has no
+     network to fetch them a second time. *)
+  let pin = if Config.is_local_package ~config pkg then [ "opam pin -yn --ignore-pin-depends " ^ name ^ " $HOME/src/"; "cd src" ] else [] in
   let with_test = match with_test with Some requested -> requested | None -> tests_requested ~config pkg in
   pin
   @ [

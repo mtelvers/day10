@@ -46,7 +46,7 @@ on the machine.
   $ mkdir -p cache/debian-13-x86_64/base
   $ solve() {
   >   day10 health-check --dry-run --log --cache-dir cache --opam-repository repo \
-  >     --os-distribution debian --os-version 13 --arch x86_64 "$@"
+  >     --os linux --os-distribution debian --os-version 13 --arch x86_64 "$@"
   > }
 
 The newest version that satisfies the constraints.

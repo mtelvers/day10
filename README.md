@@ -41,8 +41,10 @@ Use `--fork N` to build packages in parallel with N worker processes.
 day10 build --with-test --cache-dir /path/to/cache --opam-repository /path/to/opam-repository /path/to/project @install @runtest
 ```
 
-This is what OCaml-CI runs.  Add `--dry-run --log` to print the solution as a
-graph without building any layers (a missing base is still built).
+This is what OCaml-CI runs.  The project's `pin-depends` (git sources only) are
+resolved on the host and built as ordinary layers.  Add `--dry-run --log` to
+print the solution as a graph without building any layers (a missing base is
+still built).
 
 ### List available packages
 

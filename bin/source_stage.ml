@@ -158,6 +158,13 @@ let rec tree_with_submodules ~work ~remote commit =
     (git ~work [ "rev-parse"; commit ^ "^{tree}" ])
     gitlinks
 
+(* [refspec] of [remote] -- a branch, a tag or a commit, or HEAD -- fetched one
+   commit deep into [work], a bare repository.  Returns the commit, not an
+   annotated tag's own object.  Failure when git fails. *)
+let fetch_commit ~work ~remote ~refspec =
+  let _ = git ~work [ "fetch"; "--quiet"; "--depth"; "1"; remote; refspec ] in
+  git ~work [ "rev-parse"; "FETCH_HEAD^{commit}" ]
+
 (* A git source is fetched, one commit deep, into a bare repository -- a
    branch, a tag or a commit, or HEAD when the URL names none -- with its
    submodules grafted in where opam would have checked them out, and git
@@ -188,9 +195,7 @@ let stage_vcs ~cache ~log ~name url =
         (* Ignore the tree's export-ignore and export-subst attributes, which
            would make the tar differ from the checkout opam would have used. *)
         Os.write_to_file Path.(work / "info" / "attributes") "* -export-ignore -export-subst\n";
-        let _ = git ~work [ "fetch"; "--quiet"; "--depth"; "1"; remote; refspec ] in
-        (* The commit, not an annotated tag's own object. *)
-        let revision = git ~work [ "rev-parse"; "FETCH_HEAD^{commit}" ] in
+        let revision = fetch_commit ~work ~remote ~refspec in
         let tree = tree_with_submodules ~work ~remote revision in
         (* Every entry dated the commit's own time: always in the past, even
            to a container whose clock is behind the host's, and the same tar

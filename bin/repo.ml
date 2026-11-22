@@ -180,6 +180,16 @@ let opam_bytes t pkg =
   | None -> None
   | Some entry -> Some (entry.opam ())
 
+(* Put [pkg] in the repository with [opam] as its opam file, replacing any it
+   had: a package pinned by pin-depends, which the build's copy of the
+   repository then carries like any other. *)
+let add t pkg opam =
+  Hashtbl.replace t.index pkg { opam = (fun () -> opam); extras = [] };
+  Hashtbl.remove t.parsed pkg;
+  let name = OpamPackage.name pkg in
+  let prior = try Hashtbl.find t.versions name with Not_found -> [] in
+  Hashtbl.replace t.versions name (List.sort_uniq OpamPackage.Version.compare (OpamPackage.version pkg :: prior))
+
 let parse_opam ~pkg ~source_id s =
   let filename =
     OpamFile.make
