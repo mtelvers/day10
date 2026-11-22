@@ -221,6 +221,7 @@ let untidy =
     Path.(opam_root / "repo" / "conf.lock");
     Path.(switch / "lock");
     Path.(switch / "environment");
+    Path.(switch / "packages" / "cache");
     Path.(brew / "var" / "homebrew" / "locks");
   ]
 

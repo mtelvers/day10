@@ -24,5 +24,6 @@ let build ~(config : Config.t) ~(dist : Dist.t) ~temp_dir ~depexts _opam_reposit
       let () = Os.run (String.concat " " [ "sudo"; "docker"; "export"; name; "|"; "sudo"; "tar"; "-xf"; "-"; "-C"; rootfs ]) |> print_string in
       let _ = Os.sudo [ "docker"; "rm"; name ] in
       let _ = Os.sudo [ "sh"; "-c"; ("rm -f " ^ Path.(rootfs / "home" / "opam" / ".opam" / "repo" / "state-*.cache")) ] in
+      let _ = Os.sudo [ "rm"; "-f"; Path.(rootfs / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache") ] in
       0
   | build_result -> build_result
