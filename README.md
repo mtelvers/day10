@@ -35,11 +35,14 @@ day10 health-check --cache-dir /path/to/cache --opam-repository /path/to/opam-re
 
 Use `--fork N` to build packages in parallel with N worker processes.
 
-### CI test a local project
+### Build and test a local project
 
 ```
-day10 ci --cache-dir /path/to/cache --opam-repository /path/to/opam-repository /path/to/project
+day10 build --with-test --cache-dir /path/to/cache --opam-repository /path/to/opam-repository /path/to/project @install @runtest
 ```
+
+This is what OCaml-CI runs.  Add `--dry-run --log` to print the solution as a
+graph without building any layers (a missing base is still built).
 
 ### List available packages
 

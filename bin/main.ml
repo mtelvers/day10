@@ -465,8 +465,12 @@ let build ~repo config packages =
         if config.dry_run then
           let rec check_all prev_success = function
             | [] -> true
+            (* As the build below: a local package is built from the workspace
+               and has no layer, nor any opam file in the repository to hash. *)
+            | pkg :: rest when Config.is_local_package ~config pkg -> check_all prev_success rest
             | pkg :: rest ->
                 let ordered_deps = extract_dag dependencies pkg |> topological_sort |> List.rev |> List.tl in
+                let ordered_deps = List.filter (fun p -> not (Config.is_local_package ~config p)) ordered_deps in
                 let hash = layer_hash_of ~config ctx pkg (pkg :: ordered_deps) in
                 let layer_dir = Path.(config.dir / Config.os_key ~config / hash) in
                 let layer_json = Path.(layer_dir / "layer.json") in
@@ -673,6 +677,8 @@ let run_build (config : Config.t) =
     (* build_layer has already reported whichever layer failed, and its log. *)
     | Dependency_failed :: _ -> 1
     | No_solution s :: _ -> OpamConsole.error "No solution: %s" s; 1
+    (* Solved, and --log has shown the graph: nothing is to be run. *)
+    | _ when config.dry_run -> OpamConsole.note "solution"; 0
     | _ ->
         (* All dependency layers built. Now run the build command in the container. *)
         let all_hashes =
@@ -696,12 +702,6 @@ let run_build (config : Config.t) =
         r
   in
   exit exit_code
-
-let run_ci ?repo (config : Config.t) =
-  let repo = match repo with Some r -> r | None -> make_repo config in
-  let package = OpamPackage.of_string (config.package ^ ".dev") in
-  let results = build ~repo config [ package ] in
-  output config results
 
 let run_health_check ?repo (config : Config.t) =
   let repo = match repo with Some r -> r | None -> make_repo config in
@@ -894,7 +894,7 @@ let opam_jobs_term =
   let env = Cmd.Env.info "DAY10_OPAM_JOBS" in
   Arg.(value & opt (some int) None & info [ "opam-jobs" ] ~env ~docv:"N" ~doc)
 
-let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
+let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~dry_run ~arch ~os ~os_distribution ~os_family ~os_version ~only_packages
     ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command =
   let ocaml_version = OpamPackage.of_string ocaml_version in
   let os_version = os_version_for ~dir ~os_distribution os_version in
@@ -934,7 +934,7 @@ let make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_tes
     tag = None;
     oci = None;
     log;
-    dry_run = false;
+    dry_run;
     fork = None;
     build_command;
     local_packages;
@@ -955,11 +955,11 @@ let exec_cmd =
   in
   let exec_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
+      const (fun dir ocaml_version opam_repositories directory cmd with_test with_doc log dry_run arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
           run_build
-            (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
+            (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~dry_run ~arch ~os ~os_distribution ~os_family ~os_version
                ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command:(Some { Config.run = String.concat " " ([ "opam"; "exec"; "--" ] @ List.map Filename.quote cmd); network = true })))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ command_args $ with_test_term $ with_doc_term $ log_term $ dry_run_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
       $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let exec_info = Cmd.info "exec" ~doc:"Run a command in a container with the project's dependencies" in
@@ -976,62 +976,15 @@ let build_cmd =
   in
   let build_term =
     Term.(
-      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
+      const (fun dir ocaml_version opam_repositories directory dune_extra with_test with_doc log dry_run arch os os_distribution os_family os_version only_packages prefer_oldest update_invariant opam_jobs prefetch_base ->
           run_build
-            (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~arch ~os ~os_distribution ~os_family ~os_version
+            (make_exec_config ~dir ~ocaml_version ~opam_repositories ~directory ~with_test ~with_doc ~log ~dry_run ~arch ~os ~os_distribution ~os_family ~os_version
                ~only_packages ~prefer_oldest ~update_invariant ~opam_jobs ~prefetch_base ~build_command:(Some { Config.run = Build_command.dune ~only_packages dune_extra; network = false })))
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
+      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ dune_args $ with_test_term $ with_doc_term $ log_term $ dry_run_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ only_packages_term
       $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
   in
   let build_info = Cmd.info "build" ~doc:"Build a project using cached dependencies (alias for: exec . -- dune build)" in
   Cmd.v build_info build_term
-
-let ci_cmd =
-  let directory_arg =
-    let doc = "Directory to test" in
-    Arg.(required & pos 0 (some string) None & info [] ~docv:"DIRECTORY" ~doc)
-  in
-  let ci_term =
-    Term.(
-      const (fun dir ocaml_version opam_repositories directory md json dot with_test log dry_run oci arch os os_distribution os_family os_version fork prefer_oldest update_invariant opam_jobs prefetch_base ->
-          let os_version = os_version_for ~dir ~os_distribution os_version in
-          let os_family = Config.family ~given:os_family ~distribution:os_distribution ~version:os_version in
-          let ocaml_version = OpamPackage.of_string ocaml_version in
-          let package_names = find_local_packages directory |> List.map fst in
-          run_ci
-            {
-              dir;
-              ocaml_version;
-              opam_repositories;
-              package = List.hd package_names;
-              arch;
-              os;
-              os_distribution;
-              os_family;
-              os_version;
-              directory = Some directory;
-              md;
-              json;
-              dot;
-              with_test;
-              with_doc = false;
-              tag = None;
-              oci;
-              log;
-              dry_run;
-              fork;
-              build_command = None;
-              local_packages = package_names;
-              prefer_oldest;
-              update_invariant;
-              opam_jobs;
-              prefetch_base;
-            })
-      $ cache_dir_term $ ocaml_version_term $ opam_repository_term $ directory_arg $ md_term $ json_term $ dot_term $ with_test_term $ log_term $ dry_run_term $ oci_term $ arch_term $ os_term $ os_distribution_term $ os_family_term $ os_version_term $ fork_term
-      $ prefer_oldest_term $ update_invariant_term $ opam_jobs_term $ prefetch_base_term)
-  in
-  let ci_info = Cmd.info "ci" ~doc:"Run CI tests on a directory" in
-  Cmd.v ci_info ci_term
 
 let health_check_cmd =
   let package_arg =
@@ -1413,7 +1366,7 @@ let () =
   Option.iter (fun dir -> load_env_file (Filename.concat dir ".day10")) (find_project_dir_from_argv ());
   Cleanup.install ();
   let default_term = Term.(ret (const (`Help (`Pager, None)))) in
-  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; ci_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd; cp_cmd ] in
+  let cmd = Cmd.group ~default:default_term main_info [ build_cmd; exec_cmd; health_check_cmd; list_cmd; revdeps_cmd; cache_info_cmd; prune_cmd; cp_cmd ] in
   (* opam's log directory.  read_command_output leaves its stdout log in it, so
      opam's own rmdir at exit finds it not empty and gives up. *)
   let opam_logs = Platform.temp_dir OpamCoreConfig.(!r.log_dir) in
