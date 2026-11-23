@@ -204,7 +204,7 @@ type start = { script : string; network : bool }
    Each start writes a log of its own, added to [build_log] once it ends, so
    that ctr's check for a transient failure reads only that start's output,
    which is short when the failure was ctr's. *)
-let container ~t ~temp_dir ~build_log ~tee ~fill ~collect ~starts =
+let container ?(mounts = []) ~t ~temp_dir ~build_log ~tee ~fill ~collect ~starts () =
   let name = Filename.basename temp_dir in
   Cleanup.with_resource (snapshot name) @@ fun () ->
   let mounts_json = Path.(temp_dir / "mounts.json") in
@@ -224,7 +224,7 @@ let container ~t ~temp_dir ~build_log ~tee ~fill ~collect ~starts =
   let run { script; network } =
     let argv = [ "cmd"; "/c"; script ] in
     let config =
-      make_config_json ~layers ~cwd:{|C:\|} ~argv ~hostname ~username:t.username ~env:(env ~config:t.config) ~mounts:[]
+      make_config_json ~layers ~cwd:{|C:\|} ~argv ~hostname ~username:t.username ~env:(env ~config:t.config) ~mounts
         ~network:(if network then Some t.network else None)
     in
     let config_json = Path.(temp_dir / "config.json") in
@@ -382,7 +382,7 @@ let run ~t ~temp_dir ~depexts opam_repository build_log =
      download caches with it, which hold the depexts the base fetched.  A
      layer leaves them out. *)
   let collect dir = robocopy ~log (on_host dir opam_root) rootfs [ "/E"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup ] in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts:[ { script = run_cmd; network = true } ] in
+  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts:[ { script = run_cmd; network = true } ] () in
   let () = L.keep ~temp_dir rootfs in
   let () = tidy ~config rootfs in
   let () = Os.write_to_file Path.(temp_dir / "status") (string_of_int result) in
@@ -399,24 +399,32 @@ let repo_in_container = Path.(opam_root / "repo" / "default")
    snapshot, before anything of the package's own has run; one with none
    never has the network.  opam installs no depext for tests, which it takes
    to be false in depext filters, so the tests, which run in the build's
-   start, need none of their own. *)
-let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
-  let config = t.config in
+   start, need none of their own.
+
+   For day10 build and exec, the dependencies are built as above, and then
+   the command runs on top of them in one more container, which keeps
+   nothing: the project directory bind-mounted at [src_in_container], the
+   command run from there, with the network the command asks for.  Unlike
+   the layers, the project is built on a bind mount: what goes wrong on one
+   -- running a program through a relative symlink, replacing a file in use
+   -- is what pacman and opam's own installs do in C:\opam, which is not on
+   it, and dune's _build is written as ordinary files. *)
+let src_in_container = {|C:\src|}
+
+(* The switch a container starts from, on the snapshot's C:: the layers
+   [ordered_hashes] and the base copied into opam's root, the build's
+   repository, and then what the host makes from the layers without
+   assembling them -- the Unix layer's merged database and the switch state
+   of every package the layers installed -- copied in last, after the
+   archive attribute is cleared, so that a layer keeps them.  The host's
+   share is done here; the fill to run on the mounted snapshot is given back,
+   and gives opam's root there. *)
+let fill_switch ~(config : Config.t) ~temp_dir ordered_hashes =
   let module L = (val unix_layer ~config) in
-  let () =
-    if Option.is_some config.build_command || Option.is_some config.directory then
-      failwith "Building a project from its own sources is not supported on Windows yet: only health-check is"
-  in
   let os_key = Config.os_key ~config in
-  let target = Path.(temp_dir / "fs") in
-  let () = Os.mkdir target in
   let log = Path.(temp_dir / "robocopy.log") in
   let sources = ordered_hashes @ [ "base" ] in
   let layer hash = Path.(config.dir / os_key / hash) in
-  (* What the host makes from the layers without assembling them: the Unix
-     layer's merged database and the switch state of every package the
-     layers installed.  Copied in last, after the archive attribute is
-     cleared, so that the layer keeps them. *)
   let overlay = Path.(temp_dir / "overlay") in
   let () = Os.mkdir overlay in
   let () = L.assemble ~layers:(List.map layer sources) ~target:overlay in
@@ -429,36 +437,69 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
         let () = Os.mkdir ~parents:true dir in
         Opamh.dump_state_of (List.sort_uniq String.compare names) Path.(dir / "switch-state")
   in
-  let fill dir =
+  fun dir ->
     let root = on_host dir opam_root in
     let () = List.iter (fun hash -> robocopy ~log Path.(layer hash / "fs") root (copy_in @ [ "/XD"; Path.(layer hash / "fs" / "repo" / "default") ])) sources in
     let () = robocopy ~log Path.(temp_dir / "opam-repository") Path.(root / "repo" / "default") [ "/MIR" ] in
     let () = clear_archive_bits ~temp_dir root in
     let () = robocopy ~log overlay root [ "/E"; "/COPY:DAT" ] in
-    let script = scripts dir in
-    let () = if not (OpamSysPkg.Set.is_empty depexts) then ignore (write_cmd ~script ~name:"depexts.cmd" (Build_command.for_package ~config ~depexts_only:true ~with_test:false pkg)) in
-    write_run_cmd ~script (Build_command.for_package ~config pkg)
+    root
+
+(* day10 build and exec: [run] on top of the dependencies' layers, from the
+   project's [directory] bind-mounted read-write at [src_in_container], with
+   the network if the command asks for it.  Its output is shown as it comes,
+   and nothing of the container is kept. *)
+let run_in_project ~t ~temp_dir build_log ordered_hashes ({ run; network } : Config.command) directory =
+  let fill_switch = fill_switch ~config:t.config ~temp_dir ordered_hashes in
+  let fill dir =
+    let _root = fill_switch dir in
+    write_run_cmd ~script:(scripts dir) [ "cd /d " ^ src_in_container; run ]
   in
-  let starts =
-    (if OpamSysPkg.Set.is_empty depexts then [] else [ { script = Path.(scripts_dir / "depexts.cmd"); network = true } ])
-    @ [ { script = run_cmd; network = false } ]
-  in
-  (* opam on Windows takes a file URL with the drive after the slashes. *)
-  let () =
-    Source_stage.stage ~repo:Path.(temp_dir / "opam-repository")
-      ~in_container:("file://" ^ String.map (function '\\' -> '/' | c -> c) Path.(repo_in_container / "cache"))
-      ~log:build_log pkg
-  in
-  (* What the build wrote, leaving out the repository, which is the
-     solution's, and the sources, build trees and download caches, which no
-     layer keeps. *)
-  let collect dir =
-    let root = on_host dir opam_root in
-    robocopy ~log root target
-      ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
-      @ download_caches root)
-  in
-  let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts in
-  let () = L.keep ~temp_dir target in
-  let () = tidy ~config target in
-  result
+  let mounts = [ { Mount.ty = "bind"; src = directory; dst = src_in_container; options = [] } ] in
+  container ~mounts ~t ~temp_dir ~build_log ~tee:true ~fill ~collect:(fun _ -> ()) ~starts:[ { script = run_cmd; network } ] ()
+
+let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
+  let config = t.config in
+  let module L = (val unix_layer ~config) in
+  match (config.build_command, config.directory) with
+  | Some command, Some directory -> run_in_project ~t ~temp_dir build_log ordered_hashes command directory
+  | Some _, None -> failwith "A build command needs the project's directory"
+  | None, _ when Config.is_local_package ~config pkg ->
+      (* A layer of the project's own package would be pinned to its source at
+         $HOME/src (Build_command.for_package), which has no Windows form yet.
+         day10 build and exec never build one: dune builds those packages. *)
+      failwith "Building a project's own package as a layer is not supported on Windows yet"
+  | None, _ ->
+      let target = Path.(temp_dir / "fs") in
+      let () = Os.mkdir target in
+      let log = Path.(temp_dir / "robocopy.log") in
+      let fill_switch = fill_switch ~config ~temp_dir ordered_hashes in
+      let fill dir =
+        let _root = fill_switch dir in
+        let script = scripts dir in
+        let () = if not (OpamSysPkg.Set.is_empty depexts) then ignore (write_cmd ~script ~name:"depexts.cmd" (Build_command.for_package ~config ~depexts_only:true ~with_test:false pkg)) in
+        write_run_cmd ~script (Build_command.for_package ~config pkg)
+      in
+      let starts =
+        (if OpamSysPkg.Set.is_empty depexts then [] else [ { script = Path.(scripts_dir / "depexts.cmd"); network = true } ])
+        @ [ { script = run_cmd; network = false } ]
+      in
+      (* opam on Windows takes a file URL with the drive after the slashes. *)
+      let () =
+        Source_stage.stage ~repo:Path.(temp_dir / "opam-repository")
+          ~in_container:("file://" ^ String.map (function '\\' -> '/' | c -> c) Path.(repo_in_container / "cache"))
+          ~log:build_log pkg
+      in
+      (* What the build wrote, leaving out the repository, which is the
+         solution's, and the sources, build trees and download caches, which no
+         layer keeps. *)
+      let collect dir =
+        let root = on_host dir opam_root in
+        robocopy ~log root target
+          ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
+          @ download_caches root)
+      in
+      let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts () in
+      let () = L.keep ~temp_dir target in
+      let () = tidy ~config target in
+      result
