@@ -491,12 +491,12 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
           ~log:build_log pkg
       in
       (* What the build wrote, leaving out the repository, which is the
-         solution's, and the sources, build trees and download caches, which no
-         layer keeps. *)
+         solution's, and the sources, build trees and download caches, opam's
+         among them, which no layer keeps. *)
       let collect dir =
         let root = on_host dir opam_root in
         robocopy ~log root target
-          ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
+          ([ "/S"; "/A"; "/SL"; "/COPY:DAT"; "/DCOPY:T"; backup; "/XD"; Path.(root / "repo" / "default"); Path.(root / "download-cache"); Path.(root / "default" / ".opam-switch" / "sources"); Path.(root / "default" / ".opam-switch" / "build") ]
           @ download_caches root)
       in
       let result = container ~t ~temp_dir ~build_log ~tee:config.log ~fill ~collect ~starts () in

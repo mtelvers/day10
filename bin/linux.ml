@@ -344,6 +344,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
         workdir;
         rootfsdir;
         Path.(upperdir / "tmp");
+        Path.(upperdir / "home" / "opam" / ".opam" / "download-cache");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "sources");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "build");
         Path.(upperdir / "home" / "opam" / ".opam" / "default" / ".opam-switch" / "packages" / "cache");
