@@ -308,15 +308,17 @@ exception Not_staged of string
    copy of the opam file when a source needed a checksum or was packed from a
    checkout.  Not_staged when a source could not be staged. *)
 let stage ~(config : Config.t) ~repo ~in_container ~log pkg =
-  let say s =
-    let line = "day10: " ^ s ^ "\n" in
-    Os.append_to_file log line;
-    if config.log then begin
-      print_string line;
-      flush stdout
-    end
+  (* Into the log, and under --log onto the console, as opam reports, at
+     [level]: a source staged is a note, a download that failed a warning,
+     since a mirror may yet have it, and a source not staged at all an
+     error. *)
+  let say level s =
+    let tag = match level with `Note -> "NOTE" | `Warning -> "WARNING" | `Error -> "ERROR" in
+    Os.append_to_file log (Printf.sprintf "[%s] %s\n" tag s);
+    if config.log then
+      match level with `Note -> OpamConsole.note "%s" s | `Warning -> OpamConsole.warning "%s" s | `Error -> OpamConsole.error "%s" s
   in
-  let note fmt = Printf.ksprintf say fmt in
+  let note level fmt = Printf.ksprintf (say level) fmt in
   let name = OpamPackage.Name.to_string (OpamPackage.name pkg) and nv = OpamPackage.to_string pkg in
   let file = Path.(repo / "packages" / name / nv / "opam") in
   if Sys.file_exists file then begin
@@ -329,12 +331,12 @@ let stage ~(config : Config.t) ~repo ~in_container ~log pkg =
        None if it could not be staged. *)
     let stage_one label url =
       let src = OpamUrl.to_string (OpamFile.URL.url url) in
-      match stage_url ~downloads ~cache ~note:say ~name:(nv ^ "-" ^ label) url with
+      match stage_url ~downloads ~cache ~note:(say `Warning) ~name:(nv ^ "-" ^ label) url with
       | None ->
-          note "could not stage %s %s" label src;
+          note `Error "Could not stage %s %s" label src;
           (url, None)
       | Some (staged, how) ->
-          note "staged %s %s %s" label src how;
+          note `Note "Staged %s %s %s" label src how;
           (url, Some staged)
     in
     let url = Option.map (stage_one "url") (OpamFile.OPAM.url opam) in
