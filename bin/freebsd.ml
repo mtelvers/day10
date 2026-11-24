@@ -366,7 +366,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   in
   let () =
     if Option.is_none config.build_command then
-      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:"file:///home/opam/.opam/repo/default/cache" ~log:build_log pkg
+      Source_stage.stage ~config ~repo:Path.(temp_dir / "opam-repository") ~in_container:"file:///home/opam/.opam/repo/default/cache" ~log:build_log pkg
   in
   (* Topmost first: tar -k leaves a path as the first layer to give it has it.
      tar rather than cp, which would copy each of a file's hard links on its

@@ -486,7 +486,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
       in
       (* opam on Windows takes a file URL with the drive after the slashes. *)
       let () =
-        Source_stage.stage ~repo:Path.(temp_dir / "opam-repository")
+        Source_stage.stage ~config ~repo:Path.(temp_dir / "opam-repository")
           ~in_container:("file://" ^ String.map (function '\\' -> '/' | c -> c) Path.(repo_in_container / "cache"))
           ~log:build_log pkg
       in

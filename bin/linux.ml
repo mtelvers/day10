@@ -253,7 +253,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   in
   let () =
     if Option.is_none config.build_command then
-      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_container ^ "/cache") ~log:build_log pkg
+      Source_stage.stage ~config ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_container ^ "/cache") ~log:build_log pkg
   in
   (* Reversed: ordered_hashes runs outwards from the package, and a layer has
      to go on after the ones it was built on top of. *)
@@ -296,7 +296,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   Cleanup.with_resource (mount rootfsdir) @@ fun () ->
   let mounts =
     [
-      { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = repo_in_container; options = [ "rbind"; "rprivate" ] };
+      { Mount.ty = "bind"; src = Path.(temp_dir / "opam-repository"); dst = repo_in_container; options = [ "ro"; "rbind"; "rprivate" ] };
       { ty = "bind"; src = etc_hosts; dst = "/etc/hosts"; options = [ "ro"; "rbind"; "rprivate" ] };
     ]
   in

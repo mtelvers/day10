@@ -385,20 +385,23 @@ type build_result =
   | No_solution of string
   | Dependency_failed
   | Failure of string
+  (* A source could not be fetched, so the package was not built and no layer
+     was kept: the package and the log. *)
+  | Not_staged of string * string
   | Success of string
 
 let build_result_to_string = function
   | Solution _ -> "solution"
   | No_solution _ -> "no_solution"
   | Dependency_failed -> "dependency_failed"
-  | Failure _ -> "failure"
+  | Failure _ | Not_staged _ -> "failure"
   | Success _ -> "success"
 
 let print_build_result = function
   | Solution _ -> OpamConsole.note "solution"
   | No_solution _ -> OpamConsole.warning "no_solution"
   | Dependency_failed -> OpamConsole.warning "dependency_failed"
-  | Failure _ -> OpamConsole.error "failure"
+  | Failure _ | Not_staged _ -> OpamConsole.error "failure"
   | Success _ -> OpamConsole.note "success"
 
 let build_layer ctx t pkg hash ordered_deps ordered_hashes =
@@ -437,7 +440,15 @@ let build_layer ctx t pkg hash ordered_deps ordered_hashes =
      was missing when we looked: a job wanting a layer another job is already
      building waits inside create_directory_exclusively and returns having
      built nothing. *)
-  let built = if Sys.file_exists layer_dir then false else Os.create_directory_exclusively layer_dir write_layer in
+  match if Sys.file_exists layer_dir then false else Os.create_directory_exclusively layer_dir write_layer with
+  | exception Source_stage.Not_staged log ->
+      (* No layer: the next build that wants it tries again.  --log has shown
+         the log as it was written. *)
+      if not config.log then (
+        OpamConsole.error "%s failed:" (OpamPackage.to_string pkg);
+        OpamConsole.errmsg "%s\n" log);
+      Not_staged (OpamPackage.to_string pkg, log)
+  | built ->
   let () = if (not built) && config.log then OpamConsole.note "Using %s" (OpamPackage.to_string pkg) in
   let () = Unix.utimes layer_json 0.0 0.0 in
   let exit_status = Util.load_layer_info_exit_status layer_json in
@@ -589,6 +600,9 @@ let output (config : Config.t) results =
                    Printf.fprintf oc "\n# %s\n\n" package;
                    let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
                    output_string oc build_log
+               | Not_staged (package, log) ->
+                   Printf.fprintf oc "\n# %s\n\n" package;
+                   output_string oc log
                | No_solution log -> output_string oc log
                | _ -> ())
         in
@@ -598,12 +612,14 @@ let output (config : Config.t) results =
   let () =
     Option.iter
       (fun filename ->
-        let hash =
+        (* The last package built: its layer, if one was kept, and its log. *)
+        let last =
           List.find_map
             (function
               | Success hash
               | Failure hash ->
-                  Some hash
+                  Some ([ ("layer", `String hash) ], Os.read_from_file Path.(config.dir / os_key / hash / "build.log"))
+              | Not_staged (_, log) -> Some ([], log)
               | _ -> None)
             results
         in
@@ -618,11 +634,7 @@ let output (config : Config.t) results =
         let j =
           `Assoc
             ([ ("name", `String config.package); ("status", `String (build_result_to_string (List.hd results))); ("sha", `String opam_repo_sha) ]
-            @ Option.fold ~none:[]
-                ~some:(fun hash ->
-                  let build_log = Os.read_from_file Path.(config.dir / os_key / hash / "build.log") in
-                  [ ("layer", `String hash); ("log", `String build_log) ])
-                hash
+            @ Option.fold ~none:[] ~some:(fun (layer, log) -> layer @ [ ("log", `String log) ]) last
             @ Option.fold ~none:[] ~some:(fun s -> [ ("solution", `String s) ]) solution)
         in
         Yojson.Safe.to_file filename j)

@@ -7,14 +7,22 @@
    names that directory in archive-mirrors.  opam looks a source up there by
    its checksum before going upstream, exactly as it does with
    opam.ocaml.org's cache.  The repository already reaches the container on
-   every platform, so the sources ride in with it: nothing new is mounted and
-   nothing outlives the build.
+   every platform, mounted read-only or copied in, so the sources ride in with
+   it: nothing new is mounted, and nothing in the container can write to them.
+
+   An archive with a checksum is fetched once per host, into a download cache
+   in the same layout, which every build on the host shares and nothing
+   prunes, and hard linked from there into the build's repository.  A build
+   wanting an archive that another is fetching waits for that fetch rather
+   than starting its own, so a hundred builds of one release ask upstream for
+   it once.
 
    A source with no checksum -- an archive of a branch, ocaml-compiler.5.5 and
-   the +trunk variants -- is fetched all the same and given the checksum of
-   what was fetched, in the build's copy of its opam file, so opam finds that
-   too.  A VCS source is checked out on the host and packed into a tar, which
-   the build's copy of the opam file then names in its place. *)
+   the +trunk variants -- is fetched for every build, since what is at its URL
+   changes, and given the checksum of what was fetched, in the build's copy of
+   its opam file, so opam finds that too.  A VCS source is checked out on the
+   host, also for every build, and packed into a tar, which the build's copy
+   of the opam file then names in its place. *)
 
 (* Where opam's archive-mirrors fallback points, so a source that has gone from
    upstream is found here as it would be by opam. *)
@@ -39,30 +47,38 @@ let configure =
         let args = List.map (fun a -> (OpamTypes.CString a, None)) (OpamStd.String.split s ' ') in
         OpamRepositoryConfig.update ~download_tool:(lazy (args, `Default)) ())
 
-let download ~log url dst =
+(* [note] says why a download failed. *)
+let download ~note url dst =
   Lazy.force configure;
   try
     OpamDownload.download_as ~quiet:true ~overwrite:true url (OpamFilename.of_string dst) |> OpamProcess.Job.run;
     true
   with
   | OpamDownload.Download_fail (s, l) ->
-      Os.append_to_file log (Printf.sprintf "day10: %s: %s\n" (OpamUrl.to_string url) (Option.value ~default:l s));
+      note (Printf.sprintf "%s: %s" (OpamUrl.to_string url) (Option.value ~default:l s));
       false
   | Failure m | Sys_error m ->
-      Os.append_to_file log (Printf.sprintf "day10: %s: %s\n" (OpamUrl.to_string url) m);
+      note (Printf.sprintf "%s: %s" (OpamUrl.to_string url) m);
       false
 
-(* Store [file] under every checksum.  opam asks a mirror for the first one
-   only, but which comes first is the opam file's business. *)
+(* [f] given the place for [hash] under [cache], unless something is there
+   already. *)
+let put cache hash f =
+  let e = path cache hash in
+  if not (Sys.file_exists e) then begin
+    Os.mkdir ~parents:true (Filename.dirname e);
+    f e
+  end
+
+(* The entry under the first checksum linked under each of the others.  opam
+   asks a mirror for the first one only, but which comes first is the opam
+   file's business. *)
+let alias ~cache = function [] -> () | first :: rest -> List.iter (fun h -> put cache h (Unix.link (path cache first))) rest
+
+(* Store [file] under every checksum. *)
 let store ~cache file hashes =
-  List.iteri
-    (fun i h ->
-      let e = path cache h in
-      if not (Sys.file_exists e) then begin
-        Os.mkdir ~parents:true (Filename.dirname e);
-        if i = 0 then Unix.rename file e else Unix.link (path cache (List.hd hashes)) e
-      end)
-    hashes
+  (match hashes with first :: _ -> put cache first (Unix.rename file) | [] -> ());
+  alias ~cache hashes
 
 (* Keep a file just fetched under its checksums, or under its sha256 when it
    came with none, and return the checksums it is kept under. *)
@@ -75,18 +91,76 @@ let keep ~cache tmp hashes =
   (try Sys.remove tmp with Sys_error _ -> ());
   hashes
 
-let stage_archive ~cache ~log url =
-  let hashes = OpamFile.URL.checksum url in
+(* [url] fetched into a new file in [dir] from upstream, its mirrors or
+   opam.ocaml.org's cache, whichever first gives what [hashes] say. *)
+let fetch ~note ~dir url hashes =
   let urls = (OpamFile.URL.url url :: OpamFile.URL.mirrors url) @ List.filter_map (fun h -> OpamUrl.parse_opt (path mirror h)) hashes in
-  let tmp = Filename.temp_file ~temp_dir:cache ".fetch-" "" in
-  let attempt u = download ~log u tmp && List.for_all (OpamHash.check_file tmp) hashes in
-  if List.exists attempt urls then
-    let kept = keep ~cache tmp hashes in
-    Some ((if hashes = [] then OpamFile.URL.with_checksum kept url else url), Printf.sprintf "%s (%s)" (if hashes = [] then "with no checksum, as" else "as") (OpamHash.to_string (List.hd kept)))
+  let tmp = Filename.temp_file ~temp_dir:dir ".fetch-" "" in
+  let attempt u = download ~note u tmp && List.for_all (OpamHash.check_file tmp) hashes in
+  if List.exists attempt urls then Some tmp
   else begin
     (try Sys.remove tmp with Sys_error _ -> ());
     None
   end
+
+(* [f] holding a lock on [file].  The file is left behind: removing it would
+   let a build that opens it afterwards lock a new file while one waiting on
+   the old file is given that. *)
+let with_lock file f =
+  let fd = Unix.openfile file [ O_CREAT; O_WRONLY ] 0o644 in
+  Fun.protect ~finally:(fun () -> try Unix.close fd with Unix.Unix_error _ -> ()) @@ fun () ->
+  Unix.lockf fd F_LOCK 0;
+  f ()
+
+(* An archive with [hashes] in the host's download cache [downloads], fetched
+   unless it is there already, under a lock on its first checksum, which a
+   build wanting the same archive waits on.  How it got there, or None if it
+   could not be fetched.  An archive there under another of its checksums only
+   is fetched again: packages rarely list one archive's checksums in different
+   orders. *)
+let cached ~downloads ~note url hashes =
+  let first = path downloads (List.hd hashes) in
+  Os.mkdir ~parents:true (Filename.dirname first);
+  with_lock (first ^ ".lock") @@ fun () ->
+  if Sys.file_exists first then begin
+    alias ~cache:downloads hashes;
+    Some "already downloaded"
+  end
+  else
+    match fetch ~note ~dir:downloads url hashes with
+    | None -> None
+    | Some tmp ->
+        Fun.protect ~finally:(fun () -> try Sys.remove tmp with Sys_error _ -> ()) @@ fun () ->
+        let _ = keep ~cache:downloads tmp hashes in
+        Some "downloaded"
+
+(* The container cannot write to the build's repository, so a hard link to the
+   download cache is safe.  A copy where there can be no link. *)
+let place src dst = try Unix.link src dst with Unix.Unix_error _ -> Os.cp src dst
+
+let stage_archive ~downloads ~cache ~note url =
+  let src = OpamUrl.to_string (OpamFile.URL.url url) in
+  match OpamFile.URL.checksum url with
+  | [] -> (
+      match fetch ~note ~dir:cache url [] with
+      | None -> None
+      | Some tmp ->
+          let kept = keep ~cache tmp [] in
+          Some (OpamFile.URL.with_checksum kept url, Printf.sprintf "with no checksum, as (%s)" (OpamHash.to_string (List.hd kept))))
+  | hashes -> (
+      match cached ~downloads ~note url hashes with
+      | None -> None
+      | Some how -> (
+          try
+            List.iter (fun h -> put cache h (place (path downloads h))) hashes;
+            Some (url, Printf.sprintf "as (%s), %s" (OpamHash.to_string (List.hd hashes)) how)
+          with
+          | Unix.Unix_error (e, _, _) ->
+              note (Printf.sprintf "%s: %s" src (Unix.error_message e));
+              None
+          | Os.Copy_error m | Sys_error m ->
+              note (Printf.sprintf "%s: %s" src m);
+              None))
 
 (* Git, run in [work], a bare repository.  Failure when it fails. *)
 let git ~work ?stdin args = String.trim (Os.capture ?stdin "git" ([ "-C"; work ] @ args))
@@ -176,10 +250,10 @@ let fetch_commit ~work ~remote ~refspec =
    by that checksum first.  The subpath, if any, is kept, and still applies,
    since the tar holds the whole tree.  hg and darcs are not staged: nothing in
    opam-repository uses them. *)
-let stage_vcs ~cache ~log ~name url =
+let stage_vcs ~cache ~note ~name url =
   let u = OpamFile.URL.url url in
   let fail m =
-    Os.append_to_file log (Printf.sprintf "day10: %s: %s\n" (OpamUrl.to_string u) m);
+    note (Printf.sprintf "%s: %s" (OpamUrl.to_string u) m);
     None
   in
   match u.OpamUrl.backend with
@@ -219,40 +293,60 @@ let stage_vcs ~cache ~log ~name url =
 (* Stage one source, returning the URL the build's opam file should give for
    it -- unchanged, given a checksum, or a placeholder for a packed checkout --
    and how it was staged.  None when it could not be. *)
-let stage_url ~cache ~log ~name url = if is_vcs url then stage_vcs ~cache ~log ~name url else stage_archive ~cache ~log url
+let stage_url ~downloads ~cache ~note ~name url =
+  if is_vcs url then stage_vcs ~cache ~note ~name url else stage_archive ~downloads ~cache ~note url
+
+(* A source could not be staged.  The build could only fail on it, offline,
+   with a message about a network the container does not have, so it is not
+   run.  Carries the log, which says why. *)
+exception Not_staged of string
 
 (* [repo] is the build's copy of the repository and [in_container] the URL it
    is reached by inside the container.  Stages every source of [pkg], noting
-   each in [log], and rewrites the build's copy of the opam file when a source
-   needed a checksum or was packed from a checkout.  A source that cannot be staged is noted and left: the
-   build then fails on it, offline, with opam's own message. *)
-let stage ~repo ~in_container ~log pkg =
-  let note fmt = Printf.ksprintf (fun s -> Os.append_to_file log ("day10: " ^ s ^ "\n")) fmt in
+   each in [log], and on the console under --log, and rewrites the build's
+   copy of the opam file when a source needed a checksum or was packed from a
+   checkout.  Not_staged when a source could not be staged. *)
+let stage ~(config : Config.t) ~repo ~in_container ~log pkg =
+  let say s =
+    let line = "day10: " ^ s ^ "\n" in
+    Os.append_to_file log line;
+    if config.log then begin
+      print_string line;
+      flush stdout
+    end
+  in
+  let note fmt = Printf.ksprintf say fmt in
   let name = OpamPackage.Name.to_string (OpamPackage.name pkg) and nv = OpamPackage.to_string pkg in
   let file = Path.(repo / "packages" / name / nv / "opam") in
   if Sys.file_exists file then begin
-    let cache = Path.(repo / "cache") in
+    let cache = Path.(repo / "cache") and downloads = Path.(config.dir / "download-cache") in
     Os.mkdir ~parents:true cache;
     Os.write_to_file Path.(repo / "repo") (Printf.sprintf "opam-version: \"2.0\"\narchive-mirrors: %S\n" in_container);
     let filename = OpamFile.make (OpamFilename.of_string file) in
     let opam = OpamFile.OPAM.read_from_string ~filename (Os.read_from_file file) in
-    let changed = ref false in
+    (* Each source paired with what the build's opam file should give for it,
+       None if it could not be staged. *)
     let stage_one label url =
       let src = OpamUrl.to_string (OpamFile.URL.url url) in
-      match stage_url ~cache ~log ~name:(nv ^ "-" ^ label) url with
+      match stage_url ~downloads ~cache ~note:say ~name:(nv ^ "-" ^ label) url with
       | None ->
           note "could not stage %s %s" label src;
-          url
+          (url, None)
       | Some (staged, how) ->
           note "staged %s %s %s" label src how;
-          if staged <> url then changed := true;
-          staged
+          (url, Some staged)
     in
-    let opam = OpamFile.OPAM.with_url_opt (Option.map (stage_one "url") (OpamFile.OPAM.url opam)) opam in
-    let opam =
-      OpamFile.OPAM.with_extra_sources
-        (List.map (fun (base, url) -> (base, stage_one (OpamFilename.Base.to_string base) url)) (OpamFile.OPAM.extra_sources opam))
+    let url = Option.map (stage_one "url") (OpamFile.OPAM.url opam) in
+    let extra = List.map (fun (base, u) -> (base, stage_one (OpamFilename.Base.to_string base) u)) (OpamFile.OPAM.extra_sources opam) in
+    let sources = Option.to_list url @ List.map snd extra in
+    if List.exists (fun (_, staged) -> Option.is_none staged) sources then raise (Not_staged (Os.read_from_file log));
+    if List.exists (fun (u, staged) -> staged <> Some u) sources then begin
+      let staged (u, s) = Option.value ~default:u s in
+      let opam =
         opam
-    in
-    if !changed then Os.write_to_file file (OpamFile.OPAM.write_to_string ~filename opam)
+        |> OpamFile.OPAM.with_url_opt (Option.map staged url)
+        |> OpamFile.OPAM.with_extra_sources (List.map (fun (base, source) -> (base, staged source)) extra)
+      in
+      Os.write_to_file file (OpamFile.OPAM.write_to_string ~filename opam)
+    end
   end

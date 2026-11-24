@@ -334,7 +334,7 @@ let build ~t ~temp_dir ~depexts build_log pkg ordered_hashes =
   in
   let () =
     if Option.is_none config.build_command then
-      Source_stage.stage ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_guest ^ "/cache") ~log:build_log pkg
+      Source_stage.stage ~config ~repo:Path.(temp_dir / "opam-repository") ~in_container:("file://" ^ repo_in_guest ^ "/cache") ~log:build_log pkg
   in
   (* A clone of the base's disk, which has the base in it already.  A base
      built before bases kept their disk has only its trees, which go in first
