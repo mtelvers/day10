@@ -195,12 +195,14 @@ let run cmd =
 let default_jobs = max 1 (min (OpamSysPoll.cores () - 1) 32)
 let arch () = (OpamStd.Sys.uname ()).machine
 
+(* Another process may make the same directory between the check and the
+   mkdir: two builds staging archives whose checksums start alike, say. *)
 let rec mkdir ?(parents = false) dir =
   if not (Sys.file_exists dir) then (
     (if parents then
        let parent_dir = Filename.dirname dir in
        if parent_dir <> dir then mkdir ~parents:true parent_dir);
-    Sys.mkdir dir 0o755)
+    try Sys.mkdir dir 0o755 with Sys_error _ when Sys.file_exists dir && Sys.is_directory dir -> ())
 
 (* rm -rf as root, for trees a container left root-owned.  A batch at a time
    rather than piped into xargs, which was only ever keeping each command line

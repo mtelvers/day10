@@ -62,12 +62,13 @@ let download ~note url dst =
       false
 
 (* [f] given the place for [hash] under [cache], unless something is there
-   already. *)
+   already.  Another build may put the same archive there first, under a lock
+   on a different checksum of it. *)
 let put cache hash f =
   let e = path cache hash in
   if not (Sys.file_exists e) then begin
     Os.mkdir ~parents:true (Filename.dirname e);
-    f e
+    try f e with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
   end
 
 (* The entry under the first checksum linked under each of the others.  opam
