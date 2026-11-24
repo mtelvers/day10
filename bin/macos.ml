@@ -18,6 +18,9 @@ type t = {
      the base and the layers, and on the same volume, since a clone is only
      free within one. *)
   image : string;
+  (* The vCPUs a guest has, as the image says.  Every build boots a clone of
+     the image, or of the base's disk, itself a clone of it. *)
+  cpus : int;
 }
 
 let home = Path.("Users" / "opam")
@@ -84,7 +87,14 @@ let init ~(config : Config.t) =
     OpamConsole.error_and_exit `Configuration_error
       "There is no macOS image for %s at %s: make one with day10-vm install and image/setup.sh, and put it there" os_key
       (image_dir ~dir:config.dir config.os_version);
-  { config; vm; image }
+  let cpus =
+    let file = Path.(image / "config.json") in
+    match Yojson.Safe.(Util.member "cpuCount" (from_file file)) with
+    | `Int n when n > 0 -> n
+    | _ | (exception (Yojson.Json_error _ | Sys_error _)) ->
+        OpamConsole.error_and_exit `Configuration_error "%s does not give the guest's cpuCount" file
+  in
+  { config; vm; image; cpus }
 
 let deinit ~t:_ = ()
 let config ~t = t.config
@@ -139,8 +149,13 @@ let sh cmd =
   | status -> failwith (Printf.sprintf "%s exited with status %d" cmd status)
 
 (* The environment a build runs in, as opam on the other platforms sees it, and
-   Homebrew held to the index the base fetched. *)
-let env ~(config : Config.t) =
+   Homebrew held to the index the base fetched.
+
+   A build has the guest to itself, so it runs a job per vCPU of the guest's,
+   unless told otherwise.  The host's cores say nothing about it: the guest
+   has the vCPUs it booted with, whatever else the host runs. *)
+let env ~t =
+  let config = t.config in
   [
     ("HOME", "/Users/opam");
     ("USER", "opam");
@@ -152,7 +167,7 @@ let env ~(config : Config.t) =
     ("OPAMYES", "1");
     ("OPAMERRLOGLEN", "0");
     ("OPAMPRECISETRACKING", "1");
-    ("OPAMJOBS", string_of_int (Option.value ~default:Os.default_jobs config.opam_jobs));
+    ("OPAMJOBS", string_of_int (Option.value ~default:t.cpus config.opam_jobs));
     ("HOMEBREW_NO_AUTO_UPDATE", "1");
     ("HOMEBREW_NO_INSTALL_CLEANUP", "1");
     ("HOMEBREW_NO_ANALYTICS", "1");
@@ -162,7 +177,7 @@ let env ~(config : Config.t) =
 (* The job day10-vm runs once at boot, as root: wait for what the build needs,
    then run [command] as opam in its home.  A guest has no address for the
    first moments after boot, which a download would fail on. *)
-let job_script ~config ~network ~src command =
+let job_script ~t ~network ~src command =
   String.concat "\n"
     ([ "#!/bin/sh" ]
     @ (if network then [ "for i in $(seq 1 60); do curl -s -o /dev/null --max-time 3 https://opam.ocaml.org/ && break; sleep 1; done" ] else [])
@@ -174,7 +189,7 @@ let job_script ~config ~network ~src command =
        else [])
     @ [
         "exec sudo -u opam -H /usr/bin/env -i "
-        ^ String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ Filename.quote v) (env ~config))
+        ^ String.concat " " (List.map (fun (k, v) -> k ^ "=" ^ Filename.quote v) (env ~t))
         ^ " /bin/bash -s <<'DAY10'";
         "cd \"$HOME\"";
         command;
@@ -186,7 +201,7 @@ let job_script ~config ~network ~src command =
    clone is mounted to copy its inputs in, it costs no mount of its own. *)
 let write_job ~t ~temp_dir ~mnt ~network ~src command =
   let script = Path.(temp_dir / "job.sh") in
-  let () = Os.write_to_file script (job_script ~config:t.config ~network ~src:(Option.is_some src) command) in
+  let () = Os.write_to_file script (job_script ~t ~network ~src:(Option.is_some src) command) in
   vm_exn ~t [ "job"; mnt; script ]
 
 (* Boot the clone, whose disk must not be mounted, on the job written there,

@@ -918,7 +918,7 @@ let fork_term =
   Arg.(value & opt (some int) None & info [ "fork" ] ~env ~docv:"N" ~doc)
 
 let opam_jobs_term =
-  let doc = "How many jobs a package's build may run at once.  Defaults to one per core up to a ceiling, which is right for a machine running one build and too many for a worker running several." in
+  let doc = "How many jobs a package's build may run at once.  Defaults to one per core up to a ceiling, which is right for a machine running one build and too many for a worker running several.  On macOS, where each build has a VM of its own, it defaults to the guest's vCPUs instead." in
   let env = Cmd.Env.info "DAY10_OPAM_JOBS" in
   Arg.(value & opt (some int) None & info [ "opam-jobs" ] ~env ~docv:"N" ~doc)
 
