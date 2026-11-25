@@ -45,6 +45,11 @@ let env ~(config : Config.t) =
   [
     ("CI", "true");
     ("OPAM_REPO_CI", "true");
+    (* The container's user's profile, which the image has.  Without HOME,
+       Cygwin and MSYS2 take the account's home from their user database,
+       which cannot map the container's virtual account and gives "/", and git
+       then fails on //.config/git/config, a UNC path. *)
+    ("HOME", {|C:\Users\|} ^ username);
     ("OPAMROOT", opam_root);
     ("TEMP", temp);
     ("TMP", temp);
